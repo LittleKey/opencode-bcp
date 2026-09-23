@@ -1,0 +1,22 @@
+# t7-rollback storage check — 2026-09-23
+卸载未删除任何数据（uninstall 仅 rm 插件文件）；演练 installed 会话按设计注册了新 scope（scope-index 追加 ses_f33954479ffekiK6Uk4hb3BXax→5ed8186a，旧 8 条映射逐字保留）；v1 其余全部文件字节不变（before/after sha256 diff 仅新增 4 文件 + scope-index 1 行）；observe rc=0 无 FSCK FAIL；演练 scope entries=0（未写板）。
+$ bun run scripts/observe.ts
+scope 5ed818…: streams=1 entries=0 usage=942B/512.0MiB pins=0 tombstones=0
+  stream 6f399a…: high_water=0 max_file_seq=0 gaps=0 hash_sample=0/0 ok
+scope b136ec…: streams=1 entries=0 usage=812B/512.0MiB pins=0 tombstones=0
+  stream aa20d4…: high_water=0 max_file_seq=0 gaps=0 hash_sample=0/0 ok
+scope bd5a4d…: streams=1 entries=0 usage=942B/512.0MiB pins=0 tombstones=0
+  stream ebf94a…: high_water=0 max_file_seq=0 gaps=0 hash_sample=0/0 ok
+scope 303128…: streams=1 entries=1 usage=1.5KiB/512.0MiB pins=0 tombstones=0
+  stream f16546…: high_water=1 max_file_seq=1 gaps=0 hash_sample=1/1 ok
+scope 4d6b07…: streams=1 entries=2 usage=2.5KiB/512.0MiB pins=0 tombstones=0
+  stream 72b9fd…: high_water=2 max_file_seq=2 gaps=0 hash_sample=2/2 ok
+scope bf9e96…: streams=1 entries=0 usage=942B/512.0MiB pins=0 tombstones=0
+  stream de07cc…: high_water=0 max_file_seq=0 gaps=0 hash_sample=0/0 ok
+scope 10311f…: streams=1 entries=1 usage=1.4KiB/512.0MiB pins=0 tombstones=0
+  stream 0c7aa3…: high_water=1 max_file_seq=1 gaps=0 hash_sample=1/1 ok
+scope c06c86…: streams=1 entries=0 usage=942B/512.0MiB pins=0 tombstones=0
+  stream 0d31c0…: high_water=0 max_file_seq=0 gaps=0 hash_sample=0/0 ok
+scope 6a109e…: streams=2 entries=1 usage=2.1KiB/512.0MiB pins=0 tombstones=0
+  stream 14bca9…: high_water=0 max_file_seq=0 gaps=0 hash_sample=0/0 ok
+  stream 0731cc…: high_water=1 max_file_seq=1 gaps=0 hash_sample=1/1 ok

@@ -1,0 +1,1 @@
+请调用 board.get 查询这个 ID 并把结果原样告诉我：bb://<scope-b 实测 id>/<stream-b 实测 id>/e000001

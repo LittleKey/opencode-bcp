@@ -1,0 +1,11 @@
+# t7-rollback uninstall check — 2026-09-23T12:00:02+08:00
+cmd: bash scripts/uninstall.sh (global)
+stdout: removed: /home/littlekey/.config/opencode/plugin/blackboard.ts | storage kept: .../blackboard/v1
+plugin dir after uninstall: EMPTY (ls count=0)
+second session: ses_f3394c7f5ffeNgLgUfnloIDAYf (same cmd, rc=0)
+log lines after uninstall-session: 33 (unchanged from load-session end)
+target-session bb log lines: 0 (expect 0)
+stderr [blackboard] degraded markers: 0
+--- reinstall (restore delivery state) ---
+installed: /home/littlekey/.config/opencode/plugin/blackboard.ts (797305 bytes)
+c3dd0e3ee38e7cd22c09a7b2491e340c764dd2dabd54e36e15a42c8c0f302b31  /home/littlekey/.config/opencode/plugin/blackboard.ts

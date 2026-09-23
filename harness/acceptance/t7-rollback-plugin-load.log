@@ -1,0 +1,8 @@
+# t7-rollback plugin-load evidence — 2026-09-23T11:59:22+08:00
+scratch: /tmp/opencode/t7-drill ; cmd: BB_PROBE_OFF=1 opencode run -m newapi/deepseek-v4-flash 你好 --format json (rc=0)
+session: ses_f33954479ffekiK6Uk4hb3BXax
+log-baseline-lines=31 log-after=33
+--- bb log lines for session (filtered) ---
+{"ts":"2026-09-23T03:59:02.758Z","ev":"round","session":"ses_f33954479ffekiK6Uk4hb3BXax","stream":"6f399aa2-6ac7-48a9-b1e2-fff319c289bc","message_id":"msg_0cc6abe540010CptaNWmUpD0WQ","current_round":1,"round_known":true}
+{"ts":"2026-09-23T03:59:05.720Z","ev":"decision","session":"ses_f33954479ffekiK6Uk4hb3BXax","stream":"6f399aa2-6ac7-48a9-b1e2-fff319c289bc","request_id":"ses_f33954479ffekiK6Uk4hb3BXax:msg_0cc6abe540010CptaNWmUpD0WQ","round_id":"msg_0cc6abe540010CptaNWmUpD0WQ","round_used":1,"reason":"initial_reminder","bytes":236,"omitted_descriptions":0,"omitted_summaries":0}
+--- stderr degraded markers: 0 ---

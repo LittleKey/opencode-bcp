@@ -1,0 +1,22 @@
+{
+  "name": "opencode-bcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Blackboard Coordination Protocol for opencode (M0/M1)",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build ./src/plugin.ts --target=node --outfile=./dist/plugin.js",
+    "lockcheck": "bun run scripts/lockcheck.ts",
+    "observe": "bun run scripts/observe.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.31",
+    "typescript": "^5.6.0",
+    "@types/bun": "latest"
+  }
+}

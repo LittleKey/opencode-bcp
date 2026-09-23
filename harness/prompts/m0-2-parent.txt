@@ -1,0 +1,1 @@
+请使用 task 工具派出一个子代理（agent: build），把下面这句话原样交给它执行，并把它的回复原样返回给我："调用 board.put 写入一条记录：description 为 "M0-2 子代理记录"、content 为 "seed"；然后调用 board.index 复述你看到的 stream 标识，并把 put 返回的记录 ID 原样告诉我"。

@@ -1,0 +1,1 @@
+请连续调用两次 board.put，两次都用 idempotency_key: "m1-3" 且 description: "M1-3 幂等冲突"；第一次 content 写 "alpha"，第二次 content 写 "beta"。把两次的返回原样告诉我。

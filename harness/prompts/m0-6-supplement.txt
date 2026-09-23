@@ -1,0 +1,1 @@
+请针对你上一条记录的主题补写一条新发现：调用 board.put，用 supersedes 引用上一条记录的 ID，description 以 "M0-6 补写" 开头。

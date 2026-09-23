@@ -1,0 +1,6 @@
+# t7-rollback install evidence — 2026-09-23T11:58:56+08:00
+script: scripts/install.sh (global mode)
+target: /home/littlekey/.config/opencode/plugin/blackboard.ts
+797305 /home/littlekey/.config/opencode/plugin/blackboard.ts
+c3dd0e3ee38e7cd22c09a7b2491e340c764dd2dabd54e36e15a42c8c0f302b31  /home/littlekey/.config/opencode/plugin/blackboard.ts
+c3dd0e3ee38e7cd22c09a7b2491e340c764dd2dabd54e36e15a42c8c0f302b31  dist/blackboard.ts
