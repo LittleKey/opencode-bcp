@@ -149,4 +149,86 @@ describe("indexing", () => {
     expect(counts.knowledge_total).toBe(3)
     expect(counts.visible_items).toBe(3)
   })
+
+  /** 聚合夹具：老化种子（createdRound=45，可覆写 description）+ 6 条尾部使其退出 recent 窗 + 轮次拨到 49 */
+  function seedAged(
+    scope: Scope,
+    streamId: string,
+    count: number,
+    descOf?: (i: number) => string,
+  ): { id: string; hash: string }[] {
+    const out: { id: string; hash: string }[] = []
+    for (let i = 0; i < count; i++) {
+      const r = scope.put(streamId, {
+        writer: { agent: "build", session_id: "s", message_id: `agg-seed-${i}` },
+        createdRound: 45,
+        description: descOf ? descOf(i) : `旧记录 ${i}`,
+        content: "c",
+      })
+      if (r.status !== "stored") throw new Error(`put failed: ${JSON.stringify(r)}`)
+      out.push({ id: r.id, hash: r.hash })
+    }
+    for (let i = 0; i < 6; i++) {
+      const r = scope.put(streamId, {
+        writer: { agent: "build", session_id: "s", message_id: `agg-tail-${i}` },
+        createdRound: 49,
+        description: `尾部 ${i}`,
+        content: "t",
+      })
+      if (r.status !== "stored") throw new Error(`put failed: ${JSON.stringify(r)}`)
+    }
+    return out
+  }
+  function admitRounds(scope: Scope, streamId: string, current = 49): void {
+    const meta = scope.readMeta(streamId)
+    scope.writeMeta(streamId, { ...meta, rounds: { ...meta.rounds, current_round: current, round_known: true } })
+  }
+  function aggregateOnce(scope: Scope, streamId: string, memberIds: string[]): { id: string } {
+    const r = scope.aggregate(streamId, {
+      writer: { agent: "build", session_id: "s", message_id: "agg-call" },
+      memberIds,
+      description: "聚合摘要",
+      navigationBody: "# 导航\n- 索引见成员",
+    })
+    if (r.status !== "aggregated") throw new Error(`aggregate failed: ${JSON.stringify(r)}`)
+    return r
+  }
+
+  // idx-agg-1（Task B Step 4）：折叠口径——省略 view 与 compact 均不再列示被覆盖原项；all 列示并带 covered_by
+  test("idx-agg-1: 聚合后 compact（含省略 view）隐藏 covered 原项并含摘要；all 列示原项带 covered_by", () => {
+    const scope = openScopeForRoot({ rootSessionId: "iagg1", dataDir: mkdtempSync(join(tmpdir(), "bb-idx-")) })
+    dirs.push(scope.dir)
+    const { streamId } = scope.registerSession("s", "build")
+    const seeds = seedAged(scope, streamId, 8)
+    const t9 = put(scope, streamId)
+    const t10 = put(scope, streamId)
+    admitRounds(scope, streamId)
+    const sum = aggregateOnce(scope, streamId, seeds.map((m) => m.id))
+    const folded = items(scope, streamId).items // 省略 view → compact
+    expect(folded).toHaveLength(9) // 6 内置尾部 + t9 + t10 + 摘要；8 个 covered 成员折叠
+    expect(folded.every((i) => !seeds.some((s) => s.id === i.id))).toBe(true)
+    expect(folded.find((i) => i.id === t9.id)).toBeDefined()
+    expect(folded.find((i) => i.id === t10.id)).toBeDefined()
+    expect(folded.find((i) => i.id === sum.id)!.kind).toBe("index_summary")
+    const explicit = items(scope, streamId, { view: "compact" }).items
+    expect(explicit.map((i) => i.id)).toEqual(folded.map((i) => i.id))
+    const all = items(scope, streamId, { view: "all" }).items
+    expect(all).toHaveLength(17)
+    for (const s of seeds) expect(all.find((i) => i.id === s.id)!.covered_by).toBe(sum.id)
+    expect(all.find((i) => i.id === sum.id)!.covered_by).toBeNull()
+  })
+
+  // idx-agg-2（Task B Step 4）：keyword 命中被覆盖原描述 → compact 中 RF1 穿透列示并带 covered_by
+  test("idx-agg-2: keyword 命中 covered 原项 → compact 列示该原项且 covered_by 指向摘要", () => {
+    const scope = openScopeForRoot({ rootSessionId: "iagg2", dataDir: mkdtempSync(join(tmpdir(), "bb-idx-")) })
+    dirs.push(scope.dir)
+    const { streamId } = scope.registerSession("s", "build")
+    const seeds = seedAged(scope, streamId, 8, (i) => (i === 3 ? "量子纠缠纠错结论" : `旧记录 ${i}`))
+    admitRounds(scope, streamId)
+    const sum = aggregateOnce(scope, streamId, seeds.map((m) => m.id))
+    const hit = items(scope, streamId, { keyword: "量子" }).items
+    expect(hit).toHaveLength(1)
+    expect(hit[0]!.id).toBe(seeds[3]!.id)
+    expect(hit[0]!.covered_by).toBe(sum.id)
+  })
 })

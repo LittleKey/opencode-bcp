@@ -544,7 +544,8 @@ describe("storage", () => {
   test("崩溃态可见性四条：keyed/keyless × after_reserve/after_publish（P18/F6）", () => {
     const scope = open("s17")
 
-    // A) keyed + supersedes + after_reserve：未恢复时 nav 无边、getById not_found、无 entry；恢复后全就位
+    // A) keyed + supersedes + after_reserve：未恢复时 nav 无边、无 entry；recover-on-read（fix-1）——
+    //    崩溃后不手动 recover，getById 锁内自动恢复并返回 found、导航补齐（storage-17 迁移）
     {
       const { streamId } = scope.registerSession("c1", "build")
       const id0 = asStored(scope.put(streamId, putArgs())).id
@@ -557,8 +558,9 @@ describe("storage", () => {
       expect(meta.nav[id0]?.superseded_by).toBeUndefined()
       expect(entryFiles(scope, streamId).length).toBe(1)
       const crashedId = formatBbId(scope.config.scope_id, streamId, meta.high_water)
-      expect(scope.getById(crashedId).status).toBe("not_found")
-      scope.recoverPending(streamId)
+      expect(scope.getById(crashedId).status).toBe("found") // 读入口锁内自动恢复
+      expect(scope.readMeta(streamId).nav[id0]!.superseded_by).toBe(crashedId)
+      expect(entryFiles(scope, streamId).length).toBe(2)
       const r = asReplay(scope.put(streamId, putArgs({ idempotencyKey: "kA", supersedes: [id0] })))
       expect(r.id).toBe(crashedId)
       expect(entryFiles(scope, streamId).length).toBe(2)

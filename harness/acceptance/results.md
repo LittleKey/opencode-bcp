@@ -88,3 +88,46 @@ L8a/L8b（M1-2/M1-3 live 专项）：**gated** —— 超出本次 L1–L6 授�
 收尾：演练子进程零残留（两台 `opencode run` 均同步退出 rc=0；`pgrep` 仅见演练前已存在的宿主 serve 与无关进程，未触碰）；`/tmp/opencode/t7-drill` 已删除。最终验证：`bunx tsc --noEmit` 干净；`bun test` **109 pass / 0 fail**。无脚本缺陷，install.sh/uninstall.sh 未改动。
 
 —— 以上即为 Task 7 Step 2/3 全部结论。项目至此收尾，未开始任何 Task 7 之后的工作。
+
+## 聚合计划 Task D（脚本/夹具/验收）—— 2026-09-23
+
+| 项 | 结论 | 结果与证据 |
+|---|---|---|
+| Step 0 observe 扩展（I7/I8） | 通过 | `scripts/observe.ts` 新增：`--recover`（fix-8，逐 stream 锁内 `Scope.recover`，末行 `recovered <n> aggregate`）、聚合域 fsck（covered_by 双向 + members 哈希全量 + agg_pending 检查，每 stream 输出 `aggregate: covered=<n> members_mismatch=<n> unrecovered=<n>`）、`--projection`（I8：输出 {nav,high_water,tombstoned,entries{seq:hash}}，排除 rounds/budget/idem） |
+| agg-seed.ts 契约复核 | 通过 | Task A 已落地；本次复核：行格式 `{"seq","id","hash"}`（seq 1..14 连续、e%06d 编号、sha256 hex）+ 末行 `{"meta":<绝对路径>}`，与计划 612–618 一致 → 冒烟 `/tmp/opencode/agg-seed-l10.txt` |
+| agg-crash.ts + observe --recover（L10 等价，本地数据目录） | 通过 | 引导 scope+session → `agg-seed ses_l10 14` → `agg-crash ses_l10 <dir>` rc=**137**（SIGKILL，faultHook 注入）→ `observe <dir> --recover`：`recovered 1 aggregate`、`aggregate: covered=8 members_mismatch=0 unrecovered=0`、无 FSCK FAIL、rc=0 |
+| verify-l9.ts 三模式（R3-4 探测） | 通过 | 正向 `verify-l9 OK: get=8 kw=1 agg=1` rc=0；负向 `verify-l9 OK: negative (rejected=6 recent-hit=…e000009 index-counts=1)` rc=0；空工具 `FIXTURE-ERROR: no tool parts found` rc=2。合成夹具 `/tmp/opencode/fix/verify-l9-{pos,neg,empty}-events.jsonl`（seed-map 用真实 agg-seed 输出） |
+| acc-agg-1..4（test/acceptance.test.ts） | 通过 | `bun test test/acceptance.test.ts` → **17 pass / 0 fail**（13+4）；acc-agg-1 含 recent（现轮补写）→ 追加 6 条退出 recent6 → fence 的两段断言；acc-agg-2 两故障点终态一致性 + 崩溃瞬间已存在字节逐字节不变、恢复至多新建摘要一个文件；acc-agg-3 keyword 穿透；acc-agg-4 旧 cursor 聚合后仍可续翻（view:"all"） |
+| harness/prompts/agg-*.txt | 已创建 | agg-seed-first.txt（首条记录+回显 session）、agg-live.txt（聚合+两批 get+keyword 检索）、agg-invalid.txt（尾部受保护成员致 invalid/recent） |
+| 修复记录 | — | observe.ts `--projection` 缺席时 `projSlots={-1,0,1}` 误吞首个位置参数（dataDir 失效退回默认根）；改为 projIdx≥0 才收集。acc-agg-2 初版误用 `getById().nav`（该返回无 nav 字段，覆盖关系经 meta.nav 断言）与"恢复前后全目录字节相等"（正确口径：崩溃瞬间已存在字节不变） |
+
+### L9/L9b/L10 状态
+
+- **L10（agg-crash 崩溃恢复）**：不依赖 opencode 宿主，已按计划语义在本地数据目录完成等价验证（上表第 3 行）。宿主侧 `observe --recover` 复核（对 `~/.cache/opencode/blackboard/v1`）留父级。
+- **L9/L9b（opencode run 三段 live：seed-first → 聚合主链 → 负向投影对比）**：**gated** —— 需真实 opencode 客户端宿主，本环境无法执行，未伪造。prompt 文件与 verify-l9 正/负/FIXTURE-ERROR 三模式均已就绪，父级执行序列：L9-1 `opencode run "$(cat harness/prompts/agg-seed-first.txt)" --format json` 取 SESSION → L9-2 `bun run scripts/agg-seed.ts "$SESSION" 29` → L9-3 `opencode run "$(cat harness/prompts/agg-live.txt)"` 事件存档后 `bun run scripts/verify-l9.ts <events> <seedMap> <aggId>` → L9b `opencode run "$(cat harness/prompts/agg-invalid.txt)"` + `observe --projection` before/after cmp 相等 + `verify-l9 --negative`。
+
+## 聚合计划 Task E（收尾）—— 2026-09-23
+
+| 项 | 结论 | 结果与证据 |
+|---|---|---|
+| Step 1 observe 聚合域复核（E 复核 D 的 I7，fix-8） | 通过 | `bun run scripts/observe.ts`（默认根全 scope）：0 个 `FSCK FAIL`、全部 stream `ok`、`unrecovered=0`、rc=0（observe 修复后复跑一次） |
+| Step 2 安装/回滚 drill | **gated** | live 演练需宿主（Task 7 先例）；本环境无法执行，未伪造。脚本无改动（install.sh/uninstall.sh 未触碰） |
+| Step 3 全量回归 | 通过 | `bun test` → **150 pass / 0 fail**（883 expect / 13 files）；`bunx tsc --noEmit` → 无输出 rc=0 |
+| aggPending 审计 | 通过 | observe 全 scope `unrecovered=0`（无 legacy agg_pending 残留） |
+
+—— 以上即为聚合计划 Task D/E 全部结论。live 项（L9/L9b、宿主侧 recover 复核、Step 2 drill、Task C 遗留 L1–L6）集中移交父级验证。
+
+## 收尾 live 复跑（父级执行，2026-09-23）—— L1–L6 / L9 / L9b / L10 / L12 / compaction / drill
+
+| 项 | 结论 | 结果与证据 |
+|---|---|---|
+| L1–L6 复跑（Task C Step 6） | 通过 | 与第一轮 baseline 同命令复跑，逐项判据全过（L1 initial×1+stored=0；L2 child stored=1+parentID 链；L3 写后作答+声明行；L4 description_blank 拒绝；L5 superseded 链+`sha256sum -c` OK；L6 forbidden+零泄漏）。结构差异仅每会话 +1 行 `ev:"round_observed"`（Task C 观察日志）→ `/tmp/opencode/fix/live-wrapup/l1-l6-baseline-diff.txt` |
+| L9 正向（聚合主链） | **通过** | L9-1/L9-2/L9-3 rc=0；数据层 5 项子断言人工核对全过（aggregated×1 members:8、AGGID=e000031、8 成员 hash 与基线一致、keyword 穿透 e000004、无拒绝）→ `l9-manual-verify.txt`。初判「降级-未满足」的 verify-l9 包装失败系**夹具脚本缺陷**：①parseItems 裸 JSON.parse 遇 board_get「数据非指令」尾注失败；②live board_get 的 covered_by 嵌于 `nav`（与 acc 用 meta.nav 同源）；③多次 index 调用合并后取首个命中（聚合前全量在先）。父级修复 `scripts/verify-l9.ts`（尾注逐行剥离重试 + `coveredBy()` 嵌套读取 + keyword 存在性判定）后用**已归档证据**复跑：`verify-l9 OK: get=8 kw=1 agg=1` rc=0（无需重跑模型；`bun test` 150 pass、tsc clean 复核）→ `/tmp/opencode/live-agg-runs/` |
+| L9b（负向投影不变） | 通过 | `verify-l9 OK: negative (rejected=7 recent-hit=…e000030 index-counts=31)` rc=0；`observe --projection` before/after cmp 逐字节一致 |
+| L10（崩溃恢复 live 等价） | 通过 | agg-crash rc=137 → `observe --recover`：`recovered 1 aggregate`、目标 scope `covered=16 members_mismatch=0 unrecovered=0`、rc=0。口径差异登记：observe 成功时静默（无 "FSCK OK" 文案，Task D Step 0 实现口径，非缺陷） |
+| L12（councillor 隔离流授权） | 通过 | 探测：councillor 以 subagent 存在（primary 回退默认 agent+告警，rc=0）。板级夹具（councillor-x 隔离流 14 记录+摘要）：同 scope 普通调用者 board_index 不列隔离流；board_get(隔离记录)=not_found；board_get(隔离摘要)=not_found（聚合派生泄漏阻断）；零内容泄漏。原作者侧由 t-agg-2 自动化承载（150 内） |
+| compaction 子场景（三判据） | 通过 | 自然触发于 L9b：轮次推进归属真实 admitted 消息（round_observed+ROUND 先于 continuation 决策，continuation 无独立 roll）；bytes>0 决策按 (session→request_id) 聚合恰 1（initial_reminder bytes=359），其余 bytes=0 |
+| Task E Step 2 安装/回滚 drill | 通过 | uninstall rc=0（目录清空）→ rollback run rc=0（宿主成功且目标会话 bb.log 0 行）→ reinstall rc=0。终态：全局插件 sha256=`f682fef193284420c184cc99f00c03b04ee28a7394988fa4aa15ef93af0de40c`（810337B，聚合新版在位）；scratch 项目级=新版，旧产物备份 `scratch-plugin-bak/` |
+| 宿主真实根 observe 复核 | 通过 | 默认根全 scope：0 FSCK FAIL、全 stream ok、`aggregate: covered/mismatch/unrecovered` 全 0、rc=0（父级 2026-09-23 20:00 安装新版后执行） |
+
+**已知发现（非阻塞，移交后续清单）**：①宿主 `session_index` 条目 `agent` 为空串为长期行为（基线同期同状）——种子/夹具 writer 需显式登记 agent；②live 下聚合触发的 nudge 恒不激活：transform caller agent="" → aggregateCandidates 全员 not_original_author → null，建议列入插件缺陷清单；③`-s` 续接必须在会话原项目目录内执行（跨目录挂起 rc=124，调用侧约束）；④l12-fixture 未传 idempotencyKey 时两次写入共存（幂等键为显式可选字段，脚本语义）。

@@ -118,7 +118,7 @@ describe("acceptance", () => {
         candidateSetId: null,
         maxSeq: 0,
       })
-      expect(d).toEqual({ inject: false, reason: "identity_unrecoverable" })
+      expect(d).toEqual({ inject: false, reason: "identity_unrecoverable", advanced: false, identityRestored: false })
     }
     const after = scope.readMeta(streamId)
     expect(after.budget.round_used).toBe(2) // 预算不重置
@@ -168,8 +168,8 @@ describe("acceptance", () => {
     expect(log.filter((l) => l.ev === "stored")).toEqual([])
   })
 
-  // acc-m1-2（M1-2：旧 ID 字节不变、工具面仅三键——无 append/edit 面）
-  test("写入后旧 id 文件字节与 hash 不变；defineBoardTools 键集合恰为三工具", async () => {
+  // acc-m1-2（M1-2：旧 ID 字节不变、工具面仅四键——无 append/edit 面；Task B 增 board_aggregate）
+  test("写入后旧 id 文件字节与 hash 不变；defineBoardTools 键集合恰为四工具", async () => {
     const scope = open("m1-2")
     const { streamId } = scope.registerSession("acc-sess", "build")
     const a = asStored(scope.put(streamId, putArgs({ description: "A" })))
@@ -186,7 +186,7 @@ describe("acceptance", () => {
     expect(recordHash(new Uint8Array(rawA2))).toBe(hashA)
     expect(scope.getById(a.id)).toMatchObject({ status: "found", hash: hashA })
     expect(Object.keys(defineBoardTools({ resolveScope: async () => null, log: () => {} })).sort()).toEqual(
-      ["board_get", "board_index", "board_put"],
+      ["board_aggregate", "board_get", "board_index", "board_put"],
     )
   })
 
@@ -502,5 +502,232 @@ describe("acceptance", () => {
     })
     expect(listFiles()).toEqual(before) // 拒绝路径无任何删除
     expect(scope.getById(r1.id).status).toBe("found")
+  })
+
+  // ===== 聚合验收映射（Task D Step 1：acc-agg-1..4，逐字对齐 DESIGN §14.2）=====
+
+  /** board_get/board_put 输出 = JSON + "\n（...）"声明尾注；board_index 为纯 JSON（声明在 note 字段内） */
+  function toolJson<T>(out: string): T {
+    const cut = out.indexOf("\n（")
+    return JSON.parse(cut === -1 ? out : out.slice(0, cut)) as T
+  }
+
+  function setRounds(scope: Scope, streamId: string, current: number): void {
+    const meta = scope.readMeta(streamId)
+    scope.writeMeta(streamId, {
+      ...meta,
+      rounds: { ...meta.rounds, round_known: true, current_round: current, last_admitted_message_id: "adm-acc" },
+    })
+  }
+
+  async function seedAged(
+    scope: Scope,
+    streamId: string,
+    count: number,
+    opts: { createdRound?: number; descPrefix?: string } = {},
+  ): Promise<{ id: string; hash: string }[]> {
+    const out: { id: string; hash: string }[] = []
+    for (let i = 1; i <= count; i++) {
+      const r = asStored(
+        scope.put(
+          streamId,
+          putArgs({
+            createdRound: opts.createdRound ?? 45,
+            description: `${opts.descPrefix ?? "老化记录"} ${i}：独词${opts.descPrefix ?? "老化"}${i}`,
+          }),
+        ),
+      )
+      out.push({ id: r.id, hash: r.hash })
+    }
+    return out
+  }
+
+  // acc-agg-1（原 M1-4，并入 M1-6 补写端到端子场景）：fence 内成员整批拒绝、候选集不被静默缩小；
+  // 现轮补写（created_round=当前轮）→ classifyEligibility 判定序先 recent6 后 fence → reason=recent；
+  // 同轮追加 6 条使其退出 recent6 → 重试 reason=fence（补写按实际发布时间受保护的独立证明）。
+  test("acc-agg-1: fence 整批拒绝 → 显式聚合成功 → 现轮补写 recent → 老化后 fence", async () => {
+    const scope = open("agg-1")
+    const { streamId } = scope.registerSession("acc-sess", "build")
+    setRounds(scope, streamId, 49)
+    const log: Record<string, unknown>[] = []
+    const tools = toolsFor(scope, streamId, log)
+    const eight = await seedAged(scope, streamId, 8) // seq 1..8 eligible
+    const fenceRec = asStored(scope.put(streamId, putArgs({ createdRound: 47, description: "fence 内记录 1：独词acc9" }))) // seq 9
+    const tails = await seedAged(scope, streamId, 6, { descPrefix: "尾部记录" }) // seq 10..15 = recent6
+    // ① 9 成员含 1 条 fence 内 → 整批拒绝 aggregate_invalid，目录不变
+    const out1 = await tools.board_aggregate.execute(CTX, {
+      member_ids: [...eight.map((m) => m.id), fenceRec.id],
+      description: "摘要一",
+      navigation_body: "导航",
+    })
+    expect(out1).toContain("rejected: aggregate_invalid")
+    expect(out1).toContain(`${fenceRec.id}: fence`)
+    expect(scope.readMeta(streamId).high_water).toBe(15)
+    expect(entryFiles(scope, streamId).length).toBe(15)
+    expect(Object.values(scope.readMeta(streamId).nav).some((e) => (e as { covered_by?: unknown }).covered_by !== undefined)).toBe(false)
+    // ② 换 8 条全 eligible（同身份集合）→ 作者显式聚合成功（不受候选集抑制影响）
+    const out2 = await tools.board_aggregate.execute(CTX, {
+      member_ids: eight.map((m) => m.id),
+      description: "摘要二",
+      navigation_body: "导航",
+    })
+    const sumId = formatBbId(scope.config.scope_id, streamId, 16)
+    expect(out2).toContain(`aggregated (covered 8 members)`)
+    expect(out2).toContain(sumId)
+    // ③ 现轮补写端到端（M1-6 清账）：board_put 于当前轮写入（created_round=当前轮=49）→ 含该条 8 成员 → 整批 invalid，reason=recent
+    const putOut = await tools.board_put.execute(CTX, {
+      description: "现轮补写记录：独词acc16",
+      content: "旧任务补写正文",
+      idempotency_key: "acc-agg-1-sup",
+    })
+    expect(putOut).toContain("stored")
+    const supId = /bb:\/\/[^\s]+/.exec(putOut)![0]!
+    expect(recordOf(scope, streamId, supId).created_round).toBe(49)
+    const out3 = await tools.board_aggregate.execute(CTX, {
+      member_ids: [supId, ...eight.slice(0, 7).map((m) => m.id)],
+      description: "摘要三",
+      navigation_body: "导航",
+    })
+    expect(out3).toContain("rejected: aggregate_invalid")
+    expect(out3).toContain(`${supId}: recent`) // 判定序先 recent6 后 fence（src/eligibility.ts:48–54）
+    expect(entryFiles(scope, streamId).length).toBe(17) // 整批拒绝：无新摘要
+    // 年龄保护独立子场景：同轮追加 6 条普通记录使补写记录退出 recent6 → 重试 → reason=fence
+    await seedAged(scope, streamId, 6, { descPrefix: "追加记录" }) // seq 18..23 = 新 recent6
+    const out4 = await tools.board_aggregate.execute(CTX, {
+      member_ids: [supId, ...tails.map((t) => t.id), eight[0]!.id],
+      description: "摘要四",
+      navigation_body: "导航",
+    })
+    expect(out4).toContain("rejected: aggregate_invalid")
+    expect(out4).toContain(`${supId}: fence`)
+    expect(entryFiles(scope, streamId).length).toBe(23) // 目录仍不变
+  })
+
+  // acc-agg-2（原 M1-8）：agg_after_reserve / agg_after_publish 崩溃各一次 → recover 终态
+  // 为"旧目录完整"或"新摘要+完整成员关系"，绝不两者皆缺；恢复路径不重写已存在字节。
+  test("acc-agg-2: 聚合崩溃两故障点 recover 终态完整、已存在字节不重写", async () => {
+    for (const point of ["agg_after_reserve", "agg_after_publish"] as const) {
+      const scope = open(`agg-2-${point}`)
+      const { streamId } = scope.registerSession("acc-sess", "build")
+      setRounds(scope, streamId, 49)
+      const members = await seedAged(scope, streamId, 8)
+      await seedAged(scope, streamId, 6, { descPrefix: "尾部记录" })
+      const entriesDir = join(scope.dir, "streams", streamId, "entries")
+      faultHook.current = (at) => {
+        if (at === point) throw new Error("agg-crash")
+      }
+      try {
+        scope.aggregate(streamId, {
+          writer: { agent: "build", session_id: "acc-sess", message_id: "agg-crash" },
+          memberIds: members.map((m) => m.id),
+          description: "崩溃子场景摘要",
+          navigationBody: "导航",
+        })
+        throw new Error("fault injection did not fire") // 故障未命中即失败
+      } catch (e) {
+        if ((e as Error).message === "fault injection did not fire") throw e
+      } finally {
+        faultHook.current = null
+      }
+      // 崩溃态：agg_pending 非空
+      expect((scope.readMeta(streamId).agg_pending ?? null) !== null).toBe(true)
+      // 崩溃瞬间磁盘快照：agg_after_reserve 时 14 条种子；agg_after_publish 时 14 条种子+已写出的摘要
+      const bytesAtCrash = entryFiles(scope, streamId).map((f) => ({
+        f,
+        bytes: new Uint8Array(readFileSync(join(entriesDir, f))),
+      }))
+      // observe/recover 等价路径：锁内 Scope.recover
+      scope.withLock(() => scope.recover(streamId))
+      const meta = scope.readMeta(streamId)
+      expect(meta.agg_pending ?? null).toBeNull()
+      const sumId = formatBbId(scope.config.scope_id, streamId, 15)
+      const sumBytes = readFileSync(entryPath(scope, streamId, 15))
+      // 终态一致性（M1-8）：绝不两者皆缺——要么旧目录完整（无摘要无覆盖），要么新摘要+完整成员关系。
+      // 本实现 recover 会从 agg_pending 重建缺失 entry，两故障点终态均为后者。
+      const summaryFound = scope.getById(sumId).status === "found"
+      const coveredCount = Object.values(meta.nav).filter((e) => (e as { covered_by?: unknown }).covered_by !== undefined).length
+      if (summaryFound) {
+        expect(coveredCount).toBe(8)
+        for (const m of members) {
+          expect(scope.getById(m.id).status).toBe("found")
+          expect(meta.nav[m.id]?.covered_by).toBe(sumId)
+        }
+      } else {
+        expect(coveredCount).toBe(0)
+      }
+      // 恢复不重写已存在字节：崩溃瞬间已存在的每个文件逐字节不变；恢复至多新建缺失的摘要一个文件
+      const afterFiles = entryFiles(scope, streamId)
+      expect(afterFiles.length).toBe(Math.min(bytesAtCrash.length + 1, 15))
+      for (const { f, bytes } of bytesAtCrash) {
+        expect(new Uint8Array(readFileSync(join(entriesDir, f)))).toEqual(bytes)
+      }
+      expect(new Uint8Array(sumBytes)).toEqual(new Uint8Array(readFileSync(entryPath(scope, streamId, 15))))
+    }
+  })
+
+  // acc-agg-3（原 M1-11）：聚合后 keyword 搜被折叠成员原 description 仍能找到（检索穿透）。
+  test("acc-agg-3: 聚合后 keyword 命中被折叠成员原描述", async () => {
+    const scope = open("agg-3")
+    const { streamId } = scope.registerSession("acc-sess", "build")
+    setRounds(scope, streamId, 49)
+    const log: Record<string, unknown>[] = []
+    const tools = toolsFor(scope, streamId, log)
+    const members = await seedAged(scope, streamId, 8, { descPrefix: "量子纠缠纠错记录" }) // description 含 独词量子纠缠纠错记录<n>
+    await seedAged(scope, streamId, 6, { descPrefix: "尾部记录" })
+    const out = await tools.board_aggregate.execute(CTX, {
+      member_ids: members.map((m) => m.id),
+      description: "聚合摘要",
+      navigation_body: "导航",
+    })
+    expect(out).toContain("aggregated (covered 8 members)")
+    const sumId = formatBbId(scope.config.scope_id, streamId, 15)
+    const idxOut = await tools.board_index.execute(CTX, { keyword: "独词量子纠缠纠错记录3", view: "compact" })
+    const payload = toolJson<{ stream: { items: { id: string; description: string; covered_by: string | null }[] } }>(idxOut)
+    expect(payload.stream.items).toHaveLength(1)
+    expect(payload.stream.items[0]!.id).toBe(members[2]!.id)
+    expect(payload.stream.items[0]!.description).toContain("独词量子纠缠纠错记录3")
+    expect(payload.stream.items[0]!.covered_by).toBe(sumId)
+  })
+
+  // acc-agg-4（原 M1-10 + fix-8 cursor 断言强化）：board_get 成员 found/covered_by/hash 不变；
+  // cursor 绑定 scope/stream/query 哈希——聚合只折叠目录不失效令牌，同查询旧 cursor 聚合后
+  // 仍有效续翻（翻页显式 view:"all"，默认 compact 正确隐藏 covered 成员）。
+  test("acc-agg-4: 聚合后旧 cursor 仍有效续翻（view all）+ 成员 get 语义不变", async () => {
+    const scope = open("agg-4")
+    const { streamId } = scope.registerSession("acc-sess", "build")
+    setRounds(scope, streamId, 49)
+    const log: Record<string, unknown>[] = []
+    const tools = toolsFor(scope, streamId, log)
+    const members = await seedAged(scope, streamId, 14) // seq 1..14；eligible=1..8，recent6=9..14
+    // 聚合前取 cursor（分页尺寸 5，使后续页含被折叠成员）
+    const page1 = toolJson<{ stream: { items: { id: string; covered_by: string | null }[]; nextCursor: string } }>(
+      await tools.board_index.execute(CTX, { view: "all", limit: 5 }),
+    )
+    expect(page1.stream.items.map((i) => i.id)).toEqual(members.slice(0, 5).map((m) => m.id))
+    expect(page1.stream.nextCursor).toBeTruthy()
+    // 聚合 seq 1..8
+    const out = await tools.board_aggregate.execute(CTX, {
+      member_ids: members.slice(0, 8).map((m) => m.id),
+      description: "聚合摘要",
+      navigation_body: "导航",
+    })
+    const sumId = formatBbId(scope.config.scope_id, streamId, 15)
+    expect(out).toContain(sumId)
+    // board_get(被折叠成员) → found + nav.covered_by===摘要id + hash 与聚合前一致
+    const getOut = toolJson<{ id: string; status: string; hash: string; nav: { superseded_by: unknown; covered_by: string | null } }[]>(
+      await tools.board_get.execute(CTX, { ids: [members[0]!.id] }),
+    )
+    expect(getOut[0]!.status).toBe("found")
+    expect(getOut[0]!.nav.covered_by).toBe(sumId)
+    expect(getOut[0]!.hash).toBe(`sha256:${members[0]!.hash}`)
+    // 同查询旧 cursor 聚合后仍有效续翻：翻页成功且含被折叠成员（seq 6..8 covered，9..10 未覆盖）
+    const page2Raw = await tools.board_index.execute(CTX, { view: "all", limit: 5, cursor: page1.stream.nextCursor })
+    expect(page2Raw).not.toContain("cursor_mismatch")
+    const page2 = toolJson<{ stream: { items: { id: string; covered_by: string | null }[] } }>(page2Raw)
+    expect(page2.stream.items.map((i) => i.id)).toEqual(members.slice(5, 10).map((m) => m.id))
+    expect(page2.stream.items[0]!.covered_by).toBe(sumId)
+    expect(page2.stream.items[1]!.covered_by).toBe(sumId)
+    expect(page2.stream.items[2]!.covered_by).toBe(sumId)
+    expect(page2.stream.items[3]!.covered_by).toBeNull()
   })
 })

@@ -20,6 +20,8 @@ export type IndexItem = {
   writer_agent: string
   pinned: boolean
   superseded_by: string | null
+  /** 覆盖该条目的索引摘要 id（逐边授权；不可见/异常 → null）。Task B Step 2（fix-6） */
+  covered_by: string | null
   tombstoned: boolean
 }
 
@@ -61,8 +63,28 @@ export function queryHashOf(opts: { view?: IndexView; keyword?: string; kind?: R
   return new Bun.CryptoHasher("sha256").update(material).digest("hex").slice(0, 16)
 }
 
-/** 条目来源 = readdir 按 parseEntryFileName 升序 + readEntry；导航/标注在输出层执行授权（P15） */
+/** 条目来源 = readdir 按 parseEntryFileName 升序 + readEntry；导航/标注在输出层执行授权（P15）
+ *  fix-1 recover-on-read：读入口锁内先 recover 再读取（提交可见性原子；withLock 按锁路径可重入） */
 export function listIndex(
+  scope: Scope,
+  streamId: string,
+  opts: {
+    view?: IndexView
+    keyword?: string
+    kind?: RecordKind
+    sinceSeq?: number
+    limit?: number
+    cursor?: string
+    caller: { sessionId: string; agent: string }
+  },
+): { items: IndexItem[]; nextCursor: string | null } {
+  return scope.withLock(() => {
+    scope.recover(streamId)
+    return listIndexLocked(scope, streamId, opts)
+  })
+}
+
+function listIndexLocked(
   scope: Scope,
   streamId: string,
   opts: {
@@ -104,7 +126,12 @@ export function listIndex(
     if (!rec) continue
     const tombstoned = meta.tombstoned[rec.id] !== undefined
     if (view === "compact" && tombstoned) continue
-    if (opts.keyword !== undefined && !rec.description.toLowerCase().includes(opts.keyword.toLowerCase())) continue
+    // M1-11（Task B）：keyword 命中被覆盖原描述 → RF1 穿透列示；否则折叠（compact 不列示 covered 项）
+    const keywordActive = opts.keyword !== undefined && opts.keyword.length > 0
+    const keywordHit = keywordActive && rec.description.toLowerCase().includes(opts.keyword!.toLowerCase())
+    if (keywordActive && !keywordHit) continue
+    const coveredRaw = meta.nav[rec.id]?.covered_by ?? null
+    if (view === "compact" && coveredRaw !== null && !keywordHit) continue
     if (opts.kind !== undefined && rec.kind !== opts.kind) continue
     let superseded_by: string | null = meta.nav[rec.id]?.superseded_by ?? null
     if (superseded_by !== null) {
@@ -116,6 +143,16 @@ export function listIndex(
       }
       if (!t || refPolicy(authz, { scopeId: t.scopeId, streamId: t.streamId }) !== "ok") superseded_by = null
     }
+    let covered_by: string | null = coveredRaw
+    if (covered_by !== null) {
+      let t: ReturnType<typeof parseBbId> | null = null
+      try {
+        t = parseBbId(covered_by)
+      } catch {
+        t = null
+      }
+      if (!t || refPolicy(authz, { scopeId: t.scopeId, streamId: t.streamId }) !== "ok") covered_by = null
+    }
     all.push({
       id: rec.id,
       sequence: rec.sequence,
@@ -125,6 +162,7 @@ export function listIndex(
       writer_agent: rec.writer.agent,
       pinned: isPinned(cfg, rec.id),
       superseded_by,
+      covered_by,
       tombstoned,
     })
   }
@@ -153,7 +191,8 @@ export function recentKnowledgeIds(scope: Scope, streamId: string): string[] {
   return ids
 }
 
-function entrySeqs(scope: Scope, streamId: string): number[] {
+/** 读 entries 目录、按 eNNNNNN.json 解析升序返回序号（计划 Task A Step 3 最小导出） */
+export function entrySeqs(scope: Scope, streamId: string): number[] {
   let names: string[] = []
   try {
     names = readdirSync(join(scope.dir, "streams", streamId, "entries"))
@@ -169,7 +208,20 @@ function entrySeqs(scope: Scope, streamId: string): number[] {
 // 快照计数（DESIGN §10.2；Task 4 Step 4）。eligible/protected/unknown_round =
 // 全部条目跑 classifyEligibility（caller = own session+agent）的分布。
 // new_since_last_shown 按 sequence > last_shown_seq 计数而非 maxSeq 差——序号空洞不失真（I8）。
+// fix-1 recover-on-read：锁内一次完整扫描（I1，不得出现中间态组合）。
 export function snapshotCounts(
+  scope: Scope,
+  streamId: string,
+  caller: { sessionId: string; agent: string },
+  currentRound: number | null,
+): SnapshotCounts {
+  return scope.withLock(() => {
+    scope.recover(streamId)
+    return snapshotCountsLocked(scope, streamId, caller, currentRound)
+  })
+}
+
+function snapshotCountsLocked(
   scope: Scope,
   streamId: string,
   caller: { sessionId: string; agent: string },
@@ -193,6 +245,7 @@ export function snapshotCounts(
     eligible: 0,
     protected: 0,
     unknown_round: 0,
+    description_bytes: 0,
   }
   for (const seq of entrySeqs(scope, streamId)) {
     const rec = scope.readEntry(streamId, seq)
@@ -200,8 +253,12 @@ export function snapshotCounts(
     if (meta.tombstoned[rec.id] !== undefined) continue
     counts.knowledge_total++
     if (rec.kind === "index_summary") counts.index_summary_count++
-    // M1：compact 视图与 knowledge_total 相同；聚合启用后分化
-    counts.visible_items++
+    // M1（Task B 折叠口径，计划 404–416）：covered 项不占可见目录、不计 description 字节
+    //（counts 无 keyword → 无 RF1 穿透；与 aggregateCandidates.visibleItems 同口径）
+    if (meta.nav[rec.id]?.covered_by === undefined) {
+      counts.visible_items++
+      counts.description_bytes += Buffer.byteLength(rec.description, "utf8")
+    }
     if (rec.sequence > meta.budget.last_shown_seq) counts.new_since_last_shown++
     const cls = classifyEligibility(rec, ctx)
     if (cls.status === "eligible") counts.eligible++

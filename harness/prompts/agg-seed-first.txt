@@ -1,0 +1,1 @@
+请调用 board.put 提交一条记录：description 填 "l9 会话首条记录"，content 填一句话正文。提交成功后，回复本会话的 session id，然后结束。

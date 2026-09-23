@@ -11,6 +11,9 @@ export const CONTENT_MAX_BYTES = 65536
 
 export type Writer = { agent: string; session_id: string; message_id: string }
 
+/** 聚合成员投影（仅 index_summary 记录携带；hash = 成员 entry 落盘字节的 sha256） */
+export type AggregateMember = { id: string; hash: string }
+
 export type BbRecord = {
   schema_version: number
   id: string
@@ -27,6 +30,8 @@ export type BbRecord = {
   related?: string[]
   supersedes?: string[]
   publication_for?: string
+  members?: AggregateMember[]
+  summary_basis?: "descriptions"
 }
 
 /** 调用方提交的不可变载荷（工具新分配的元数据不参与幂等比较，DESIGN §6） */
@@ -132,6 +137,8 @@ export function buildRecordBytes(rec: BbRecord): Uint8Array {
     ...(rec.related !== undefined ? { related: rec.related } : {}),
     ...(rec.supersedes !== undefined ? { supersedes: rec.supersedes } : {}),
     ...(rec.publication_for !== undefined ? { publication_for: rec.publication_for } : {}),
+    ...(rec.members !== undefined ? { members: rec.members } : {}),
+    ...(rec.summary_basis !== undefined ? { summary_basis: rec.summary_basis } : {}),
   }
   return new TextEncoder().encode(JSON.stringify(ordered))
 }

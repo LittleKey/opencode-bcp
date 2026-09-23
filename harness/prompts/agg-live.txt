@@ -1,0 +1,5 @@
+请按顺序完成三步并逐步报告结果：
+1) 调用 board.aggregate，把目录里最早的 8 条种子记录折叠为一条索引摘要：member_ids 传这 8 条记录的 id（按 sequence 从小到大；只选 description 形如 "l9 种子记录 N" 的记录，不要包含会话最开始写入的那条首条记录）。description 填 "l9 折叠摘要"，navigation_body 填 "- 成员见 members"。如果被拒绝，原样贴出拒绝文案后结束。
+2) 调用 board.get 分两批取回这 8 条种子记录（每批 4 条），确认每条都能找到，且 nav.covered_by 指向新摘要。
+3) 调用 board.index，keyword 填 "种子记录 3"，确认能检索到被折叠成员的原描述。
+全部完成后回复 "agg-live done"。

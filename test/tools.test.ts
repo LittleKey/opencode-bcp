@@ -41,6 +41,44 @@ function getJson(out: string): unknown[] {
   return JSON.parse(out.slice(0, out.indexOf("\n（")))
 }
 
+/** 聚合用夹具：老化种子（createdRound=45）+ 轮次钟表拨到 49；补 6 条尾部使其退出 recent 保护窗 */
+function seedAged(scope: Scope, streamId: string, count: number): { id: string; hash: string }[] {
+  const out: { id: string; hash: string }[] = []
+  for (let i = 0; i < count; i++) {
+    const r = mustStore(
+      scope.put(streamId, {
+        writer: { agent: "build", session_id: "s1", message_id: `agg-seed-${i}` },
+        createdRound: 45,
+        description: `旧记录 ${i}`,
+        content: `c${i}`,
+      }),
+    )
+    out.push({ id: r.id, hash: r.hash })
+  }
+  for (let i = 0; i < 6; i++) {
+    mustStore(
+      scope.put(streamId, {
+        writer: { agent: "build", session_id: "s1", message_id: `agg-tail-${i}` },
+        createdRound: 49,
+        description: `尾部 ${i}`,
+        content: `t${i}`,
+      }),
+    )
+  }
+  return out
+}
+function admitRounds(scope: Scope, streamId: string, current = 49): void {
+  const meta = scope.readMeta(streamId)
+  scope.writeMeta(streamId, { ...meta, rounds: { ...meta.rounds, current_round: current, round_known: true } })
+}
+const AGG_NAV = "# 导航\n- 成员列表见 members"
+function aggArgs(memberIds: string[], extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { member_ids: memberIds, description: "聚合摘要", navigation_body: AGG_NAV, ...extra }
+}
+function placeholderIds(count: number, seed = "p"): string[] {
+  return Array.from({ length: count }, (_, i) => formatBbId("sc", "st", i + 1 + seed.length * 1000 + i))
+}
+
 let n = 0
 function putArgs(extra: Record<string, unknown> = {}): Record<string, unknown> {
   n++
@@ -267,5 +305,136 @@ describe("tools", () => {
     expect(got.nav.superseded_by).toBeNull() // 置 null 不返回，不泄漏他流 ID
     const idx = JSON.parse(await tools.board_index.execute(CTX, {}))
     expect(idx.stream.items.find((i: { id: string }) => i.id === id1).superseded_by).toBeNull()
+  })
+
+  // t-agg-1
+  test("t-agg-1: 未注册会话 board_aggregate 拒绝", async () => {
+    const tools = defineBoardTools({ resolveScope: async () => null, log: () => {} })
+    expect(await tools.board_aggregate.execute(CTX, aggArgs(placeholderIds(8)))).toBe(
+      "rejected: unregistered_session",
+    )
+  })
+
+  // t-agg-2
+  test("t-agg-2: 引用授权——跨 scope forbidden_ref；格式错/跨流/隔离流 unknown_ref；get 隔离流不泄露", async () => {
+    const scope = makeScope("ta2")
+    const s1 = scope.registerSession("s1", "build")
+    const s2 = scope.registerSession("s2", "build")
+    scope.registerSession("c1", "councillor-x")
+    const cStream = scope.config.session_index["c1"]!.stream_id
+    const cRec = mustStore(
+      scope.put(cStream, {
+        writer: { agent: "councillor-x", session_id: "c1", message_id: "mc1" },
+        createdRound: 45,
+        description: "隔离流记录",
+        content: "c",
+      }),
+    )
+    const locals = seedAged(scope, s1.streamId, 8).map((m) => m.id)
+    admitRounds(scope, s1.streamId)
+    const { tools } = stub(scope, s1.streamId)
+    // (a) 跨 scope 引用 → forbidden_ref
+    const scopeB = makeScope("ta2b")
+    scopeB.registerSession("sb", "build")
+    const sbStream = scopeB.config.session_index["sb"]!.stream_id
+    const secret = mustStore(
+      scopeB.put(sbStream, {
+        writer: { agent: "build", session_id: "sb", message_id: "sb1" },
+        createdRound: 45,
+        description: "秘密",
+        content: "s",
+      }),
+    )
+    expect(await tools.board_aggregate.execute(CTX, aggArgs([secret.id, ...locals.slice(0, 7)]))).toBe(
+      `rejected: forbidden_ref ${secret.id}`,
+    )
+    // (b) 格式错 → unknown_ref
+    expect(await tools.board_aggregate.execute(CTX, aggArgs(["not-a-bb-id", ...locals.slice(0, 7)]))).toBe(
+      "rejected: unknown_ref not-a-bb-id",
+    )
+    // (c) 跨流（同 scope 可读流）→ unknown_ref
+    const s2rec = mustStore(
+      scope.put(s2.streamId, {
+        writer: { agent: "build", session_id: "s2", message_id: "ms2" },
+        createdRound: 45,
+        description: "他流记录",
+        content: "c",
+      }),
+    )
+    expect(await tools.board_aggregate.execute(CTX, aggArgs([s2rec.id, ...locals.slice(0, 7)]))).toBe(
+      `rejected: unknown_ref ${s2rec.id}`,
+    )
+    // (d) 隔离流成员（真实存在也不泄露）→ unknown_ref
+    expect(await tools.board_aggregate.execute(CTX, aggArgs([cRec.id, ...locals.slice(0, 7)]))).toBe(
+      `rejected: unknown_ref ${cRec.id}`,
+    )
+    // (e) 同 scope 调用者 board_get 隔离流摘要 id → not_found 文案（hidden 同文案）
+    const ghostId = formatBbId(scope.config.scope_id, cStream, 99)
+    const out = await tools.board_get.execute(CTX, { ids: [ghostId] })
+    expect(getJson(out)[0]).toMatchObject({ id: ghostId, status: "not_found" })
+    expect(out).not.toContain("hidden")
+    expect(out).not.toContain("隔离流记录")
+  })
+
+  // t-agg-3
+  test("t-agg-3: board_aggregate 成功输出、日志与导航边", async () => {
+    const scope = makeScope("ta3")
+    const s1 = scope.registerSession("s1", "build")
+    const members = seedAged(scope, s1.streamId, 8)
+    admitRounds(scope, s1.streamId)
+    const { tools, logs } = stub(scope, s1.streamId)
+    const out = await tools.board_aggregate.execute(CTX, aggArgs(members.map((m) => m.id)))
+    const summaryId = formatBbId(scope.config.scope_id, s1.streamId, 15)
+    expect(out).toContain(`summary ${summaryId} aggregated (covered 8 members)`)
+    expect(out).toContain("hash sha256:")
+    expect(out).toContain("sequence 15")
+    expect(logs[0]).toMatchObject({ ev: "aggregated", session: "s1", stream: s1.streamId, id: summaryId, members: 8 })
+    const got = getJson(await tools.board_get.execute(CTX, { ids: [members[0]!.id] }))[0] as {
+      nav: { covered_by: string | null }
+    }
+    expect(got.nav.covered_by).toBe(summaryId)
+  })
+
+  // t-agg-4
+  test("t-agg-4: 整批 already_covered → rejected: aggregate_invalid 逐成员行", async () => {
+    const scope = makeScope("ta4")
+    const s1 = scope.registerSession("s1", "build")
+    const members = seedAged(scope, s1.streamId, 8)
+    admitRounds(scope, s1.streamId)
+    const { tools } = stub(scope, s1.streamId)
+    const first = await tools.board_aggregate.execute(CTX, aggArgs(members.map((m) => m.id)))
+    expect(first).toContain("aggregated (covered 8 members)")
+    const second = await tools.board_aggregate.execute(CTX, aggArgs(members.map((m) => m.id)))
+    expect(second.startsWith("rejected: aggregate_invalid")).toBe(true)
+    for (const m of members) expect(second).toContain(`- ${m.id}: already_covered`)
+  })
+
+  // t-agg-5
+  test("t-agg-5: 描述校验——缺参 zod 抛错；空白/换行/超长 → rejected: description_*", async () => {
+    const scope = makeScope("ta5")
+    const s1 = scope.registerSession("s1", "build")
+    const { tools } = stub(scope, s1.streamId)
+    const ids = placeholderIds(8)
+    await expect(
+      tools.board_aggregate.execute(CTX, { member_ids: ids, navigation_body: "n" }),
+    ).rejects.toThrow()
+    expect(await tools.board_aggregate.execute(CTX, aggArgs(ids, { description: "   " }))).toBe(
+      "rejected: description_blank",
+    )
+    expect(await tools.board_aggregate.execute(CTX, aggArgs(ids, { description: "a\r\nb" }))).toBe(
+      "rejected: description_newline",
+    )
+    expect(await tools.board_aggregate.execute(CTX, aggArgs(ids, { description: "a".repeat(81) }))).toBe(
+      "rejected: description_too_long",
+    )
+  })
+
+  // t-agg-6
+  test("t-agg-6: zod 边界——member_ids 7/17 → ZodError", async () => {
+    const scope = makeScope("ta6")
+    const s1 = scope.registerSession("s1", "build")
+    const { tools } = stub(scope, s1.streamId)
+    await expect(tools.board_aggregate.execute(CTX, aggArgs(placeholderIds(7)))).rejects.toThrow()
+    await expect(tools.board_aggregate.execute(CTX, aggArgs(placeholderIds(17)))).rejects.toThrow()
   })
 })

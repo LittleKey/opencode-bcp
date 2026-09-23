@@ -1,0 +1,5 @@
+请依次完成三步：
+1) 调用一次 board.index，参数固定为 view:"all"、limit:50（不要传 cursor）。
+2) 调用 board.aggregate 尝试折叠 8 条记录：member_ids 传目录里最早的 7 条记录 id，再加上一条最近（最新 sequence）记录的 id；description 填 "l9 负向摘要"，navigation_body 填 "- n"。预期会被拒绝（最近记录受保护）。被拒绝后原样贴出完整拒绝文案，不要重试。
+3) 再调用一次 board.index，参数同样固定为 view:"all"、limit:50（不要传 cursor）。
+最后回复 "agg-invalid done" 结束。
