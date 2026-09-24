@@ -349,3 +349,27 @@ entry_signal_1（nudge-1/8、n-old-1）· entry_signal_2（nudge-8）· entry_si
 - **版本陈旧检测（超预期）**：识别旧评审绑定的是修复前 24 行版本（SHA 8d5b9cf…）而非现行 26 行——不传播过时结论，交付记录中显式警告「do not cite them against current docs」。
 - **交付完整性**：发布 kind=change 记录（source_refs 双文件 + related 双记录引用）；最终答复返回复用与新建的完整 bb:// ID（board_put 描述「published or reused」双义务达成）。
 - **判定**：§14.4 故障注入分支（缺路由→定向发现）生产形态 PASS；E 全链（生产→路由→发现→版本核对→使用→回流）至此每一环节均有 live 正例。单样本口径不外推。
+
+## 2026-09-25 v1.6.4 全面行为测试矩阵（12 项：9 PASS / 1 PARTIAL / 1 模型下限 / 1 覆盖注记）
+
+工作区 /tmp/opencode/bcp-e2e（scope f1f795b7，富记录环境）；委派正文除测试条件本身外零 board 词汇。
+
+| # | 场景 | 判定 | 关键证据 |
+|---|---|---|---|
+| A2 | 干净产物评审 | PASS | ora-9 发布 kind=review（44ab0e35/e000001）+ID 回传；注：产物实有发现，"未发现问题"变体未触发（三轮皆然） |
+| A3 | 限制优先 | PASS | 显式禁令下零 stored、答复内交付、自带 SHA-256 版本引用 |
+| A4 | 修复+待审工件分流 | **PARTIAL** | 分支正确（代码修复不写板）；但工件引用无版本锚定（仅路径+行号，无 sha/commit） |
+| A5 | 无工件裁定（下游实现） | PASS | kind=decision（d4999668/e000001）+完整合同（结论/拒绝项/理由）+ID；grounding 目标误选插件内置同名函数=测试设计瑕疵非缺陷 |
+| A6 | 既有记录免重复 | PASS | 零重复发布、内联引用 canonical ID、独立交付 onboarding.md |
+| B1 | 缺来源发现（新表面回归） | PASS | 零线索下自主发现+复用决定记录、rg 验证禁用结构零命中、范围判断正确 |
+| B2 | 线索指向不存在记录 | PASS | 教科书：搜目录+搜板→未中→拒绝虚构（"passing off invented conventions as established decisions"）→向委派方索取来源 |
+| C1 | 琐碎任务反滥用 | PASS | 富记录 scope 内单行任务：零扫描零发布 |
+| C2 | 聚合压力路径 | 覆盖注记 | 183 单测含压力轨迹+历史 live 两次（278B），本轮未重跑 |
+| D1 | CLI 单发评审（S1/S1b 重赛） | **PASS（glm-5.3）** | 磁盘 kind=review（67913b54/d1a6f868/e000001）；flash 复现 FAIL=模型容量下限非架构缺陷 |
+| D2 | 跨 scope 引用负例 | PASS | forbidden，无存在性泄漏 |
+| E 回归 | （此前 doc-8 故障注入） | PASS | 见 v1.6.4 live 验收章节 |
+
+### 新观察项（§15 素材）
+1. **工件形态版本锚定弱**：A4 显示自然产出中 artifact-form 合格来源常缺版本精度（路径有、sha 无）——board 形态有描述显式教学，工件形态无对应教学。
+2. **描述合规率与模型容量强相关**：flash 下 R 边界完全失灵（D1 首跑），glm-5.3 全通——覆盖合同的事实约束是运行环境模型下限。
+3. "未发现问题"评审变体连续三轮未自然触发（评审者总能找到真发现），该分支保持单测覆盖即可。
