@@ -135,15 +135,22 @@ describe("indexing", () => {
   })
 
   // idx-8（Task 4 Step 4）：new_since_last_shown 按计数而非 maxSeq 差——序号空洞不失真（I8）
-  test("空号 3 时 new_since_last_shown === 3（非 4）", () => {
+  test("空号 3 时 new_since_last_shown 计数：新账本（§10.7 废除字段）→ 0；遗留账本（含 last_shown_seq）→ 按条目计数", () => {
     const scope = openScopeForRoot({ rootSessionId: "i8", dataDir: mkdtempSync(join(tmpdir(), "bb-idx-")) })
     dirs.push(scope.dir)
     const { streamId } = scope.registerSession("s", "build")
     for (let i = 0; i < 4; i++) put(scope, streamId)
     // 手工制造空号 3：删除第 3 条 entry 文件（seq 1、2、4 保留）
     rmSync(join(scope.dir, "streams", streamId, "entries", "e000003.json"))
-    // last_shown_seq=0（newStreamMeta 预置），显式断言前提
-    expect(scope.readMeta(streamId).budget.last_shown_seq).toBe(0)
+    // 新账本无 last_shown_seq（§10.7 废除）→ 遗留计数器自然休眠，恒 0
+    const meta0 = scope.readMeta(streamId)
+    expect((meta0.budget as unknown as Record<string, unknown>).last_shown_seq).toBeUndefined()
+    expect(snapshotCounts(scope, streamId, { sessionId: "s", agent: "build" }, null).new_since_last_shown).toBe(0)
+    // 遗留账本（旧快照形态含 last_shown_seq=0）→ 计数路径仍正确：seq 1、2、4 → 按条目计数 3
+    scope.writeMeta(streamId, {
+      ...meta0,
+      budget: { ...meta0.budget, ...({ last_shown_seq: 0 } as Record<string, unknown>) } as typeof meta0.budget,
+    })
     const counts = snapshotCounts(scope, streamId, { sessionId: "s", agent: "build" }, null)
     expect(counts.new_since_last_shown).toBe(3) // seq 1、2、4 → 按条目计数
     expect(counts.knowledge_total).toBe(3)

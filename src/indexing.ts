@@ -7,7 +7,19 @@ import type { RecordKind } from "./schema"
 import { parseEntryFileName, parseBbId } from "./ids"
 import { isPinned, refPolicy, resolveAuthz } from "./permissions"
 import { classifyEligibility, RECENT_K, type EligibilityCtx } from "./eligibility"
-import type { SnapshotCounts } from "./nudge"
+
+// 快照计数形状（原从 nudge.ts 导入；§10.7 快照形态废除后随 snapshotCounts 归位于本文件）
+export type SnapshotCounts = {
+  knowledge_total: number
+  visible_items: number
+  index_summary_count: number
+  new_since_last_shown: number
+  eligible: number
+  protected: number
+  unknown_round: number
+  /** 可见目录项 description 的 UTF-8 字节合计（Task B Step 2；§8.1 第二触发条件输入） */
+  description_bytes: number
+}
 
 export type IndexView = "compact" | "all"
 
@@ -259,7 +271,8 @@ function snapshotCountsLocked(
       counts.visible_items++
       counts.description_bytes += Buffer.byteLength(rec.description, "utf8")
     }
-    if (rec.sequence > meta.budget.last_shown_seq) counts.new_since_last_shown++
+    // §10.7 废除字段的读侧遗留容忍（读时归一化旧账本）：新账本无此字段 → 该遗留计数器恒 0 自然休眠
+    if (rec.sequence > ((meta.budget as { last_shown_seq?: number }).last_shown_seq ?? Number.MAX_SAFE_INTEGER)) counts.new_since_last_shown++
     const cls = classifyEligibility(rec, ctx)
     if (cls.status === "eligible") counts.eligible++
     else if (cls.status === "protected") counts.protected++

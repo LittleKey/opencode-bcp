@@ -275,7 +275,8 @@ async function aggregateRaceMain(dataDir: string): Promise<void> {
       expected.visible_items++
       expected.description_bytes += Buffer.byteLength(rec.description, "utf8")
     }
-    if (rec.sequence > meta.budget.last_shown_seq) expected.new_since_last_shown++
+    // §10.7 废除字段的读侧遗留容忍（读时归一化旧账本）：新账本无此字段 → 该遗留计数器恒 0 自然休眠
+    if (rec.sequence > ((meta.budget as { last_shown_seq?: number }).last_shown_seq ?? Number.MAX_SAFE_INTEGER)) expected.new_since_last_shown++
     const cls = classifyEligibility(rec, { cfg: scope.config, meta, currentRound, recentIds, callerSessionId: RACE_AUTHOR.session_id, callerAgent: RACE_AUTHOR.agent })
     if (cls.status === "eligible") expected.eligible++
     else if (cls.status === "protected") expected.protected++

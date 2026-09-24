@@ -44,7 +44,8 @@ export const AGG_TRIGGER_SUM_DESC_BYTES = 4096 // §8.1：描述合计 >4 KiB
 export type ScopeConfig = {
   scope_id: string
   created_at: string
-  session_index: Record<string, { stream_id: string; agent: string; isolated: boolean }>
+  // T6-R3/I2：skip_tainted——skip 事件持久标记（跨进程/重启生效）；显式有效身份重新登记时清除
+  session_index: Record<string, { stream_id: string; agent: string; isolated: boolean; skip_tainted?: boolean }>
   quota_bytes: number
   pins: string[]
 }
@@ -54,10 +55,11 @@ export type BudgetLedger = {
   round_known: boolean
   round_used: number
   seen_requests: string[]
-  snapshot_version: string | null
   prompted_set_hashes: string[]
-  initial_fulfilled: boolean
-  last_shown_seq: number
+  /** 入口事件去重（§10.3 I2）：跨轮持久、无截断，语义同 prompted_set_hashes */
+  entry_prompted_message_ids: string[]
+  /** admitted 见识集合（I2，DESIGN:315-324 同一业务输入不产生新事件）：无界集合——I2-R 缓存未命中不构成新颖性证明，历史/淘汰位次重放均不构成新 admission */
+  admitted_seen: string[]
 }
 
 export type StreamMeta = {
@@ -203,10 +205,9 @@ function newStreamMeta(streamId: string, sessionId: string): StreamMeta {
       round_known: false,
       round_used: 0,
       seen_requests: [],
-      snapshot_version: null,
       prompted_set_hashes: [],
-      initial_fulfilled: false,
-      last_shown_seq: 0,
+      entry_prompted_message_ids: [],
+      admitted_seen: [],
     },
     idem: {},
     idem_pending: {},
@@ -270,7 +271,15 @@ export class Scope {
     return this.withLock(() => {
       const cfg = this.config
       const existing = cfg.session_index[sessionId]
-      if (existing) return { scopeId: cfg.scope_id, streamId: existing.stream_id }
+      if (existing) {
+        // I1：注册路径显式非空 agent 与已注册值不同 → 刷新注册（空串不得清除已知身份）
+        if (agent && (existing.agent !== agent || existing.skip_tainted)) {
+          // T6-R3/I2：显式有效身份重新登记 → 同时清除持久 skip 标记（空串不得触达此分支）
+          cfg.session_index[sessionId] = { ...existing, agent, isolated: isIsolatedAgent(agent), skip_tainted: false }
+          this.writeConfig(cfg)
+        }
+        return { scopeId: cfg.scope_id, streamId: existing.stream_id }
+      }
       const streamId = randomUUID()
       mkdirSync(this.entriesDir(streamId), { recursive: true })
       this.writeMeta(streamId, newStreamMeta(streamId, sessionId))
@@ -281,6 +290,37 @@ export class Scope {
       }
       this.writeConfig(cfg)
       return { scopeId: cfg.scope_id, streamId }
+    })
+  }
+
+  /** I1：注册身份刷新——hookInput.agent 为注册路径验证值；已注册条目仅更新 agent/isolated（流不变、不重建） */
+  refreshSessionAgent(sessionId: string, agent: string): void {
+    this.withLock(() => {
+      const cfg = this.config
+      const e = cfg.session_index[sessionId]
+      // T6-R4/I2-B②：同名到达也必须清除持久 skip 标记（否则盘上标记与放行并存）
+      if (!e || (e.agent === agent && !e.skip_tainted)) return
+      cfg.session_index[sessionId] = { ...e, agent, isolated: isIsolatedAgent(agent), skip_tainted: false }
+      this.writeConfig(cfg)
+    })
+  }
+
+  /** T6-R4/I2-B①：读取单条 session_index 的持久 skip 标记（他实例落盘后的可见性检查）。
+   *  IO 如实说明：config getter 每次调用重读并解析整份 scope.json（不缓存读取——正确性
+   *  优先取舍：保持他实例写盘一致性；接受热路径额外 IO；transform 以空 agent 调 lookup
+   *  以及 T6-R5 后任意 agent 的工具缓存命中路径均触发）。 */
+  isSessionSkipTainted(sessionId: string): boolean {
+    return this.config.session_index[sessionId]?.skip_tainted === true
+  }
+
+  /** T6-R3/I2：skip 事件标记落持久层（session_index.skip_tainted），跨进程/重启生效；幂等 */
+  markSessionSkipTainted(sessionId: string): void {
+    this.withLock(() => {
+      const cfg = this.config
+      const e = cfg.session_index[sessionId]
+      if (!e || e.skip_tainted) return
+      cfg.session_index[sessionId] = { ...e, skip_tainted: true }
+      this.writeConfig(cfg)
     })
   }
 

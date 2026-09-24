@@ -178,3 +178,43 @@ describe("eligibility", () => {
     expect(classifyEligibility(rec, ctxOf())).toEqual({ status: "protected", reason: "already_covered" })
   })
 })
+
+describe("eligibility 未知 caller 身份（I1）", () => {
+  test("caller agent null/空串 → not_original_author，即使 writer 同为空串（不冒充）", () => {
+    const { scope, streamId, put } = setup()
+    // 对照：已知身份 + 同写手 → 通过身份判定（fence 外 → eligible）
+    const built = put(1)
+    const recBuilt = recordOf(scope, streamId, built.id)
+    expect(
+      classifyEligibility(recBuilt, {
+        cfg: scope.config,
+        meta: scope.readMeta(streamId),
+        currentRound: 5,
+        recentIds: [],
+        callerSessionId: "author-session",
+        callerAgent: "build",
+      }),
+    ).toEqual({ status: "eligible", reason: "formula_pass" })
+    // 空 writer 记录（历史宿主行为）：未知 caller 不得与其匹配
+    const r = scope.put(streamId, {
+      writer: { agent: "", session_id: "author-session", message_id: "mX" },
+      createdRound: 1,
+      description: "d",
+      content: "c",
+    })
+    if (r.status !== "stored") throw new Error("put failed")
+    const rec = recordOf(scope, streamId, r.id)
+    for (const callerAgent of [null, ""] as const) {
+      expect(
+        classifyEligibility(rec, {
+          cfg: scope.config,
+          meta: scope.readMeta(streamId),
+          currentRound: 5,
+          recentIds: [],
+          callerSessionId: "author-session",
+          callerAgent,
+        }),
+      ).toEqual({ status: "protected", reason: "not_original_author" })
+    }
+  })
+})

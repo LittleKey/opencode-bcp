@@ -107,16 +107,16 @@ describe("acceptance", () => {
     scope.writeMeta(streamId, {
       ...meta,
       rounds: { current_round: 3, round_known: true, last_admitted_message_id: "adm0" },
-      budget: { ...newLedger(), round_id: "adm0", round_known: true, round_used: 2, initial_fulfilled: true },
+      budget: { ...newLedger(), round_id: "adm0", round_known: true, round_used: 2 },
     })
     for (let i = 1; i <= 3; i++) {
       const d = decideAndPersist(scope, streamId, {
         sessionId: "acc-sess",
         requestId: `req-${i}`,
         requestVerified: false,
-        snapshotVersion: `v-${i}`,
+        s1: false,
+        s2: false,
         candidateSetId: null,
-        maxSeq: 0,
       })
       expect(d).toEqual({ inject: false, reason: "identity_unrecoverable", advanced: false, identityRestored: false })
     }

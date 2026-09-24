@@ -7,13 +7,14 @@ import type { Hooks, Plugin, ToolDefinition, ToolContext } from "@opencode-ai/pl
 import type { Part, TextPart } from "@opencode-ai/sdk"
 import { openScopeById, openScopeForRoot, AGG_TRIGGER_VISIBLE, AGG_TRIGGER_SUM_DESC_BYTES, type Scope } from "./storage"
 import { isIsolatedAgent } from "./permissions"
-import { listIndex, snapshotCounts } from "./indexing"
 import { classifyInput, isKnownSyntheticText } from "./rounds"
 import { aggregateCandidates } from "./aggregate"
-import { decideAndPersist, renderSnapshot, snapshotVersionOf } from "./nudge"
+import { decideAndPersist } from "./nudge"
+import { detectSignals } from "./signals"
 import { defineBoardTools, type BoardToolDef } from "./tools"
+import { ENTRY_REMINDER_TEMPLATE, PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS } from "./constants"
 
-type Resolved = { scope: Scope; streamId: string; isolated: boolean }
+type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不再以空串冒充）
 
 type SessionInfo = { id: string; parentID: string | null; agent: string }
 
@@ -28,6 +29,7 @@ function createBlackboardState(dataDir: string | undefined) {
 
   const scopes = new Map<string, Resolved>() // sessionId → 解析结果（含根会话自己）
   const admitted = new Map<string, string>() // sessionId → 最近一次已验证的 admitted messageId
+  const skipTainted = new Set<string>() // I1-R：观察到被 skip 身份的会话——空 agent 身份回退失效，直至显式有效身份重新登记
   let degraded = false
   let parentWarned = false
 
@@ -46,7 +48,7 @@ function createBlackboardState(dataDir: string | undefined) {
     console.error("[blackboard] degraded:", err instanceof Error ? err.message : String(err))
   }
 
-  return { rootDir, skipAgents, scopes, admitted, log, degrade, isDegraded: () => degraded, hasParentWarned: () => parentWarned, warnParent: (id: string) => { if (!parentWarned) { parentWarned = true; console.error(`[blackboard] session-parent-unresolved: ${id}`) } } }
+  return { rootDir, skipAgents, scopes, admitted, skipTainted, log, degrade, isDegraded: () => degraded, hasParentWarned: () => parentWarned, warnParent: (id: string) => { if (!parentWarned) { parentWarned = true; console.error(`[blackboard] session-parent-unresolved: ${id}`) } } }
 }
 
 export const BlackboardPlugin: Plugin = async (input, options) => {
@@ -78,12 +80,96 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     return null
   }
 
+  // I1：身份刷新——注册路径的显式 agent（hookInput.agent）到达且与缓存不同 → 更新缓存与
+  // session_index 注册；刷新同样受 skipAgents 约束（不得绕过），isolated 随新身份重算。
+  // 空/相同 agent → 维持缓存（身份未知保持 null，不回退空串）。
+  const refreshIdentity = (sessionId: string, cached: Resolved, agent: string): Resolved | null => {
+    if (!agent) return cached
+    // T6-R4/I2-B②：显式合法身份必须走清除 taint 的登记路径——即使与缓存同名
+    //（同名提前返回会绕过持久 skip_tainted 清除，造成"盘上标记与放行并存"）
+    if (agent !== cached.agent || st.skipTainted.has(sessionId) || cached.scope.isSessionSkipTainted(sessionId)) {
+      cached.scope.refreshSessionAgent(sessionId, agent)
+      cached.agent = agent
+      cached.isolated = isIsolatedAgent(agent)
+      st.skipTainted.delete(sessionId) // I1-R：显式有效身份刷新 → 解除保守标记
+    }
+    return cached
+  }
+
+  // T6-R4/I2-C：taint 落地统一顺序——先本实例保守失效（admitted/缓存/内存标记），
+  // 再尝试持久化；持久化失败只丢跨重启保护（记日志降级），绝不回滚本实例阻断。
+  const taintAndInvalidate = (sessionId: string, scope: Scope | null): void => {
+    st.admitted.delete(sessionId)
+    st.scopes.delete(sessionId)
+    st.skipTainted.add(sessionId)
+    if (scope) {
+      try {
+        scope.markSessionSkipTainted(sessionId)
+      } catch (err) {
+        st.log({ ev: "skip_taint_persist_failed", session: sessionId, error: String(err) }) // 降级：本实例已阻断
+      }
+    }
+  }
+
+  // T6-R4/I2-A：只查不建地探测既有 Scope（不注册、不缓存）；任何失败 → null。
+  // 供显式 skip 身份冷到达时落持久标记（I2-A：冷入口不查既有 Scope 的缺口）。
+  const probeExistingScope = async (sessionId: string): Promise<Scope | null> => {
+    const root = await findRoot(sessionId)
+    if (!root) return null
+    const indexPath = join(st.rootDir, "scope-index.json")
+    if (!existsSync(indexPath)) return null
+    const index = JSON.parse(readFileSync(indexPath, "utf8")) as { scopes?: Record<string, string> }
+    const scopeId = index.scopes?.[root]
+    if (!scopeId) return null
+    try {
+      const scope = openScopeById(scopeId, { dataDir: st.rootDir })
+      scope.resolveSession(sessionId)
+      return scope
+    } catch {
+      return null
+    }
+  }
+
+  // T6-R5/漏口2：skip 到达的冷路径——先完成本实例失效（零 IO、零可失败点），再做可失败
+  // 的探测/持久化；探测或持久化失败只丢跨重启标记（本实例已阻断），不再吞掉本地失效
+  const coldSkipReject = async (sessionId: string): Promise<null> => {
+    taintAndInvalidate(sessionId, null)
+    const probed = await probeExistingScope(sessionId)
+    if (probed) {
+      try {
+        probed.markSessionSkipTainted(sessionId) // 幂等；失败按降级：本实例已阻断
+      } catch (err) {
+        st.log({ ev: "skip_taint_persist_failed", session: sessionId, error: String(err) })
+      }
+    }
+    return null
+  }
+
   // 工具路径：只查不建（C2-①）；任何失败 → null。
   const lookupScopeContext = async (sessionId: string, agent: string): Promise<Resolved | null> => {
     try {
-      if (st.skipAgents.includes(agent)) return null
       const cached = st.scopes.get(sessionId)
-      if (cached) return cached
+      if (cached) {
+        // T6-R3/I2：显式 skip 身份或缓存身份已是 skip 对象 → 失效缓存 + 持久标记（跨重启）+ taint
+        if ((agent && st.skipAgents.includes(agent)) || (cached.agent && st.skipAgents.includes(cached.agent))) {
+          taintAndInvalidate(sessionId, cached.scope)
+          return null
+        }
+        // T6-R5/漏口1：持久 taint 检查与 agent 是否为空无关——工具路径只查不刷新，
+        // 非空 ctx.agent 不得绕过他实例已落盘的 skip 标记；合法恢复仅经注册路径
+        // （chat.message 显式 agent → refreshIdentity → refreshSessionAgent 清除）。
+        // IO：每次调用重读整份 scope.json，正确性优先取舍（不缓存，保持他实例写盘一致性）
+        if (st.skipTainted.has(sessionId) || cached.scope.isSessionSkipTainted(sessionId)) {
+          taintAndInvalidate(sessionId, null) // 标记已在盘上，本实例失效即可
+          return null
+        }
+        return cached // 工具路径只查不建：不刷新注册（刷新在注册路径）
+      }
+      if (st.skipAgents.includes(agent)) {
+        // T6-R4/I2-A：显式 skip 身份冷到达——先本实例失效，再只查不建地探测既有 Scope：
+        // 存在则落持久标记；确实无 Scope 才纯内存拒绝不落盘
+        return await coldSkipReject(sessionId)
+      }
       const root = await findRoot(sessionId)
       if (!root) return null
       const indexPath = join(st.rootDir, "scope-index.json")
@@ -101,7 +187,17 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
       } catch {
         return null // unknown_session → 未注册不自动加入
       }
-      const resolved: Resolved = { scope, streamId, isolated }
+      // I1：工具路径身份 = 注册路径验证值；两者皆未知 → null（保守，不回退空串）
+      // I1-R：被 skip 事件标记的会话——空 agent 请求直接阻断（保守路径），不借回退身份放行；
+      // skip 判定施加于最终解析身份。
+      // T6-R3：内存 taint 为快路径，持久标记为权威源（重启后仍生效）；空 agent 直接阻断
+      if (st.skipTainted.has(sessionId) || scope.config.session_index[sessionId]?.skip_tainted === true) return null
+      const identity = scope.config.session_index[sessionId]?.agent || null
+      if (identity && st.skipAgents.includes(identity)) {
+        taintAndInvalidate(sessionId, scope)
+        return null
+      }
+      const resolved: Resolved = { scope, streamId, isolated, agent: identity }
       st.scopes.set(sessionId, resolved)
       return resolved
     } catch (err) {
@@ -113,9 +209,26 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
   // 注册路径：仅在会话事件 hook（chat.message / session.created）中调用。
   const registerScopeContext = async (sessionId: string, agent: string): Promise<Resolved | null> => {
     try {
-      if (st.skipAgents.includes(agent)) return null
       const cached = st.scopes.get(sessionId)
-      if (cached) return cached
+      if (cached) {
+        // T6-R3/I2：显式 skip 身份到达 → 失效既有缓存 + 持久标记（跨重启）+ 内存 taint
+        if (agent && st.skipAgents.includes(agent)) {
+          taintAndInvalidate(sessionId, cached.scope)
+          return null
+        }
+        // T6-R4/I2-B①：空 agent 命中缓存——他实例可能已落盘 skip 标记（P/Q 并存），
+        // 定向读持久标记（重读整份 scope.json）；命中即阻断 + 失效本实例缓存
+        if (!agent && (st.skipTainted.has(sessionId) || cached.scope.isSessionSkipTainted(sessionId))) {
+          taintAndInvalidate(sessionId, null)
+          return null
+        }
+        return refreshIdentity(sessionId, cached, agent) // I1：缓存命中亦刷新身份
+      }
+      if (st.skipAgents.includes(agent)) {
+        // T6-R4/I2-A：显式 skip 身份冷到达——先本实例失效，再只查不建地探测既有 Scope
+        // （存在则落持久标记）；确实无 Scope 才纯内存拒绝不落盘
+        return await coldSkipReject(sessionId)
+      }
       const root = await findRoot(sessionId)
       if (!root) {
         st.warnParent(sessionId)
@@ -123,7 +236,19 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
       }
       const scope = openScopeForRoot({ rootSessionId: root, dataDir: st.rootDir })
       const reg = scope.registerSession(sessionId, agent)
-      const resolved: Resolved = { scope, streamId: reg.streamId, isolated: isIsolatedAgent(agent) }
+      // I1 微修（T5 live 残余）：hook agent 非空优先，否则回退该会话已注册验证身份，再否则 null——
+      // 无 agent 信息的 CLI 续接（agent=""）不得遮蔽委派注册的身份。isolated 按最终身份计算。
+      const registered = scope.config.session_index[sessionId]
+      const tainted = st.skipTainted.has(sessionId) || registered?.skip_tainted === true // T6-R3：内存为快路径，持久标记为权威源
+      const identity = agent || registered?.agent || null // 两者皆未知 → null（保守，不回退空串）
+      if (identity && st.skipAgents.includes(identity)) {
+        // T6-R3/I2：skip 判定施加于最终解析身份（含回退出的持久注册身份）→ 失效缓存、持久标记、不登记 admission
+        taintAndInvalidate(sessionId, scope)
+        return null
+      }
+      if (agent) st.skipTainted.delete(sessionId) // 显式有效身份重新登记 → 解除保守标记（持久标记由 registerSession 清除）
+      else if (tainted) return null // 空 agent + 被标记会话（内存或持久）→ 不缓存、不登记 admission
+      const resolved: Resolved = { scope, streamId: reg.streamId, isolated: identity ? isIsolatedAgent(identity) : false, agent: identity }
       st.scopes.set(sessionId, resolved)
       return resolved
     } catch (err) {
@@ -144,10 +269,19 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
 
   const hooks: Hooks = {
     tool: {
-      board_put: toToolDef(boardTools.board_put, "写入 blackboard 知识记录"),
-      board_get: toToolDef(boardTools.board_get, "按 id 批量读取 blackboard 记录原文"),
-      board_index: toToolDef(boardTools.board_index, "列出 blackboard 目录（compact/all 视图）"),
-      board_aggregate: toToolDef(boardTools.board_aggregate, "把本流 8–16 条旧目录项折叠为一个索引摘要（仅目录折叠，原条目可继续 board.get）"),
+      board_put: toToolDef(boardTools.board_put, TOOL_DESCRIPTIONS.board_put),
+      board_get: toToolDef(boardTools.board_get, TOOL_DESCRIPTIONS.board_get),
+      board_index: toToolDef(boardTools.board_index, TOOL_DESCRIPTIONS.board_index),
+      board_aggregate: toToolDef(boardTools.board_aggregate, TOOL_DESCRIPTIONS.board_aggregate),
+    },
+
+    // §11.7 task 工具定义注入（V15/VP-1）：hook 对全部 toolID 触发，仅在 task 上追加；
+    // hook 无 session/agent 上下文 → 文案为 "When delegating…" 通用式（TASK_DESC_APPEND）。
+    "tool.definition": async (hookInput, output) => {
+      if (hookInput.toolID !== "task") return
+      // M3：宿主描述不以空白结尾时补段落分隔，防追加文案与宿主末句粘连
+      if (output.description && !/\s$/.test(output.description)) output.description += "\n\n"
+      output.description += TASK_DESC_APPEND
     },
 
     // 准入信号（P0）：messageID 存在即已验证 admission。G7（计划 Task C 偏差②）：
@@ -204,45 +338,46 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
           }
         }
         if (lastUserIdx < 0) return
-        // I2（Task B Step 3）：transform 读段以单一外层流锁包裹——meta0/身份/counts/
-        // compact/候选集/快照版本在同一把锁内读取，消除 read-modify 竞态。
+        // I2（Task B Step 3）：transform 读段以单一外层流锁包裹——meta0/入口信号/
+        // 候选集在同一把锁内读取，消除 read-modify 竞态。
         // decideAndPersist 在锁外调用（自身持锁；组合读不依赖它的结果）。
-        const { meta0, requestVerified, candidateSetId, counts, recentDescriptions, recentSummaries, snapshotVersion } =
-          resolved.scope.withLock(() => {
-            const meta0 = resolved.scope.readMeta(resolved.streamId)
-            const agent = resolved.scope.config.session_index[sessionId]?.agent ?? ""
-            // P0→请求关联：已验证的 admitted 输入出现在本次请求的上下文中才算已验证。
-            const admittedId = st.admitted.get(sessionId)
-            const requestVerified = admittedId !== undefined && msgs.some((m) => m.info.id === admittedId)
-            const counts = snapshotCounts(
-              resolved.scope,
-              resolved.streamId,
-              { sessionId, agent },
-              meta0.rounds.round_known ? meta0.rounds.current_round : null,
-            )
-            const compact = listIndex(resolved.scope, resolved.streamId, { limit: 1000, caller: { sessionId, agent } })
-            const recentDescriptions = compact.items.slice(-4).map((i) => i.description)
-            // Task B：候选集接线（替代 G2 的硬编码 null）。聚合门槛（§8.1）：
-            // 可见数 > AGG_TRIGGER_VISIBLE 或 可见 description 字节 > AGG_TRIGGER_SUM_DESC_BYTES
-            // 才产生候选集；否则 null（无压力）。
-            const candidates = aggregateCandidates(
-              resolved.scope,
-              resolved.streamId,
-              { sessionId, agent },
-              meta0.rounds.round_known ? meta0.rounds.current_round : null,
-            )
-            const candidateSetId =
-              candidates !== null &&
-              (candidates.visibleItems > AGG_TRIGGER_VISIBLE || candidates.sumDescriptionBytes > AGG_TRIGGER_SUM_DESC_BYTES)
-                ? candidates.setHash
-                : null
-            const recentSummaries = compact.items
-              .filter((i) => i.kind === "index_summary")
-              .slice(-2)
-              .map((i) => i.description)
-            const snapshotVersion = snapshotVersionOf(counts, recentDescriptions)
-            return { meta0, requestVerified, candidateSetId, counts, recentDescriptions, recentSummaries, snapshotVersion }
-          })
+        const { meta0, requestVerified, candidateSetId, entry } = resolved.scope.withLock(() => {
+          const meta0 = resolved.scope.readMeta(resolved.streamId)
+          // P0→请求关联：已验证的 admitted 输入出现在本次请求的上下文中才算已验证。
+          const admittedId = st.admitted.get(sessionId)
+          const requestVerified = admittedId !== undefined && msgs.some((m) => m.info.id === admittedId)
+          // §10.4 ①②：对 admitted 消息的原始文本 parts 跑词法信号判定
+          // （排除本插件 part_bb_* 注入 part，防自触发）；admitted 消息不在本次
+          // msgs 中 → 本次跳过入口信号（保守，宁可少提醒）。
+          let entry: { messageId: string | null; s1: boolean; s2: boolean } = { messageId: null, s1: false, s2: false }
+          if (requestVerified && admittedId !== undefined) {
+            const admittedMsg = msgs.find((m) => m.info.id === admittedId)
+            if (admittedMsg) {
+              const prompt = admittedMsg.parts
+                .filter((p) => p.type === "text" && !(p as { id?: string }).id?.startsWith("part_bb_"))
+                .map((p) => (p as { text: string }).text)
+                .join("\n")
+              entry = { messageId: admittedId, ...detectSignals(prompt) }
+            }
+          }
+          // I1：resolved.agent 即注册路径验证身份（缓存与注册经 refreshIdentity 保持一致）；
+          // null = 未知 → 交由 eligibility 保守路径（不参与原作者匹配），不回退空串原值。
+          const agent = resolved.agent ?? ""
+          // Task B：候选集接线。聚合门槛（§8.1）：可见数 > AGG_TRIGGER_VISIBLE 或
+          // 可见 description 字节 > AGG_TRIGGER_SUM_DESC_BYTES 才产生候选集；否则 null（无压力）。
+          const candidates = aggregateCandidates(
+            resolved.scope,
+            resolved.streamId,
+            { sessionId, agent },
+            meta0.rounds.round_known ? meta0.rounds.current_round : null,
+          )
+          const candidateSetId =
+            candidates !== null &&
+            (candidates.visibleItems > AGG_TRIGGER_VISIBLE || candidates.sumDescriptionBytes > AGG_TRIGGER_SUM_DESC_BYTES)
+              ? candidates.setHash
+              : null
+          return { meta0, requestVerified, candidateSetId, entry }
+        })
         let decision
         let admittedMessageId: string | null = null
         try {
@@ -253,22 +388,25 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
             requestId: `${sessionId}:${lastMsgId}`,
             requestVerified,
             admittedMessageId,
-            snapshotVersion,
+            s1: entry.s1,
+            s2: entry.s2,
             candidateSetId,
-            maxSeq: meta0.high_water,
           })
         } catch (err) {
           st.degrade(err) // 持久化失败 → 不注入（C3）
           return
         }
+        // M2：日志记录 decideAndPersist 持久化后的预算/轮次（此前非注入分支用决策前
+        // meta0——roll 与「不注入」并存时 round_id/round_used 显示旧值）
+        const afterMeta = resolved.scope.readMeta(resolved.streamId)
         if (decision.advanced || decision.identityRestored) {
-          // I10：ev:"round" 两类触发——advanced（推进，round+1）与 identityRestored（恢复，轮次不变）
+          // I10：ev:"round" 两类触发——advanced（推进）与 identityRestored（恢复，轮次不变）
           st.log({
             ev: "round",
             session: sessionId,
             stream: resolved.streamId,
             message_id: admittedMessageId,
-            current_round: decision.advanced ? meta0.rounds.current_round + 1 : meta0.rounds.current_round,
+            current_round: afterMeta.rounds.current_round,
             round_known: true,
           })
         }
@@ -279,18 +417,16 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
             session: sessionId,
             stream: resolved.streamId,
             request_id: `${sessionId}:${lastMsgId}`,
-            round_id: meta0.budget.round_id,
-            round_used: meta0.budget.round_used,
+            round_id: afterMeta.budget.round_id,
+            round_used: afterMeta.budget.round_used,
             reason: decision.reason,
             bytes: 0,
-            omitted_descriptions: 0,
-            omitted_summaries: 0,
           })
           return
         }
-        // 退出锁后渲染 + 原地追加到最后一条 user 消息的 parts（A-C1 append-part）。
-        const snap = renderSnapshot(counts, recentDescriptions, recentSummaries, snapshotVersion)
-        const text = `[blackboard 目录快照 v${snapshotVersion}]\n` + snap.text
+        // 退出锁后取常量模板（§10.2：提醒为固定模板、不含板数据；入口①②合并不拆分）
+        // + 原地追加到最后一条 user 消息的 parts（A-C1 append-part）。
+        const text = decision.reason.startsWith("entry_signal") ? ENTRY_REMINDER_TEMPLATE : PRESSURE_REMINDER_TEMPLATE
         const userMsgInfo = msgs[lastUserIdx]!.info
         const part: TextPart = {
           type: "text",
@@ -300,18 +436,15 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
           text,
         }
         ;(msgs[lastUserIdx]!.parts as Part[]).push(part)
-        const after = resolved.scope.readMeta(resolved.streamId)
         st.log({
           ev: "decision",
           session: sessionId,
           stream: resolved.streamId,
           request_id: `${sessionId}:${lastMsgId}`,
-          round_id: after.budget.round_id,
-          round_used: after.budget.round_used,
+          round_id: afterMeta.budget.round_id,
+          round_used: afterMeta.budget.round_used,
           reason: decision.reason,
           bytes: new TextEncoder().encode(text).length,
-          omitted_descriptions: snap.omittedDescriptions,
-          omitted_summaries: snap.omittedSummaries,
         })
       } catch (err) {
         st.degrade(err)

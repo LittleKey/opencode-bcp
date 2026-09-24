@@ -19,15 +19,17 @@ export type EligibilityCtx = {
   currentRound: number | null
   recentIds: string[]
   callerSessionId: string
-  callerAgent: string
+  /** I1：注册路径验证的 caller 身份；null/空串 = 未知 → 保守不参与原作者匹配 */
+  callerAgent: string | null
 }
 
 export function classifyEligibility(
   rec: BbRecord,
   ctx: EligibilityCtx,
 ): { status: "eligible" | "protected" | "unknown"; reason: string } {
-  // §8.4：候选资格限定原作者；writer 身份含 session + agent 双字段，区分同流不同写手（I8）
-  if (ctx.callerSessionId !== rec.writer.session_id || ctx.callerAgent !== rec.writer.agent) {
+  // §8.4：候选资格限定原作者；writer 身份含 session + agent 双字段，区分同流不同写手（I8）。
+  // I1：caller 身份未知（null/空串）一律 not_original_author——空串不得与空串 writer 冒充匹配。
+  if (!ctx.callerAgent || ctx.callerSessionId !== rec.writer.session_id || ctx.callerAgent !== rec.writer.agent) {
     return { status: "protected", reason: "not_original_author" }
   }
   // M1-5：年龄已知才可判定；unknown 默认不参与自动聚合（§9）

@@ -445,7 +445,7 @@ describe("storage", () => {
     const r = asStored(scope.put(streamId, args))
     const meta = scope.readMeta(streamId)
     meta.rounds = { current_round: 7, round_known: true, last_admitted_message_id: "msg-1" }
-    meta.budget = { ...meta.budget, round_used: 1, last_shown_seq: 1 }
+    meta.budget = { ...meta.budget, round_used: 1 }
     scope.writeMeta(streamId, meta)
     scope.close()
     const again = openScopeForRoot({ rootSessionId: "r12", dataDir })
