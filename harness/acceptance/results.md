@@ -341,3 +341,11 @@ entry_signal_1（nudge-1/8、n-old-1）· entry_signal_2（nudge-8）· entry_si
 - **契约循环**：v1.6.3（六处：H 依赖传递边界/task +218B 路由句/board_index +298B 五分支/分发映射/三类归责/验收与 B 口径）→ ora-5 复审 REJECT（1I：§14.4 断言强制读板违背双形式来源；3M）→ v1.6.4 修正（断言改对应工具读取；board_index 采纳候选段 379B 消 M1 歧义；四工具承载；体积理由如实化）→ 定向复核 CONTRACT-APPROVE。
 - **实现**（fix-6）：board_index 156→379B、TASK_DESC_APPEND 996→1214B 逐字节同步 golden；board_put/get 零变更；183 pass。
 - **live 验收待宿主重启后**：§14.4 自然链路（依赖路由传递+对应工具读取使用）与故障注入（缺路由→定向发现或报缺口）两组。
+
+## 2026-09-24 v1.6.4 重启后 live 验收：故障注入分支 PASS（生产形态）
+
+- **条件**：宿主重启（v1.6.4 构建 816038B）；doc-8 只收到「遵循本指南既定的约束性起草约定」依赖线索——零路径、零 ID、零 board 词汇（比 E2E 阶段 2 更严：连第 1 节路径都未给）。
+- **发现链全通**：自主定位并读取决定记录（bb://f1f795b7…/1bb13229…/e000001，逐条核对 canonical term/imperative voice/backticks/bare slugify/禁用词/无元评论）+ 旧评审记录（d1d461ab…/e000001）+ 现行源码与第 1–2 节；全部六例输出经 bun 对真函数执行验证。
+- **版本陈旧检测（超预期）**：识别旧评审绑定的是修复前 24 行版本（SHA 8d5b9cf…）而非现行 26 行——不传播过时结论，交付记录中显式警告「do not cite them against current docs」。
+- **交付完整性**：发布 kind=change 记录（source_refs 双文件 + related 双记录引用）；最终答复返回复用与新建的完整 bb:// ID（board_put 描述「published or reused」双义务达成）。
+- **判定**：§14.4 故障注入分支（缺路由→定向发现）生产形态 PASS；E 全链（生产→路由→发现→版本核对→使用→回流）至此每一环节均有 live 正例。单样本口径不外推。
