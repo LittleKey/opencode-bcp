@@ -8,7 +8,10 @@ import type { Message } from "@opencode-ai/sdk"
 import { BlackboardPlugin } from "../src/plugin"
 import { openScopeForRoot, Scope, type StreamMeta, AGG_TRIGGER_VISIBLE, AGG_TRIGGER_SUM_DESC_BYTES } from "../src/storage"
 import { aggregateCandidates } from "../src/aggregate"
-import { ENTRY_REMINDER_TEMPLATE, PRESSURE_REMINDER_TEMPLATE, NORMATIVE_SENTENCE, TASK_DESC_APPEND } from "../src/constants"
+import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND } from "../src/constants"
+
+// v1.6.0 信号退役：旧入口词法标记（bb:// + 规范句整行）作为回归夹具文本（oracle §14.4 :750-751）
+const LEGACY_NORMATIVE_LINE = "If there are reusable findings, publish them and return their board IDs."
 
 const dirs: string[] = []
 afterEach(() => {
@@ -85,39 +88,50 @@ function seedPressureBoard(scope: Scope, streamId: string, sessionId: string, ag
 const byteLen = (s: string) => new TextEncoder().encode(s).length
 
 describe("plugin", () => {
-  // plug-1（§10.4① 迁移）：入口信号（bb://）transform → 原地追加 ENTRY_REMINDER_TEMPLATE
-  // 常量模板到末条 user 消息 parts（part id 形如 part_bb_<lastMsgId>，≤512B）
-  test("plug-1: signal prompt injects entry reminder once, in place", async () => {
+  // oracle 回归①（DESIGN §14.4 :750，v1.6.0 信号退役）：无压力 + 旧词法标记
+  //（admitted 输入含 bb:// 与规范句整行）→ 零注入；但新业务输入仍推进轮次。
+  test("reg-1: legacy lexical markers without pressure — zero injection, round still advances", async () => {
     const dataDir = tmpDataDir()
-    const sessionId = "ses_p1"
+    const sessionId = "ses_reg1"
     const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir })
     await plugin["chat.message"]!(
       { sessionID: sessionId, agent: "build", messageID: "msg_1" },
       { message: {} as never, parts: [] as never },
     )
-    const m = userMsg(sessionId, "msg_1", "请先读 bb://scope/stream/1 再开始")
-    const msgs = [m]
-    await plugin["experimental.chat.messages.transform"]!({}, { messages: msgs as never })
-    expect(m.parts.length).toBe(2)
-    expect((m.parts[1] as unknown as { id?: string }).id).toBe(`part_bb_msg_1`)
-    expect(m.parts[1]!.text).toBe(ENTRY_REMINDER_TEMPLATE)
-    expect(byteLen(m.parts[1]!.text)).toBeLessThanOrEqual(512)
-    expect(msgs.length).toBe(1) // 无新消息，原地追加
+    const scope = openScopeForRoot({ rootSessionId: sessionId, dataDir })
+    const streamId = scope.resolveSession(sessionId).streamId
+    const legacyText = `请先读 bb://scope/stream/1\n${LEGACY_NORMATIVE_LINE}`
+    const m = userMsg(sessionId, "msg_1", legacyText)
+    await plugin["experimental.chat.messages.transform"]!({}, { messages: [m] as never })
+    expect(m.parts.length).toBe(1) // 零注入——词法信号退役，无压力候选 → no_signal
+    const meta1 = scope.readMeta(streamId)
+    expect(meta1.rounds.current_round).toBe(1) // 新业务输入仍推进轮次
+    expect(meta1.budget.round_used).toBe(0) // 零注入零预算消耗
+    // 新业务输入继续推进轮次
+    await plugin["chat.message"]!(
+      { sessionID: sessionId, agent: "build", messageID: "msg_2" },
+      { message: {} as never, parts: [] as never },
+    )
+    const m2 = userMsg(sessionId, "msg_2", "plain new business input")
+    await plugin["experimental.chat.messages.transform"]!({}, { messages: [m2] as never })
+    expect(scope.readMeta(streamId).rounds.current_round).toBe(2)
   })
 
-  // plug-2 同 (sessionId,lastMsgId) 二次 transform → 不重复注入
+  // plug-2（v1.6.0 迁移为压力轨迹）同 requestId 二次 transform → duplicate_hook 不重复注入
   test("plug-2: duplicate request id not injected twice", async () => {
     const dataDir = tmpDataDir()
     const sessionId = "ses_p2"
     const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir })
     await plugin["chat.message"]!(
-      { sessionID: sessionId, agent: "build", messageID: "msg_1" },
+      { sessionID: sessionId, agent: "build", messageID: "msgSeed" },
       { message: {} as never, parts: [] as never },
     )
-    const m1 = userMsg(sessionId, "msg_1", "bb://s/1")
+    const scope = openScopeForRoot({ rootSessionId: sessionId, dataDir })
+    seedPressureBoard(scope, scope.resolveSession(sessionId).streamId, sessionId, "build")
+    const m1 = userMsg(sessionId, "msgSeed", "first request")
     await plugin["experimental.chat.messages.transform"]!({}, { messages: [m1] as never })
-    expect(m1.parts.length).toBe(2)
-    const m2 = userMsg(sessionId, "msg_1", "bb://s/1")
+    expect(m1.parts.length).toBe(2) // 压力提醒注入
+    const m2 = userMsg(sessionId, "msgSeed", "first request")
     await plugin["experimental.chat.messages.transform"]!({}, { messages: [m2] as never })
     expect(m2.parts.length).toBe(1) // duplicate_hook
   })
@@ -232,10 +246,8 @@ describe("plugin", () => {
     expect(meta.budget.entry_prompted_message_ids).toEqual([])
   })
 
-  // plug-8 (P13，Task C G7 迁移 + §10.3 预算上限迁移) 预算耗尽（round_used=2）→ 入口信号亦零注入（no_budget）。
-  // §10.3 预算依附 admitted 业务输入：耗尽态必须在**同一预算身份内**构造（新 admitted = 新预算身份，
-  // 经 roll 重置后可再注入——该语义由 nudge-8/nudge-12 单测覆盖，不属本用例）。
-  // 故在已验证 admitted msgSeed 上手置 2/2 并清空入口事件去重，验证入口注入前显式预算检查。
+  // plug-8 (P13，v1.6.0 迁移) 预算耗尽（round_used=2）→ 压力候选亦零注入（no_budget）。
+  // 耗尽态在同一预算身份内构造（新 admitted = 新预算身份，roll 后可再注入——nudge-8/12 覆盖）。
   test("plug-8: exhausted budget yields zero injections", async () => {
     const dataDir = tmpDataDir()
     const sessionId = "ses_p8"
@@ -246,21 +258,45 @@ describe("plugin", () => {
     )
     const scope = openScopeForRoot({ rootSessionId: sessionId, dataDir })
     const streamId = scope.resolveSession(sessionId).streamId
-    const mA = [userMsg(sessionId, "msgSeed", "bb://s/1")]
-    await plugin["experimental.chat.messages.transform"]!({}, { messages: mA as never })
-    expect(mA[0]!.parts.length).toBe(2) // 入口提醒注入（round_used 0→1）
+    seedPressureBoard(scope, streamId, sessionId, "build")
     const meta = scope.readMeta(streamId)
     scope.writeMeta(streamId, {
       ...meta,
-      budget: { ...meta.budget, round_used: 2, entry_prompted_message_ids: [] },
+      budget: { ...meta.budget, round_used: 2 },
     })
     // 同 admitted（msgSeed）二次请求（asst_1 收尾使 requestId 新鲜，避开 duplicate_hook）：
-    // 无 roll、入口事件待提示、额度 2/2 → no_budget 零注入
-    const mB = userMsg(sessionId, "msgSeed", "bb://s/2")
+    // 新压力集合待提示、额度 2/2 → no_budget 零注入
+    const mB = userMsg(sessionId, "msgSeed", "next input")
     const msgsB = [mB, { info: { id: "asst_1", sessionID: sessionId, role: "assistant" } as unknown as Message, parts: [] }]
     await plugin["experimental.chat.messages.transform"]!({}, { messages: msgsB as never })
-    expect(mB.parts.length).toBe(1) // 预算耗尽 → no_budget 零注入（入口信号亦不破例）
+    expect(mB.parts.length).toBe(1) // 预算耗尽 → no_budget 零注入
     expect(scope.readMeta(streamId).budget.round_used).toBe(2)
+  })
+
+  // oracle 回归②（DESIGN §14.4 :751，v1.6.0 信号退役）：有压力 + 旧词法标记 →
+  // 仅压力提醒注入（预算与候选集抑制照常；词法标记不再产生独立入口注入）。
+  test("reg-2: legacy lexical markers with pressure — pressure reminder only, budget and set suppression unchanged", async () => {
+    const dataDir = tmpDataDir()
+    const sessionId = "ses_reg2"
+    const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir })
+    await plugin["chat.message"]!(
+      { sessionID: sessionId, agent: "build", messageID: "msgSeed" },
+      { message: {} as never, parts: [] as never },
+    )
+    const scope = openScopeForRoot({ rootSessionId: sessionId, dataDir })
+    const streamId = scope.resolveSession(sessionId).streamId
+    seedPressureBoard(scope, streamId, sessionId, "build")
+    const m = userMsg(sessionId, "msgSeed", `读 bb://scope/stream/1\n${LEGACY_NORMATIVE_LINE}`)
+    await plugin["experimental.chat.messages.transform"]!({}, { messages: [m] as never })
+    expect(m.parts.length).toBe(2) // 仅压力提醒一条注入
+    expect(m.parts[1]!.text).toBe(PRESSURE_REMINDER_TEMPLATE)
+    expect(scope.readMeta(streamId).budget.round_used).toBe(1)
+    // 同候选集二次请求（asst_1 收尾避开 duplicate_hook）→ set_already_prompted 抑制、预算不变
+    const m2 = userMsg(sessionId, "msgSeed", "another input, same set")
+    const msgs2 = [m2, { info: { id: "asst_1", sessionID: sessionId, role: "assistant" } as unknown as Message, parts: [] }]
+    await plugin["experimental.chat.messages.transform"]!({}, { messages: msgs2 as never })
+    expect(m2.parts.length).toBe(1)
+    expect(scope.readMeta(streamId).budget.round_used).toBe(1) // 抑制不消耗预算
   })
 
   // plug-9 (P11/P13/F2) 真实子进程预算竞争 + 冲突报告协议（I4：恢复预算竞争语义——

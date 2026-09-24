@@ -10,9 +10,8 @@ import { isIsolatedAgent } from "./permissions"
 import { classifyInput, isKnownSyntheticText } from "./rounds"
 import { aggregateCandidates } from "./aggregate"
 import { decideAndPersist } from "./nudge"
-import { detectSignals } from "./signals"
 import { defineBoardTools, type BoardToolDef } from "./tools"
-import { ENTRY_REMINDER_TEMPLATE, PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS } from "./constants"
+import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS } from "./constants"
 
 type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不再以空串冒充）
 
@@ -338,28 +337,16 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
           }
         }
         if (lastUserIdx < 0) return
-        // I2（Task B Step 3）：transform 读段以单一外层流锁包裹——meta0/入口信号/
+        // I2（Task B Step 3）：transform 读段以单一外层流锁包裹——meta0/
         // 候选集在同一把锁内读取，消除 read-modify 竞态。
         // decideAndPersist 在锁外调用（自身持锁；组合读不依赖它的结果）。
-        const { meta0, requestVerified, candidateSetId, entry } = resolved.scope.withLock(() => {
+        const { meta0, requestVerified, candidateSetId } = resolved.scope.withLock(() => {
           const meta0 = resolved.scope.readMeta(resolved.streamId)
           // P0→请求关联：已验证的 admitted 输入出现在本次请求的上下文中才算已验证。
           const admittedId = st.admitted.get(sessionId)
           const requestVerified = admittedId !== undefined && msgs.some((m) => m.info.id === admittedId)
-          // §10.4 ①②：对 admitted 消息的原始文本 parts 跑词法信号判定
-          // （排除本插件 part_bb_* 注入 part，防自触发）；admitted 消息不在本次
-          // msgs 中 → 本次跳过入口信号（保守，宁可少提醒）。
-          let entry: { messageId: string | null; s1: boolean; s2: boolean } = { messageId: null, s1: false, s2: false }
-          if (requestVerified && admittedId !== undefined) {
-            const admittedMsg = msgs.find((m) => m.info.id === admittedId)
-            if (admittedMsg) {
-              const prompt = admittedMsg.parts
-                .filter((p) => p.type === "text" && !(p as { id?: string }).id?.startsWith("part_bb_"))
-                .map((p) => (p as { text: string }).text)
-                .join("\n")
-              entry = { messageId: admittedId, ...detectSignals(prompt) }
-            }
-          }
+          // v1.6.0 信号退役：入口词法信号判定（原 §10.4 ①②）已废除——不再扫描
+          // admitted 消息文本，决策规则由常驻工具描述承载（§11.6）。
           // I1：resolved.agent 即注册路径验证身份（缓存与注册经 refreshIdentity 保持一致）；
           // null = 未知 → 交由 eligibility 保守路径（不参与原作者匹配），不回退空串原值。
           const agent = resolved.agent ?? ""
@@ -376,7 +363,7 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
             (candidates.visibleItems > AGG_TRIGGER_VISIBLE || candidates.sumDescriptionBytes > AGG_TRIGGER_SUM_DESC_BYTES)
               ? candidates.setHash
               : null
-          return { meta0, requestVerified, candidateSetId, entry }
+          return { meta0, requestVerified, candidateSetId }
         })
         let decision
         let admittedMessageId: string | null = null
@@ -388,8 +375,6 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
             requestId: `${sessionId}:${lastMsgId}`,
             requestVerified,
             admittedMessageId,
-            s1: entry.s1,
-            s2: entry.s2,
             candidateSetId,
           })
         } catch (err) {
@@ -424,9 +409,9 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
           })
           return
         }
-        // 退出锁后取常量模板（§10.2：提醒为固定模板、不含板数据；入口①②合并不拆分）
-        // + 原地追加到最后一条 user 消息的 parts（A-C1 append-part）。
-        const text = decision.reason.startsWith("entry_signal") ? ENTRY_REMINDER_TEMPLATE : PRESSURE_REMINDER_TEMPLATE
+        // 退出锁后取常量模板（§10.2：提醒为固定模板、不含板数据；v1.6.0 起仅剩
+        // 压力提醒）+ 原地追加到最后一条 user 消息的 parts（A-C1 append-part）。
+        const text = PRESSURE_REMINDER_TEMPLATE
         const userMsgInfo = msgs[lastUserIdx]!.info
         const part: TextPart = {
           type: "text",

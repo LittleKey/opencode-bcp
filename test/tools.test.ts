@@ -241,6 +241,118 @@ describe("tools", () => {
     expect([...p1.stream.items, ...p2.stream.items].map((i: { sequence: number }) => i.sequence)).toEqual([1, 2, 3])
   })
 
+  // tools-9a（DESIGN v1.4.9 §14.1 M0-10①）
+  test("index 默认空流提示：新会话 own 流空 + 存在其他授权流 → hint 逐字（M0-10①）", async () => {
+    const scope = makeScope("t9a")
+    const s1 = scope.registerSession("s1", "build") // 新会话：own 流 knowledge_total=0
+    const s2 = scope.registerSession("s2", "build")
+    scope.registerSession("c1", "councillor-x") // 隐藏流（未授权）
+    scope.put(s2.streamId, {
+      writer: { agent: "build", session_id: "s2", message_id: "ms2" },
+      createdRound: null,
+      description: "他流记录",
+      content: "c",
+    })
+    const cStream = scope.config.session_index["c1"]!.stream_id
+    const { tools } = stub(scope, s1.streamId)
+    const parsed = JSON.parse(await tools.board_index.execute(CTX, {}))
+    expect(parsed.hint).toBe(
+      "This session's own stream is empty. Other authorized streams are listed in `other_streams`; select `stream` explicitly if needed.",
+    )
+    expect(parsed.hint).not.toContain(cStream) // 隐藏流不因提示泄漏
+    expect(parsed.other_streams.map((s: { stream_id: string }) => s.stream_id)).toEqual([s2.streamId])
+  })
+
+  // tools-9b（DESIGN v1.4.9 §14.1 M0-10②）
+  test("index 筛选空结果不误报流空：own 流有记录但 keyword/kind 过滤后 items 空 → 无 hint（M0-10②）", async () => {
+    const scope = makeScope("t9b")
+    const { streamId } = scope.registerSession("s1", "build")
+    scope.registerSession("s2", "build")
+    const { tools } = stub(scope, streamId)
+    await tools.board_put.execute(CTX, putArgs())
+    for (const [args, expectEmpty] of [
+      [{ keyword: "不存在的关键词" }, true],
+      [{ kind: "finding" }, true], // put 默认无 kind → kind 筛选空
+      [{ since_seq: 99 }, true], // since_seq 越界空
+      [{}, false], // 无筛选对照：items 非空
+    ] as [{ keyword?: string; kind?: "finding"; since_seq?: number }, boolean][]) {
+      const parsed = JSON.parse(await tools.board_index.execute(CTX, args))
+      expect(parsed.stream.items.length === 0).toBe(expectEmpty)
+      expect(parsed.hint).toBeUndefined()
+    }
+  })
+
+  // tools-9c（DESIGN v1.4.9 §14.1 M0-10③）
+  test("index 显式传 stream 不触发提示；隐藏流显式查询拒绝且不泄漏（M0-10③）", async () => {
+    const scope = makeScope("t9c")
+    const s1 = scope.registerSession("s1", "build") // own 流空
+    const s2 = scope.registerSession("s2", "build")
+    scope.registerSession("c1", "councillor-x")
+    scope.put(s2.streamId, {
+      writer: { agent: "build", session_id: "s2", message_id: "ms2" },
+      createdRound: null,
+      description: "他流记录",
+      content: "c",
+    })
+    const cStream = scope.config.session_index["c1"]!.stream_id
+    const { tools } = stub(scope, s1.streamId)
+    // 显式传 own 流（结果空）→ 无 hint
+    const own = JSON.parse(await tools.board_index.execute(CTX, { stream: s1.streamId }))
+    expect(own.stream.items.length).toBe(0)
+    expect(own.hint).toBeUndefined()
+    // 显式传他流（非空）→ 无 hint
+    const other = JSON.parse(await tools.board_index.execute(CTX, { stream: s2.streamId }))
+    expect(other.hint).toBeUndefined()
+    // 隐藏流显式查询 → stream_not_found（无 hint、无泄漏）
+    expect(await tools.board_index.execute(CTX, { stream: cStream })).toBe("rejected: stream_not_found")
+  })
+
+  // tools-9d
+  test("index cursor 翻到空页不误报流空：own 流有有效记录，真实 cursor 翻页 items 空 → 无 hint", async () => {
+    const scope = makeScope("t9d")
+    const { streamId } = scope.registerSession("s1", "build")
+    scope.registerSession("s2", "build") // 存在其他授权流：若误用 items.length 判流空必触发 hint
+    mustStore(
+      scope.put(streamId, {
+        writer: { agent: "build", session_id: "s1", message_id: "m1" },
+        createdRound: null,
+        description: "首页记录",
+        content: "c",
+      }),
+    )
+    const second = mustStore(
+      scope.put(streamId, {
+        writer: { agent: "build", session_id: "s1", message_id: "m2" },
+        createdRound: null,
+        description: "剩余记录",
+        content: "c",
+      }),
+    )
+    const { tools } = stub(scope, streamId)
+    const p1 = JSON.parse(await tools.board_index.execute(CTX, { limit: 1 }))
+    expect(p1.stream.items.length).toBe(1)
+    expect(p1.stream.nextCursor).not.toBeNull()
+    // 剩余项墓碑化后用真实 cursor 翻页 → items 空但全流非空（knowledge_total=1）
+    scope.markTombstone(streamId, second.id, "test")
+    const p2 = JSON.parse(await tools.board_index.execute(CTX, { limit: 1, cursor: p1.stream.nextCursor }))
+    expect(p2.stream.items.length).toBe(0)
+    expect(p2.stream.counts.knowledge_total).toBe(1)
+    expect(p2.hint).toBeUndefined()
+  })
+
+  // tools-9e
+  test("index own 空 + scope 内唯一他流隐藏 → 无 hint 且 other_streams 为空（防遗漏 other_streams 条件与隐藏流泄漏）", async () => {
+    const scope = makeScope("t9e")
+    const s1 = scope.registerSession("s1", "build") // own 流 knowledge_total=0
+    scope.registerSession("c1", "councillor-x") // scope 内唯一他流：未授权隐藏
+    const cStream = scope.config.session_index["c1"]!.stream_id
+    const { tools } = stub(scope, s1.streamId)
+    const parsed = JSON.parse(await tools.board_index.execute(CTX, {}))
+    expect(parsed.hint).toBeUndefined()
+    expect(parsed.other_streams).toEqual([])
+    expect(JSON.stringify(parsed)).not.toContain(cStream) // 隐藏流不泄漏
+  })
+
   // tools-10
   test("小配额 → rejected: quota_exceeded 且无 stored 字样（M1-12）", async () => {
     const scope = makeScope("t10")

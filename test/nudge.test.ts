@@ -24,48 +24,27 @@ function req(): string {
   n++
   return `req-${n}`
 }
-const noEntry = { messageId: null, s1: false, s2: false }
-const entry = (id: string, s1: boolean, s2: boolean) => ({ messageId: id, s1, s2 })
-const run = (ledger: NudgeLedger, requestId: string, o?: { roundKnown?: boolean; candidateSetId?: string | null; entry?: { messageId: string | null; s1: boolean; s2: boolean } }) =>
+const run = (ledger: NudgeLedger, requestId: string, o?: { roundKnown?: boolean; candidateSetId?: string | null }) =>
   decideNudge(ledger, {
     requestId,
     roundKnown: o?.roundKnown ?? true,
     candidateSetId: o?.candidateSetId ?? null,
-    entry: o?.entry ?? noEntry,
   })
 
 describe("nudge", () => {
-  // nudge-1（§10.4① 迁移）：入口信号① 首次命中 → entry_signal_1 注入一次，事件去重置位
-  test("入口信号① 首请求 → entry_signal_1，一次预算，entry_prompted_message_ids 置位", () => {
-    const { decision, ledger } = run(newLedger(), "r1", { entry: entry("adm1", true, false) })
-    expect(decision).toEqual({ inject: true, reason: "entry_signal_1" })
-    expect(ledger.round_used).toBe(1)
-    expect(ledger.entry_prompted_message_ids).toEqual(["adm1"])
-    expect(ledger.seen_requests).toContain("r1")
-  })
-
-  // nudge-2（M0-7 迁移 + §10.3 I2）：同 admitted 消息（新请求）→ entry_already_prompted 不重注入、不消耗
-  test("同 admitted id 新请求 → entry_already_prompted 不重注入", () => {
-    const l1 = run(newLedger(), "r1", { entry: entry("adm1", true, false) }).ledger
-    const { decision, ledger } = run(l1, "r2", { entry: entry("adm1", true, true) })
-    expect(decision).toEqual({ inject: false, reason: "entry_already_prompted" })
-    expect(ledger.round_used).toBe(1)
-  })
-
   // nudge-3
   test("同 requestId 二次 → duplicate_hook，ledger 深比较不变", () => {
-    const l1 = run(newLedger(), "r1", { entry: entry("adm1", true, false) }).ledger
-    const { decision, ledger } = run(l1, "r1", { entry: entry("adm1", true, false) })
+    const l1 = run(newLedger(), "r1").ledger
+    const { decision, ledger } = run(l1, "r1")
     expect(decision).toEqual({ inject: false, reason: "duplicate_hook" })
     expect(ledger).toEqual(l1)
   })
 
   // nudge-4
   test("roundKnown=false → identity_unrecoverable，不注入，requestId 入 seen_requests", () => {
-    const { decision, ledger } = run(newLedger(), "r1", { roundKnown: false, entry: entry("adm1", true, false) })
+    const { decision, ledger } = run(newLedger(), "r1", { roundKnown: false })
     expect(decision).toEqual({ inject: false, reason: "identity_unrecoverable" })
     expect(ledger.round_used).toBe(0)
-    expect(ledger.entry_prompted_message_ids).toEqual([])
     expect(ledger.seen_requests).toContain("r1")
   })
 
@@ -89,67 +68,48 @@ describe("nudge", () => {
     expect(injected).toBe(0)
   })
 
-  // nudge-7（§10.4 迁移）：三类信号均不成立 → no_signal 零注入、零预算消耗（无每轮下限）
-  test("无信号 → no_signal，round_used 不变", () => {
+  // nudge-7（§10.7 无下限；v1.6.0 起 no_signal = 无压力可注入）
+  test("无压力候选 → no_signal，round_used 不变", () => {
     const base: NudgeLedger = { ...newLedger(), round_id: "msg1", round_known: true }
     const { decision, ledger } = run(base, "r1")
     expect(decision).toEqual({ inject: false, reason: "no_signal" })
     expect(ledger.round_used).toBe(0)
   })
 
-  // nudge-8（fix-4 迁移）：完整轨迹——入口(adm1) → 压力 S1 → roll（两路去重状态保留）→
-  // 入口(adm2) 新事件成立 → 同轮 S1 → set_already_prompted（先于预算判定，R3-2）
-  test("入口优先注入；同轮压力；roll 后入口新事件再次注入；已提示集合持续抑制", () => {
-    const a = run(newLedger(), "r1", { candidateSetId: "S1", entry: entry("adm1", true, false) })
-    expect(a.decision).toEqual({ inject: true, reason: "entry_signal_1" })
+  // nudge-8（v1.6.0 压力轨迹迁移）：S1 注入 → 同轮同集合抑制 → roll 后抑制跨轮持续 → 新集合符合条件且有剩余额度再注入
+  test("压力注入；同集合持续抑制（跨轮）；新集合再注入", () => {
+    const a = run(newLedger(), "r1", { candidateSetId: "S1" })
+    expect(a.decision).toEqual({ inject: true, reason: "pressure_reminder" })
     expect(a.ledger.round_used).toBe(1)
-    expect(a.ledger.entry_prompted_message_ids).toEqual(["adm1"])
+    expect(a.ledger.prompted_set_hashes).toEqual(["S1"])
     const b = run(a.ledger, "r2", { candidateSetId: "S1" })
-    expect(b.decision).toEqual({ inject: true, reason: "pressure_reminder" })
-    expect(b.ledger.round_used).toBe(2)
-    expect(b.ledger.prompted_set_hashes).toEqual(["S1"])
+    expect(b.decision).toEqual({ inject: false, reason: "set_already_prompted" })
     const rolled = rollLedgerForNewRound(b.ledger, "adm2")
-    const c = run(rolled, "r3", { candidateSetId: "S1", entry: entry("adm2", false, true) })
-    expect(c.decision).toEqual({ inject: true, reason: "entry_signal_2" }) // 新 admitted id = 新入口事件
-    expect(c.ledger.entry_prompted_message_ids).toEqual(["adm1", "adm2"]) // 跨轮持久
-    const d = run(c.ledger, "r4", { candidateSetId: "S1" })
-    expect(d.decision).toEqual({ inject: false, reason: "set_already_prompted" })
+    const c = run(rolled, "r3", { candidateSetId: "S1" })
+    expect(c.decision).toEqual({ inject: false, reason: "set_already_prompted" }) // 跨轮持续抑制（§10.3）
+    expect(c.ledger.round_used).toBe(0)
+    const d = run(c.ledger, "r4", { candidateSetId: "S2" })
+    expect(d.decision).toEqual({ inject: true, reason: "pressure_reminder" }) // 新集合 + 剩余额度
   })
 
-  // nudge-9（P13 共享预算序列迁移）：入口一次 → 压力 S1 一次 → 新集合 S2 → no_budget
-  test("入口+压力共享预算用尽 → no_budget", () => {
+  // nudge-9（P13 预算序列迁移）：两个新集合各一次 → 额度 2/2 → 第三个集合 no_budget
+  test("连续压力注入耗尽预算 → no_budget", () => {
     let ledger = newLedger()
-    const a = run(ledger, "r1", { entry: entry("adm1", true, false) })
-    expect(a.decision.reason).toBe("entry_signal_1")
+    const a = run(ledger, "r1", { candidateSetId: "S1" })
+    expect(a.decision.reason).toBe("pressure_reminder")
     ledger = a.ledger
     expect(ledger.round_used).toBe(1)
-    const b = run(ledger, "r2", { candidateSetId: "S1" })
+    const b = run(ledger, "r2", { candidateSetId: "S2" })
     expect(b.decision.reason).toBe("pressure_reminder")
     ledger = b.ledger
     expect(ledger.round_used).toBe(2)
-    const c = run(ledger, "r3", { candidateSetId: "S2", entry: entry("adm2", true, false) })
-    expect(c.decision).toEqual({ inject: false, reason: "no_budget" }) // 入口同样受 ≤2/轮 上限
-  })
-
-  // nudge-10（§10.4 合并语义）：①②同时命中 → entry_signal_merged 一条注入、一次预算
-  test("①②同时命中 → entry_signal_merged 一次预算", () => {
-    const { decision, ledger } = run(newLedger(), "r1", { entry: entry("adm1", true, true) })
-    expect(decision).toEqual({ inject: true, reason: "entry_signal_merged" })
-    expect(ledger.round_used).toBe(1)
-  })
-
-  // nudge-11（§10.4 入口优先，I3）：同请求入口+压力并存 → 仅入口注入，不落压力
-  test("同请求入口+压力并存 → 仅入口（候选集未被提示）", () => {
-    const a = run(newLedger(), "r1", { candidateSetId: "S1", entry: entry("adm1", true, false) })
-    expect(a.decision.reason).toBe("entry_signal_1")
-    expect(a.ledger.prompted_set_hashes).toEqual([]) // 压力机会未被消耗，留给后续请求
-    const b = run(a.ledger, "r2", { candidateSetId: "S1" })
-    expect(b.decision.reason).toBe("pressure_reminder") // 后续请求符合条件且有剩余额度
+    const c = run(ledger, "r3", { candidateSetId: "S3" })
+    expect(c.decision).toEqual({ inject: false, reason: "no_budget" })
   })
 
   // nudge-12
   test("rollLedgerForNewRound：重置轮内字段，prompted_set_hashes/entry_prompted_message_ids 保留，round_id 更新", () => {
-    const l1 = run(newLedger(), "r1", { entry: entry("adm1", true, false), candidateSetId: "S0" }).ledger
+    const l1 = run(newLedger(), "r1", { candidateSetId: "S0" }).ledger
     // 压力消耗一次以造 prompted_set_hashes
     const l2 = run(l1, "r2", { candidateSetId: "S1" }).ledger
     const rolled = rollLedgerForNewRound(l2, "msg2")
@@ -158,7 +118,7 @@ describe("nudge", () => {
     expect(rolled.seen_requests).toEqual([])
     expect(rolled.round_known).toBe(true)
     expect(rolled.prompted_set_hashes).toEqual(l2.prompted_set_hashes) // 无截断淘汰
-    expect(rolled.entry_prompted_message_ids).toEqual(l2.entry_prompted_message_ids) // 跨轮持久
+    expect(rolled.entry_prompted_message_ids).toEqual(l2.entry_prompted_message_ids) // §10.7 旧账本历史证据跨轮持久
   })
 
   // nudge-13（M0-7）：板操作不触碰 budget——账本仅经 decideNudge/rollLedgerForNewRound 变化
@@ -197,8 +157,6 @@ describe("nudge", () => {
       sessionId: "s",
       requestId: "rid", // 已在 seen_requests → duplicate_hook
       requestVerified: false, // 身份失效（admitted 输入不在本次上下文）
-      s1: false,
-      s2: false,
       candidateSetId: null,
     })
     expect(d.inject).toBe(false)
@@ -224,8 +182,6 @@ describe("nudge", () => {
       sessionId: "s",
       requestId: "r9",
       requestVerified: false,
-      s1: false,
-      s2: false,
       candidateSetId: "S1", // 已提示集合——但身份判定短路置前
     })
     expect(d.inject).toBe(false)
@@ -262,15 +218,15 @@ describe("nudge", () => {
       requestId: "r1",
       requestVerified: true,
       admittedMessageId: "adm0", // 同 admitted id → 身份恢复路径（fix-5）
-      s1: true,
-      s2: false,
       candidateSetId: null,
     })
     expect(d.identityRestored).toBe(true)
-    expect(d.reason).toBe("entry_signal_1") // 缺失的 entry_prompted_message_ids 归一化为 [] → 新入口事件成立
+    expect(d.reason).toBe("no_signal") // 无压力候选 → 零注入（v1.6.0 起入口注入已退役）
+    expect(d.inject).toBe(false)
+    expect(d.advanced).toBe(false)
     const after = scope.readMeta(streamId)
-    expect(after.budget.round_used).toBe(2)
-    expect(after.budget.entry_prompted_message_ids).toEqual(["adm0"])
+    expect(after.budget.round_used).toBe(1) // 恢复路径不消耗额度
+    expect(after.budget.entry_prompted_message_ids).toEqual([]) // 缺失字段归一化为 []
     const rawBudget = scope.readMeta(streamId).budget as unknown as Record<string, unknown>
     expect(rawBudget.snapshot_version).toBeUndefined() // 写回完成字段集迁移
     expect(rawBudget.initial_fulfilled).toBeUndefined()
@@ -306,7 +262,6 @@ describe("i2 admitted 见识集合（历史 admitted 重放不构成新 admissio
     streamId: string,
     requestId: string,
     admittedMessageId: string | null,
-    s1: boolean,
     candidateSetId: string | null,
   ) =>
     decideAndPersist(scope, streamId, {
@@ -314,45 +269,43 @@ describe("i2 admitted 见识集合（历史 admitted 重放不构成新 admissio
       requestId,
       requestVerified: true,
       admittedMessageId,
-      s1,
-      s2: false,
       candidateSetId,
     })
 
-  // oracle I2 复现轨迹：M1→M2→重放 M1——旧实现 roll 重置预算 + 再次压力注入（M1 共 4 次动态提醒）
+  // oracle I2 复现轨迹（v1.6.0 迁移）：M1→M2→重放 M1——零新注入、预算/轮次不变
   test("i2-replay: M1→M2→replay M1 — zero new injections, budget and round unchanged", () => {
     const { scope, streamId } = mkScope("i2replay")
-    const r1 = tx(scope, streamId, "r1", "msg1", true, null)
-    expect(r1).toMatchObject({ inject: true, reason: "entry_signal_1", advanced: true })
-    const r2 = tx(scope, streamId, "r2", "msg2", true, null)
-    expect(r2.inject).toBe(true)
-    expect(scope.readMeta(streamId).budget.round_used).toBe(1)
-    // 重放 M1（带入口信号与压力候选）→ 非新 admission：零新注入、预算/轮次不变
-    const r3 = tx(scope, streamId, "r3", "msg1", true, "S9")
-    expect(r3).toEqual({ inject: false, reason: "entry_already_prompted", advanced: false, identityRestored: false })
+    const r1 = tx(scope, streamId, "r1", "msg1", null)
+    expect(r1).toEqual({ inject: false, reason: "no_signal", advanced: true, identityRestored: false })
+    const r2 = tx(scope, streamId, "r2", "msg2", null)
+    expect(r2.advanced).toBe(true)
+    expect(scope.readMeta(streamId).budget.round_used).toBe(0)
+    // 重放 M1（带压力候选）→ 非新 admission：零新注入、预算/轮次不变（候选集被见识集合抑制）
+    const r3 = tx(scope, streamId, "r3", "msg1", "S9")
+    expect(r3).toEqual({ inject: false, reason: "no_signal", advanced: false, identityRestored: false })
     const meta = scope.readMeta(streamId)
-    expect(meta.budget.round_used).toBe(1)
+    expect(meta.budget.round_used).toBe(0)
     expect(meta.budget.round_id).toBe("msg2")
     expect(meta.budget.admitted_seen).toEqual(["seed", "msg1", "msg2"]) // "seed" 来自旧夹具 round_id 证据播种（T6-R3/I1）
     expect(meta.rounds.current_round).toBe(3)
     expect(meta.rounds.last_admitted_message_id).toBe("msg2")
-    // 重放 M1（无信号）→ no_signal，同样不消耗
-    const r4 = tx(scope, streamId, "r4", "msg1", false, "S9")
+    // 再次重放 M1 → no_signal，同样不消耗
+    const r4 = tx(scope, streamId, "r4", "msg1", "S9")
     expect(r4).toEqual({ inject: false, reason: "no_signal", advanced: false, identityRestored: false })
-    expect(scope.readMeta(streamId).budget.round_used).toBe(1)
+    expect(scope.readMeta(streamId).budget.round_used).toBe(0)
   })
 
   test("i2-ring: evicted-position replay is not treated as new admission (I2-R)", () => {
     const { scope, streamId } = mkScope("i2ring")
     // M1→M10 依次处理——旧环形实现下 m1/m2 已被挤出 admitted_seen
-    for (let i = 1; i <= 10; i++) tx(scope, streamId, `r${i}`, `m${i}`, false, null)
+    for (let i = 1; i <= 10; i++) tx(scope, streamId, `r${i}`, `m${i}`, null)
     const meta = scope.readMeta(streamId)
     expect(meta.budget.admitted_seen).toEqual(["seed", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10"]) // 无界：不淘汰；"seed" 为证据播种
     expect(meta.budget.round_used).toBe(0)
     expect(meta.rounds.current_round).toBe(11)
     // 淘汰位次的旧 ID（环形旧实现下 m1 已不在集合中）重放 + 新压力集合：
     // 不得当新 admission——不 advanced、不重置预算、不注入（否则 ring 淘汰即伪造新颖性）
-    const replay = tx(scope, streamId, "r11", "m1", false, "S9")
+    const replay = tx(scope, streamId, "r11", "m1", "S9")
     expect(replay).toEqual({ inject: false, reason: "no_signal", advanced: false, identityRestored: false })
     const after = scope.readMeta(streamId)
     expect(after.budget.round_used).toBe(0)
@@ -360,32 +313,37 @@ describe("i2 admitted 见识集合（历史 admitted 重放不构成新 admissio
     expect(after.budget.admitted_seen).toEqual(["seed", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10"])
   })
 
-  test("i2-legacy: ledger without admitted_seen — evidenced replay is not a new admission (T6-R3/I1)", () => {
-    const { scope, streamId } = mkScope("i2legacy")
-    // 旧账本（v1.4.5 前形状）：M1 已耗尽两次提醒、入口已提示，无 admitted_seen 字段
+  // oracle 回归③（DESIGN §14.4 :754，§10.7 迁移约束行为化）：历史 ID 仅存旧入口字段
+  // （entry_prompted_message_ids、admitted_seen 字段真实缺失）→ 重放不增轮、不重置额度、
+  // 不取得新提醒额度。夹具无旁路：round_id/last 均为 M2（不再播种 M1），M1 唯一证据
+  // 载体是 entry_prompted_message_ids 合并；预算 2/2 保留（不先执行合法 admission 归零）。
+  test("v16-3: legacy entry-only ledger — evidenced replay neither advances nor re-earns reminder quota", () => {
+    const { scope, streamId } = mkScope("v16legacy")
     const meta = scope.readMeta(streamId)
     scope.writeMeta(streamId, {
       ...meta,
-      rounds: { current_round: 1, round_known: true, last_admitted_message_id: "M1" },
+      rounds: { current_round: 7, round_known: true, last_admitted_message_id: "M2" },
       budget: {
-        ...newLedger(),
-        round_id: "M1",
+        round_id: "M2",
         round_known: true,
         round_used: 2,
+        seen_requests: [],
+        prompted_set_hashes: ["S1"],
         entry_prompted_message_ids: ["M1"],
-        admitted_seen: [],
-      },
+        // admitted_seen 真实省略（旧数据缺字段，非空数组）
+      } as unknown as NudgeLedger,
     })
-    const r2 = tx(scope, streamId, "r2", "M2", false, null) // 新输入 M2：正常新 admission
-    expect(r2.advanced).toBe(true)
-    // oracle 场景：重放 M1（带新压力集合 S2）——播种历史应识别为已处理：
-    // 不 advanced、不重置预算、不注入、round 不虚增
-    const replay = tx(scope, streamId, "r3", "M1", true, "S2")
-    expect(replay).toEqual({ inject: false, reason: "entry_already_prompted", advanced: false, identityRestored: false }) // 入口去重先行；压力侧亦被见识集合抑制
+    // 用新 request ID + 新候选集直接重放 M1：若 entry 合并被删，M1 无证据 → 误判新
+    // admission（advanced + roll 归零 + 消耗新集合）；合并在位 → no_signal、状态保持。
+    const replay = tx(scope, streamId, "r-replay", "M1", "S2")
+    expect(replay).toEqual({ inject: false, reason: "no_signal", advanced: false, identityRestored: false })
     const after = scope.readMeta(streamId)
-    expect(after.budget.round_used).toBe(0) // 不重置预算（M2 的合法重置后保持 0）
-    expect(after.rounds.current_round).toBe(2) // M2 推进一次，重放不虚增
-    expect(after.budget.admitted_seen).toEqual(["M1", "M2"]) // 播种自 round_id/entry 证据
+    expect(after.rounds.current_round).toBe(7) // 不推进轮次
+    expect(after.rounds.last_admitted_message_id).toBe("M2") // 轮次身份不变
+    expect(after.budget.round_id).toBe("M2")
+    expect(after.budget.round_used).toBe(2) // 预算仍为 2（不重置、不消耗）
+    expect(after.budget.prompted_set_hashes).toEqual(["S1"]) // 既有候选集抑制保留
+    expect(after.budget.admitted_seen).toContain("M1") // M1 历史证据被恢复（合并后随本次账本写持久化）
   })
 
   test("i2-legacy2: non-empty but incomplete admitted_seen — merge recovers lost evidence (T6-R4/I1-A)", () => {
@@ -404,36 +362,13 @@ describe("i2 admitted 见识集合（历史 admitted 重放不构成新 admissio
       },
     })
     // 重放 M1——无条件合并前：M1 ∉ seen → 误判新 admission（roll + 预算重置）
-    const replay = tx(scope, streamId, "r1", "M1", true, "S2")
-    expect(replay).toEqual({ inject: false, reason: "entry_already_prompted", advanced: false, identityRestored: false })
+    const replay = tx(scope, streamId, "r1", "M1", "S2")
+    expect(replay).toEqual({ inject: false, reason: "no_signal", advanced: false, identityRestored: false })
+    // 合并即时生效于判定（M1 被识别为已处理）；重放不增轮、不重置额度、不注入。
+    // requestId 登记与合并后的见识集合（["M2","M1"]）随该次账本变更写持久化——证据恢复落盘，无副作用。
     const after = scope.readMeta(streamId)
     expect(after.budget.round_used).toBe(1) // 不重置
     expect(after.rounds.current_round).toBe(1) // 不虚增
-    // 合并即时生效于判定（M1 被识别为已处理）；重放不写盘——合并后的见识集合
-    // 随下次账本变更写自然持久化，存储仍为夹具原值
-    expect(after.budget.admitted_seen).toEqual(["M2"])
-  })
-
-  test("i2-replay-entry: replay without recoverable entry history must not spend current round's entry budget (T6-R4/I1-B)", () => {
-    const { scope, streamId } = mkScope("i2replayentry")
-    const meta = scope.readMeta(streamId)
-    scope.writeMeta(streamId, {
-      ...meta,
-      rounds: { current_round: 1, round_known: true, last_admitted_message_id: "M1" },
-      budget: {
-        ...newLedger(),
-        round_id: "M1",
-        round_known: true,
-        admitted_seen: ["M1"], // 入口历史缺失（entry_prompted 无 M1）——oracle 场景
-      },
-    })
-    const r2 = tx(scope, streamId, "r2", "M2", false, null) // 新输入 M2：正常新 admission
-    expect(r2.advanced).toBe(true)
-    const replay = tx(scope, streamId, "r3", "M1", true, null) // 重放 M1 且带入口信号 s1
-    expect(replay.inject).toBe(false) // 入口与压力一并保守抑制
-    expect(replay.advanced).toBe(false)
-    const after = scope.readMeta(streamId)
-    expect(after.budget.round_used).toBe(0) // 不偷现轮入口额度（DESIGN:317 预算依附业务输入）
-    expect(after.rounds.current_round).toBe(2) // M2 推进一次，重放不虚增
+    expect(after.budget.admitted_seen).toEqual(["M2", "M1"]) // 合并恢复的证据已持久化
   })
 })

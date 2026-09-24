@@ -30,8 +30,6 @@ try {
     sessionId: rootSessionId,
     requestId: `${rootSessionId}:${requestId}`,
     requestVerified: true,
-    s1: false,
-    s2: false,
     candidateSetId: candidateSetId && candidateSetId !== "-" ? candidateSetId : null,
     raceProbe: pause ? { afterRead: () => pauseSync(dataDir) } : undefined,
   })

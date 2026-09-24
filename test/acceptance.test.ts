@@ -114,8 +114,6 @@ describe("acceptance", () => {
         sessionId: "acc-sess",
         requestId: `req-${i}`,
         requestVerified: false,
-        s1: false,
-        s2: false,
         candidateSetId: null,
       })
       expect(d).toEqual({ inject: false, reason: "identity_unrecoverable", advanced: false, identityRestored: false })
