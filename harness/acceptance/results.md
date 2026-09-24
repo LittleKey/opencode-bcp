@@ -131,3 +131,157 @@ L8a/L8b（M1-2/M1-3 live 专项）：**gated** —— 超出本次 L1–L6 授�
 | 宿主真实根 observe 复核 | 通过 | 默认根全 scope：0 FSCK FAIL、全 stream ok、`aggregate: covered/mismatch/unrecovered` 全 0、rc=0（父级 2026-09-23 20:00 安装新版后执行） |
 
 **已知发现（非阻塞，移交后续清单）**：①宿主 `session_index` 条目 `agent` 为空串为长期行为（基线同期同状）——种子/夹具 writer 需显式登记 agent；②live 下聚合触发的 nudge 恒不激活：transform caller agent="" → aggregateCandidates 全员 not_original_author → null，建议列入插件缺陷清单；③`-s` 续接必须在会话原项目目录内执行（跨目录挂起 rc=124，调用侧约束）；④l12-fixture 未传 idempotencyKey 时两次写入共存（幂等键为显式可选字段，脚本语义）。
+
+## 2026-09-24 事件驱动提醒架构（DESIGN v1.4.5–v1.4.7）——单元级
+
+范围：实施计划 T0–T4（契约修订 v1.4.7 → 常量单源 → 词法引擎 → nudge/plugin 重构 → 测试与验收迁移）。本章只登记**单元级**结论；live 验收（T5）pending 清单见末尾。历史章节（M0/M1 表、live 一览、Task 6/7、聚合 Task D/E、收尾复跑）一字不动——其中 L1–L6 的 decision 分布（initial_reminder/fulfilled_initial）属**旧快照架构基线**，事件驱动后的对应语义由本章映射表与 pending 清单承接。
+
+### 基线变迁
+
+150（聚合 Task E 收尾）→ 159（T1/T2 并行波次：constants golden + signals 词法套件）→ 186（T3 nudge/plugin 重构 + T3 收尾）→ **189**（本轮 T4：全量语义审计零删零改 + 补 3 条模板 golden）。全程 `bunx tsc --noEmit` 干净。
+
+### T1–T3 交付摘要
+
+- **T1 常量单源**：`src/constants.ts` 承载 ENTRY/PRESSURE 提醒模板、NORMATIVE_SENTENCE、TASK_DESC_APPEND、TOOL_DESCRIPTIONS；`test/constants.test.ts` 以 DESIGN §11.6 逐字节 golden 防漂移 + `src/` 规范句字面量防双源扫描。
+- **T2 词法引擎**：`src/signals.ts` 纯函数判定（A1 反引号围栏 / A2 `~~~` 完整扫描撤销 / A3 列 0 引用排除；信号①=`bb://` 存在性、信号②=规范句整行精确匹配，LF/CRLF 与行尾空白口径）；27 用例 = §10.4-C 示例①–⑤（7）+ D 边界表逐行（14）+ oracle 补充（6）。
+- **T3 重构**：`src/nudge.ts` 事件驱动（NudgeReason 10 枚举、六字段账本、roll/restore/预算身份，decideNudge 纯决策 + decideAndPersist 锁内落盘）；`src/plugin.ts` transform 接线（准入关联验证推进、入口信号检测、压力常量模板直驱）；缺陷②修复与方案 A 读侧容忍（normalizeBudget 旧字段、last_shown_seq 休眠）。T3 收尾修复 3 失败（plug-8/p-red-2/n-old-1，均测试侧语义错位，源码零改动）。
+
+### 迁移映射表（T4 全量审计：plug-*/acc 五文件旧语义残留 = 0；下表登记 T3 已完成的迁移）
+
+| 旧用例（HEAD 基线名） | 现状 | 依据 |
+|---|---|---|
+| nudge「首轮 roundKnown=true → initial_reminder，mark_fulfilled，ledger 置位」 | nudge-1「入口信号① → entry_signal_1，一次预算，entry_prompted_message_ids 置位」 | §14.1 M0-1 注记（无信号零注入/有信号获得机会） |
+| nudge「同轮第二次初始机会 → fulfilled_initial 不重注入」 | nudge-2「同 admitted id 新请求 → entry_already_prompted」 | §14.1 M0-7 注记（同一事件信号不重复注入） |
+| nudge「快照版本未变 → state_unchanged」 | DELETED（等价承载：nudge-2 事件去重 + nudge-3 同请求去重） | §10.7 快照状态去重废除（§10.3 去重范围条） |
+| nudge「初始优先注入；同轮压力；roll 后初始再次优先；… → set_already_prompted」 | nudge-8「入口优先注入；…roll 后入口新事件再次注入；已提示集合持续抑制」 | §10.4 入口优先（I3）；§10.3 I2 |
+| nudge「初始+压力共享预算用尽 → no_budget」 | nudge-9「入口+压力共享预算用尽 → no_budget」 | §10.3 预算身份（≤2/轮共享） |
+| nudge「roll 后初始机会独立于压力类去重 → initial_reminder」 | DELETED（roll 后新入口事件再注入语义由 nudge-8 承载） | §10.7 每轮初始下限废除 |
+| nudge「候选集存在时初始优先注入…已履行后候选消失 → fulfilled_initial」 | DELETED（入口优先语义由 nudge-11 承载） | §10.7 fulfilled 状态机废除 |
+| nudge「rollLedgerForNewRound：重置轮内字段，prompted_set_hashes 保留」 | nudge-12（+ entry_prompted_message_ids 跨轮保留断言） | §10.3 I2 入口事件跨轮持久 |
+| nudge「renderSnapshot ≤2048 字节；省略行 + 保留整条」 | DELETED（≤512B 常量模板断言由 plug-1/p-agg-1 + constants golden 承接） | §10.7 快照形态移除；§10.2 / §14.1 M0-8 注记 |
+| plug-1「transform appends snapshot text part in place ≤2048」 | plug-1「signal prompt injects entry reminder once, in place ≤512B」 | §10.2；§14.1 M0-8 注记 |
+| plug-8「round_used=1 且 initial_fulfilled=true → 零注入」 | plug-8「round_used=2 → no_budget（同预算身份内耗尽，入口亦不破例）」 | §10.3 预算依附 admitted 输入（新 admitted = 新预算身份，nudge-8/12 单测承载） |
+| p-agg-1「A 初始优先注入 → B 同轮压力/集合抑制 → C 新轮初始再次优先…」 | p-agg-1「A 压力注入（模板②，无板数据）→ …无每轮初始下限」 | §10.4③；§10.7 |
+| plug-2/3/4/6/7/10、nudge-13、n-red-1/2、n-agg-1、acc-m0-*/m1-*/acc-agg-*、storage/indexing 既有断言 | UNCHANGED（语义不变项，全程绿） | §14.1：M0-2/4/9/10、M1 全部保持 |
+| plug-9 | 已修复回归（oracle I4）——下行原将 plug-9 列入 UNCHANGED，不准确：旧形态两进程均 s1:s2:false/candidate:null，仅测锁冲突不测预算 | 现两进程携带不同压力候选集（S1/S2）、起点 round_used=1：A 持锁消费最后额度注入 pressure_reminder，B 锁超时 lock_contention_observed、重试 no_budget；持锁暂停机制保留 |
+| （新增）n-old-1 旧账本读容忍/写回迁移；plugin decision-log 留痕用例；indexing last_shown_seq 休眠用例 | NEW | §10.3 账本迁移容忍；§10.6 决策日志；§10.7 废除字段读侧容忍 |
+
+**T4 增量：删除 0、语义改写 0、新增 3**（见下节）。§14.4-2 产出—识别一致性四子项既有覆盖核对（未重复造）：规范句字节=识别器常量（constants「含规范句子串 === NORMATIVE_SENTENCE」+ 单源扫描）、实际分发文案=§11.6 task 段全文（constants「TASK_DESC_APPEND 与 §11.6 task 块逐字节相等」）、无标题仅规范句触发②（signals D3）、推荐模板触发①②合并（signals C①，①②分开断言贯穿 D14）。
+
+### 本轮新增（§14.4 可单测补缺，test/constants.test.ts）
+
+1. PRESSURE_REMINDER_TEMPLATE ≤512B golden（原仅 ENTRY 有字节上限断言）；
+2. 两模板均不含 `bb://` 板数据引用（§10.2 常量性：模板不拼接任何记录内容，目录发现一律由 agent 主动 `board_index` 完成）；
+3. 两模板均含第三句保护文案「adds no obligations and never overrides this task's restrictions」（§14.4 场景 7 反例的单测层断言：提醒不新增读写义务；「检测不产生工具调用路径」由 signals.ts 纯函数构造满足——判定面仅返回 s1/s2 布尔，无工具调用 API，行为级反例归 T5）。
+
+### nudge reasons 全集矩阵（10 枚举均有产生路径与断言，无缺口，未新增用例）
+
+entry_signal_1（nudge-1/8、n-old-1）· entry_signal_2（nudge-8）· entry_signal_merged（nudge-10）· entry_already_prompted（nudge-2）· pressure_reminder（nudge-8/11、p-agg-1 A）· duplicate_hook（nudge-3、n-red-1、plug-2）· no_budget（nudge-9、plug-8、p-agg-1 D）· set_already_prompted（nudge-8、p-agg-1 B/C）· identity_unrecoverable（nudge-4/5/6、n-red-2、acc 身份链用例）· no_signal（nudge-7、plug-10④、plugin decision-log 用例）。
+
+### 最终验证
+
+- `bun test` → **189 pass / 0 fail**（964 expect / 15 files）；`bunx tsc --noEmit` → 无输出 rc=0
+- 无 skip、无 TODO 残留；本轮增量写域：test/constants.test.ts（+3 golden）、harness/acceptance/results.md（本章）
+
+### live 验收 pending（归 T5，需宿主环境，未做单测模拟）
+
+1. **L 系列复跑**：L1–L6 重跑后 decision reason 分布按新枚举断言（旧 initial_reminder/fulfilled_initial 分布作废；L1 判据改为「无信号零注入」；L3/L4 reason 分布按 §10.6 枚举）；L2 隔离不回归。
+2. **缺陷② live 复测**：真实膨胀目录会话触发信号③（候选集非 null → pressure_reminder 注入模板②）——上文已知发现②「live 聚合 nudge 恒不激活」的闭环验证。
+3. **§14.4-3 中英自然委派四环节**：中文含 `bb://` 场景覆盖①；≥1 场景不含 `bb://` 单验②；task.prompt 由模型按**实际分发 description** 生成（禁人工塞句）；逐段记录 description 分发 → 模型产出 → ②检测 → 接收者行为。
+4. **VP-1 / VP-4 复验**：task.description 追加文案在真实分发中逐字节可见；ACP 共存不干扰。
+5. **§14.4 场景 1–7 行为级回归**（live 层），含场景 7「明确不读写黑板」误提醒任务的行为观察（单测层保护文案断言已过，接收者行为待 live）。
+
+## 2026-09-24 T5 live 验收——事件驱动提醒架构（新构建 811014 B，sha d7e52000…）
+
+环境：全局插件重装后全新 `opencode run` 进程（规避宿主内旧实例）；日志 `~/.cache/opencode/blackboard/log/blackboard.log`；工件 `/tmp/opencode/t5/`（smoke/deleg-zh/canary/pressure/seed/vp4 各 .json/.err/.bb.log）。
+
+| # | 项 | 判据 | 结果 | 关键证据 |
+|---|---|---|---|---|
+| 1 | L1 新口径冒烟 | 无信号零注入、0 degraded | **通过** | ses_f30d01f2dffe…：`round_observed`→`round`→`decision no_signal bytes:0`；旧构建此处为 `initial_reminder bytes:236` |
+| 2 | 自然委派四环节（中文） | description 追加→模型自产委派（bb://+规范句）→识别→接收者提醒 | **通过** | fixer 会话 `entry_signal_merged bytes:362`（①②同时命中=规范句被模型逐字写入委派——VP-1 强化证据，全程无人工塞句）；委派方自身 `entry_signal_1`+`entry_already_prompted`×2（去重 live） |
+| 3 | Canary 全链路 | 写入→委派→跨流读→发布→ID 转告 | **通过** | orchestrator `no_signal`（自身 prompt 无 bb://，正确零注入）；fixer 读取 1d6c893b 流记录、发布 76bd1309 流 e000001.json（磁盘实证）；ID 逐字转告。附带反例：自然中文委派无规范句→仅①命中（A1 宁漏勿误 live 确认，模板仍引导了发布） |
+| 4 | 缺陷②复测（压力路径） | 候选集非 null→模板②注入 | **通过** | seed 29 条后续接：`pressure_reminder bytes:278`（模板②原尺寸）+次请求 `set_already_prompted`；模型 board_index 报「目录共 29 条」 |
+| 5 | VP-4 共存 | 同进程 acp_*+board_* 可见 | **通过** | 探针单进程列出 acp_status/acp_context_recap/board_put/get/index/aggregate/compress/decompress |
+
+范围裁定（L2–L6 协议复跑）：**未逐项重跑**。理由：本轮变更面（plugin 接线/nudge/signals）已被 1/2/3/4 覆盖 live；未变更面（board 工具/存储/权限/聚合语义）由 189 单测承载，且 live 顺带印证——跨 scope `board_get`=forbidden（L6 型保护）、同 scope 跨流读成功（L2/L3 型）、board_put/get 生产路径可用（canary）。如 T6 复审判定需补协议级重跑，再执行。
+
+### errata（oracle 复审 2026-09-24）
+
+- **plug-9「UNCHANGED」标注修正（I4）**：T4 映射表曾将 plug-9 列为「UNCHANGED（语义不变）」——不准确。plug-9 旧形态（两进程 s1:s2:false/candidate:null）只覆盖锁冲突报告协议，未覆盖预算竞争语义；已修复为真实预算竞争回归（A 注入/B no_budget，持锁暂停机制保留），见事件驱动章节映射表 plug-9 行。
+- **I1 口径分叉缺陷（同轮修复）**：live 样本「board_index.counts eligible:0/protected:29 而聚合候选产出 pressure_reminder」根因为两处资格判定的 caller 身份源不同（counts 用 ToolContext.agent——live 常空串；聚合用注册验证身份）。已统一为注册路径验证身份（tools.ts 资格 caller + plugin 刷新链），i1-5 测试钉死。
+
+## 2026-09-24 T5 补验与更正（oracle T6 复审 I1/I5 之后；构建链 811014→813031→813134）
+
+**更正一（首轮压力样本无效——oracle I1 判定成立）**：首轮样本 writer/caller 皆空串，压力触发走的是空串冒充路径且 counts（eligible:0）与候选并存。P2b 复验（真身份 fixer 会话）暴露 I1 残余：无 agent 的 CLI 续接把进程内身份缓存钝化为 null、遮蔽 session_index 已注册 "fixer"（数据侧核实 callerAgent=fixer 时 29/29 可判 eligible）。修复=i1-6 三级回退（hook agent→已注册身份→null）。**P2c 终验通过**：`pressure_reminder bytes:278` + 次请求 `set_already_prompted`；模型报「29 条，eligible 23、protected 6」（recent 窗口保护）；caller=注册 fixer 身份对齐。缺陷②（live 压力恒不激活）至此以真实身份路径闭环。
+
+**更正二（canary 反例归类——oracle I5 判定成立）**：首轮「中文委派无规范句→仅①」记载为"A1 宁漏勿误确认"不准确，改为 **§15①(d) 产出侧漏报样本**。补验新增同类两例：E（英文自然发布委派）与 Z（中文）的模型自产委派均未含规范句（②不命中、接收者 no_signal）——产出侧合规率随机，属 §15①(d) live 观察项，非契约缺陷。
+
+**新增通过证据**：
+- **②only 自然委派**（Z2）：fixer 子会话 `entry_signal_2 bytes:362`——模型经 description 指引自产规范句、委派不含 bb://，仅②命中（四环节：分发→产出→检测→行为完整）。
+- **零行为反例**（N）：prompt 含 bb:// 字面 + 显式禁令 → `entry_signal_1` 注入但模型 **零 board 工具调用**、正确答题——保护句（提醒不新增义务/不覆盖任务限制）live 生效。
+- **L4 拒绝路径**（L4b）：description 两空格 → `description_blank` 拒绝、模型未重试、无提醒循环、正常退出。（附注：L4 首轮误测空 content 轴——空 content 写入成功；DESIGN §6/§11 校验轴为 description，无 content 非空要求，故该写入合规非缺陷，记录备查。）
+- **散文否定式误中样本**（Z orchestrator 自身）：我的指令原文含 "no bb://" 字样 → orchestrator `entry_signal_1`（§15① 预测的残余误报类 live 实证），行为无害（未读板，仅按任务要求自行发布了一条评审记录）。
+- **L2 身份隔离**：委派子会话注册身份 fixer/orchestrator 正确；CLI 无身份会话保守沉默不冒充（多会话交叉验证）。
+- **L5 续接身份/预算**：P2b/P2c 跨进程续接（roll 49→50→51、预算正确重置与去重）；I2 重放回归为单元级 i2-replay/i2-ring。
+- **VP-4**（首轮已录）+ m3 单测断言 tool.definition 交付面（task/非 task、段落分隔）。
+
+**仍开放（诚实登记）**：ACP 实际压缩/transform 干扰观察未自然发生（未观察/未完成对抗验证；工具共存与 m3 单测不等于实际压缩通过），保留为 §15② 观察项；英文自然发布委派的规范句命中样本（E 未命中）待后续自然积累，以 Z2（半自然：指令模型遵循其 task 工具指引）与首轮 deleg-zh（纯自然命中）为现存证据。
+
+## 2026-09-24 T6-R2 缺陷修复与补验（构建 813972 B；T6-R3 输入）
+
+**代码修复（204 pass / 0 fail / 1013 expect；tsc 干净）**：
+- **I2-R**：`admitted_seen` 移除 8 项环形 cap 改无界集合（`normalizeBudget` 对旧数据天然兼容；src/nudge.ts:206-216 注释明确「缓存未命中不构成新颖性证明」）；`i2-ring` 改写为淘汰位次重放回归——M1→M10 后重放 m1+新压力集合：不 advanced、不重置预算、不注入、round 不虚增。
+- **I1-R**：skip 判定施加于三级回退后的最终解析身份（src/plugin.ts:165-174）；skip 事件驱动缓存失效+会话 taint（:146-151 scopes.delete；:32 skipTainted）；空 agent 对 tainted 会话在 lookup/register 两处硬阻断 return null（:99-135）；显式有效身份重新登记解除（:91,:173）。新增 `i1-7`（冷启动借道反例，断言落实际可见性/board_index 拒绝）、`i1-8`（缓存残留反例：失效后空 agent 不再注入 parts=1，显式 build 恢复后注入恢复 parts=2）。
+
+**E2 英文自然发布链路（通过——§14.4 中英双链齐备）**：scope 291d6920：orchestrator（流 adba043f）board_put 基线记录 → 自然委派（runE2.json 归档 prompt 原文：含 bb://、无规范句，①-only 路径，同归 §15①(d) 产出侧样本）→ fixer（流 62b91c9e）`entry_signal_1 bytes:362` + `entry_already_prompted`×2 → board_get 读原文 → board_put 发布结论（磁盘双 e000001.json 实证）→ 两个 board ID 均转告。orchestrator 自身 no_signal ×3（指令文本无 bb:// 字样）。中文链 = 首轮 deleg-zh（纯自然 entry_signal_merged）+ canary。
+
+**Z2 补档更正（诚实撤回）**：runZ2.json 仅含起始事件，前文「四环节完整」超出归档证据——撤回该表述，仅保留 fixer 子会话 `entry_signal_2 bytes:362` 事实；完整链路证据由 E2 承担（prompt 原文回执 + 双记录 + 转告）。
+
+**L4r 带提醒拒绝样本（通过）**：会话 ses_f307ac2e4ffeRpfIl6uWXSR3vC：prompt 含必读 bb:// + 指令 description=单空格 → 首请求 `entry_signal_1 bytes:362 used:1` → `board_put` 返回 `rejected: description_blank` → 次请求 `entry_already_prompted bytes:0`（无循环、无二次注入）→ 模型原文转述拒绝结果、正常退出；全 scope entries 扫描确认探针记录未落盘（拒绝真实生效，非仅模型转述）。
+
+## 2026-09-24 E3/E4——英文②产出侧验收补齐（T6-R3 I3 处置；工件 /tmp/opencode/t5b/runE3.json、runE4.json）
+
+**更正**：前文「§14.4 中英双链齐备」（E2 时点）表述过宽——E2 为①-only 链路，当时英文②未证。现按下表口径修正并由 E4 补齐。
+
+| 链路 | 中文 | 英文 |
+|---|---|---|
+| ① 必读命中（自然委派含 bb://） | deleg-zh 首轮（纯自然，merged 362B）+ canary | E2（纯自然，prompt 原文归档）+ E3 |
+| ② 发布命中（模型自产规范句） | deleg-zh 首轮（纯自然，merged）+ Z2（②only 362B） | **E4（②only 362B）** |
+| 无 bb:// ②only 场景 | Z2 | **E4** |
+
+- **E3（未命中样本，归 §15①(d)）**：英文指令明示「follow your task tool's guidance exactly」仍意译未含规范句（fixer 会话 no_signal×2）；链路功能仍成立（fixer 按任务文本发布、orchestrator board_get 验证、跨流短 ID 不解析/全限定 ID 可解析的 live 观察）。
+- **E4（命中）**：指令仅指向 task 工具 description 中「推荐的请求发布结果英文句」要求逐字拷贝（**未提供句子原文**）→ 模型从分发的 description 拷贝规范句入委派 → fixer 会话（ses_f306fe608ffe）`entry_signal_2 bytes:362` + `entry_already_prompted`×2；orchestrator 自身 no_signal；echo 归档含逐字句。构成「description 分发→模型产出→②检测→接收者行为」完整半自然链路（§14.4「模型按实际分发的 description 生成」口径）。
+- **产出侧合规率观察（§15①(d) 累计）**：自然/弱指引 0/4（E、E2、E3、Z 首轮）；强指引 1/1（E4）；纯自然命中 1 例（deleg-zh 首轮，中文）。结论：description 传播机制有效但合规率随机；本批强指引样本成功，是否稳定改善合规率仍需观察（T6-R4 Minor 更正：小样本不支持「显著提升」表述）。
+- 附带实证：fix-3 会话在本宿主进程（旧构建驻留）决策仍为 `fulfilled_initial` 旧枚举——新构建仅对新进程生效（安装不热载），与 VP-4 共存观察一致。
+
+## 2026-09-24 T6-R3 I1/I2 修复（构建 815150 B；206 pass / 0 fail / 1023 expect；tsc 干净）
+
+> errata（T6-R4）：本节「已闭环」口径过宽——R4 复审发现证据合并仍限非空判定、重放仍可消费现轮入口额度、taint 冷入口/热缓存/持久化失败三路径可绕过；完整修复见后文 T6-R4 修复章节。
+
+- **I1 旧账本保守迁移**：`normalizeBudget`（src/nudge.ts:169）admitted_seen 缺失/为空时用 `去重(round_id, …entry_prompted_message_ids)` 播种——已知已处理证据不丢弃，缺失历史≠从未处理，无法证明的新颖性不发额度。回归 `i2-legacy`：旧账本 {round_id:M1, round_used:2, entry_prompted:[M1]} → 处理 M2（roll 正常）→ 重放 M1+新压力集 → 不 advanced、预算不重置、零注入（入口去重 entry_already_prompted 先行）、round 不虚增（oracle 复现的第三次注入被阻断）。
+- **I2 skip taint 持久化**：`session_index[].skip_tainted` 持久标记（src/storage.ts:47-48,307-313 幂等落盘）；4 个 taint 写点统一 markSessionSkipTainted + 清残留 admitted 关联（oracle 建议）+ 缓存失效；冷路径判定=内存∨持久（持久权威，src/plugin.ts:132）；空 agent+tainted→硬阻断 null；显式非空 agent 登记/刷新时清除标记（storage.ts:276-302，空串不清除——与身份不覆盖语义一致）。取舍：无 Scope 实例的纯入口拒绝不落盘（不为标记建 Scope，注释明示）。回归 `i1-9` 两实例：A 注册 build→spy 到达→B（同 dataDir 全新状态）空 agent 续接被阻断（不注入/工具 rejected: unregistered_session）；显式 build 再登记恢复注入与工具。
+- 附注：i2 系列夹具 round_id:"seed" 进入播种集合为预期；i2-legacy 重放 reason=entry_already_prompted（入口去重先行，同为抑制）。
+
+## 2026-09-24 T6-R4 I1/I2 终轮修复（构建 816627 B；211 pass / 0 fail / 1049 expect；tsc 干净）
+
+- **I1-A 证据无条件合并**：normalizeBudget（src/nudge.ts:170-171）改为 `去重(admitted_seen…, entry_prompted…, round_id)`——非空≠完整；顺序 seen→entry→round_id（round_id 置末：避免 roll 后当前 id 翻队首破坏 seed-first 语义）。回归 `i2-legacy2`（非空缺项夹具+重放 M1→entry_already_prompted/零注入/不虚增）。诚实注记：合并在**判定时**即时生效，落盘随下次账本写完成（重放路径 changed=false 不写盘）。
+- **I1-B 重放不偷现轮入口额度**：`replayedEntryUnproven = replayed ∧ id∉entry_prompted` → 入口输入清零、入口与压力一并保守抑制（注释引 DESIGN:317,323）。回归 `i2-replay-entry`（M2 现轮+重放缺历史 M1+s1→零注入、round_used 保持 0）。
+- **I2-A 冷入口只查不建**：新增 `probeExistingScope()`（scope-index 反查，不创建）——skip 到达时命中既有 Scope 则落盘+内存双标记；确无 Scope 才纯内存拒绝。回归 `i1-10`（已注册会话冷入口显式 skip→持久 skip_tainted=true）。
+- **I2-B① 热缓存遵守他实例持久 taint**：缓存命中∧空 agent → 读 `isSessionSkipTainted()`（IO 如实说明（T6-R5 Minor 更正）：getter 每次调用重读并解析**整份** scope.json，热路径因此新增真实文件读；transform 本身以空 agent 调 lookup 也会触发，非仅 CLI 续接；不缓存读取结果是为保持与他实例写盘一致性——正确性优先的有代价取舍）。命中即阻断+失效缓存。回归 `i1-11`。
+- **I2-B② 同名显式身份到达也清 taint**：`refreshSessionAgent` 早退条件改 `e.agent===agent && !e.skip_tainted`（src/storage.ts:301-302，本组最深根因——上轮只修了 registerSession 漏了 refresh）。`i1-11` 恢复段诚实注记：恢复后 board 工具可用+round_used 不变即断言（同压力候选集受 prompted_set_hashes 去重，不断言二次注入）。
+- **I2-C 持久化失败不保留放行**：统一 `taintAndInvalidate`（src/plugin.ts:101-110）**先**本实例保守失效（缓存删除+内存 taint+清 admitted）**再** try 持久化，catch 记 `skip_taint_persist_failed` 降级（本实例仍阻断，仅丢跨重启保护）。回归 `i1-12`（chmod 0555 注入写盘故障→本实例仍 rejected；恢复后显式身份清除）。
+- errata 两处（T6-R4 Minor）已同步：:254 合规率措辞降级；T6-R3 章节闭环口径加更正指引。
+
+## 2026-09-24 T6-R5 两 taint 漏口修复（构建 816881 B；212 pass / 0 fail / 1054 expect；tsc 干净）
+
+- **漏口1 非空 agent 工具热路径绕过持久 taint**：lookup 缓存命中分支的持久 taint 检查去掉 `!agent` 前置（src/plugin.ts:158-166）——工具路径只查不刷新，非空 ctx.agent 不得绕过他实例落盘 skip 标记；合法恢复仅经注册路径（chat.message 显式 agent→refreshIdentity→refreshSessionAgent，未动）。i1-11 阶段2 扩展：Q 落盘标记后 P 以非空 agent="build" 直接调 board_index → rejected。
+- **漏口2 冷探测失败吞掉本地失效**：新增 `coldSkipReject`（src/plugin.ts:133-149）——先 `taintAndInvalidate(id, null)`（零 IO 零可失败点）→ 再 `probeExistingScope()`（可抛，抛出时本实例已失效）→ 命中则 markSessionSkipTainted（内联 catch 降级）；lookup:171/register:230 两冷调用点改走该 helper。i1-13：注册会话+冷插件+显式 spy+scope-index.json 临时损坏后恢复 → 同实例空 agent 续接仍 rejected+不注入+skip_tainted 未落盘（探测失败只丢跨重启标记）；显式身份恢复（:637 断言口径：同名早退不重写条目，skip_tainted ?? false 合法缺省）。
+- **IO 注释如实化**（storage.ts:308-312 及 plugin.ts 两调用点）：getter 每次调用重读并解析**整份** scope.json；不缓存读取为正确性优先取舍（保持他实例写盘一致性）；transform 空 agent lookup 与任意 agent 工具缓存命中路径均触发——results.md :270 已同步更正（T6-R5 Minor）。
+
+## 2026-09-24 T6 复审循环收官（构建 8171xx B；213 pass / 0 fail / 1057 expect；tsc 干净）
+
+- **T6-R6 判决：IMPLEMENTATION-APPROVE-WITH-FINDINGS**（无 Critical/Important；两 Minor：return await 吞异常回执不对称 + 未落盘断言时点）。
+- **Minor 收尾（fix-3）**：plugin.ts:171,230 `return await coldSkipReject`（工具冷入口探测异常现回执正常 rejected: unregistered_session）；新增 i1-14（冷工具入口+scope-index 损坏→正常回执断言）；i1-13 未落盘断言前移至显式恢复前（真正可证）。213 pass 零删改。
+- **收尾核验**：orchestrator 独立复跑+抽读（两处 await、断言位置）；机械修改按 oracle 给定规格执行，无需再启 R7——R6 已授予通过，最小收尾清单逐项落实。
+- **六轮循环总账**：R1 REJECT（I1 身份链三缺陷+I2 重放+I3 参数+I4 race 退化+I5 证据口径+M1-3）→ R2 REJECT（I2-R/I1-R/L4/E2/Z2 四必办）→ R3 REJECT（旧账本迁移丢证据/taint 不跨重启/E2 冒充②）→ R4 REJECT（证据合并非空判定/重放偷额度/taint 三路径）→ R5 REJECT（非空 agent 工具热路径/冷探测序）→ R6 APPROVE-WITH-FINDINGS。实现复审闭环。
+- **遗留观察项（转 T7 §15①）**：产出侧规范句合规率（自然/弱指引 0/4、强指引 1/1、纯自然中文 1）；散文否定式①误报（行为无害已证）；ACP 实际压缩交互未自然发生（pending）；hook 顺序竞态——晚到的 skip 探测可重新 taint 刚恢复身份（保守过拒绝，非放行）；IO 放大——T 次 transform+B 次热板调用≈T+B 次整份 scope.json 重读（正确性优先，瓶颈再测）。
