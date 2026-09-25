@@ -12,8 +12,9 @@ export const TOOL_DESCRIPTIONS = {
     "deliveries, save only information that is reusable or valuable if context is\n" +
     "lost.\n" +
     "When a task asks you to review an artifact or proposal—even standalone requests—your\n" +
-    "verdict is a deliverable: publish it bound to the reviewed scope and version,\n" +
-    "even when you find no issues. For new review records, use kind=review.\n" +
+    "verdict is a deliverable: publish it bound to the reviewed scope and version.\n" +
+    "An \"adequate\" or \"no issues\" verdict still needs publication.\n" +
+    "For new review records, use kind=review.\n" +
     "A qualified source holds relied-on conclusions and qualifications, is\n" +
     "retrievable at an exact version, and readable with the receiver's tools and\n" +
     "permissions; a reference string alone proves nothing.\n" +
