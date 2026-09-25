@@ -16,7 +16,8 @@
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.18.31",
-    "typescript": "^5.6.0",
-    "@types/bun": "latest"
+    "@opencode/plugin": "2.0.16",
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
   }
 }
