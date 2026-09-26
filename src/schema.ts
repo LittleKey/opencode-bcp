@@ -7,7 +7,7 @@ export const KINDS = ["note", "finding", "change", "review", "decision", "index_
 export type RecordKind = (typeof KINDS)[number]
 
 export const DESCRIPTION_MAX_CODE_POINTS = 80
-export const CONTENT_MAX_BYTES = 65536
+export const CONTENT_MAX_BYTES = 262144
 
 export type Writer = { agent: string; session_id: string; message_id: string }
 
