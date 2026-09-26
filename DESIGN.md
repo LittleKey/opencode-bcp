@@ -49,10 +49,14 @@
 | v1.6.7 | 2026-09-25 | oracle 裁决微修订：`board_put` no-issues 分支文案（用户 2026-09-25 指令「请与oracle商讨」后的裁决 e000004 候选文案 V1 逐字落地；历史行不动；改处标「[第七轮修订]（v1.6.7：no-issues 分支文案）」；仅改 DESIGN.md——src/constants.ts、golden 与 harness/acceptance/results.md 措辞同步留实现轮） | 唯一实质变更：§11.6 `board_put` 块内替换（旧片段 148 B「…publish it bound to the reviewed scope and version, even when you find no issues.」→ 新片段 180 B：`verdict is a deliverable: publish it bound to the reviewed scope and version. An "adequate" or "no issues" verdict still needs publication. For new review records, use kind=review.`——"adequate" / "no issues" 判定仍须发布评审记录，不因无问题豁免交付）；联动登记：§11.6 `board_put` 块头字节 1291/1292 → 1323/1324 B（净增 +32 B 复算相符）；§11.6 总量约束登记新字节与净增口径（其余三段不变）；§14.4 新增 no-issues 分支行为验收组（裁决 §4 最小组合：固定标准平凡工件主测（全标准显式，如 JSON `{"enabled":true,"retries":0}`，不提示发布不预告通过）、旧 / 新描述同条件对照（唯一变量 = 本替换，CLI / 委派分开统计）、`retries:1` 有问题对照（必须发现）、既有反例回归（非评审零乱写 / 已有合格零重复 / 禁发布零写入）、虚构范围外问题记评审准确性失败、旧描述全过则如实登记「新夹具未复现历史失败」）；§15 观察项：no-issues 分支观察口径为行为验证（本组验收），P3b / P3c 0/2 登记为待复现基线；正文指纹按既有算法（python 直读，删「修订记录」节至 sha 行 + 一空行、保留文件尾部换行，两次复算稳定）更新，sha 链前推 | oracle 裁决 e000004（bb://72bdf921-89c7-4d42-939b-c954b4b3e4ac/133208b5-775f-4388-96fd-262d56969640/e000004）+ 用户 2026-09-25 指令「请与oracle商讨」 |
 | v1.7.0 | 2026-09-25 | 大版本修订：双版本适配架构（opencode v2 插件 API 整体重写、无 v1 运行时兼容；oracle 对 v2.0.16 源码级核验七问 verdict=PASS（限于静态 API 适配可行性）+ 风险分级与验收清单；用户批准执行（本会话 2026-09-25）；方向级变更升次大版本号 v1.6.7→v1.7.0；历史行不动；改处标「[第七轮修订]（v2 适配）」；仅改 DESIGN.md——adapter 目录迁移与双产物构建属实现轮，另行处理） | 新增 §16「v2 适配层」：16.1 背景与适配结论（v2/anomalyco v2.0.0 已发布、OpenChamber v2-only；核验结论=身份三字段 sessionID/messageID/agent 完整可得、授权/scope/存储机械映射、消息生命周期须重新接线；§0.4 V1–V19 为 v1 宿主证据不自动延伸，v2 依据以 §16 所附源码引用为准；§3/§4/§9/§10/§11 授权/scope/预算/工具语义两版本同构不变、仅接线不同）；16.2 双 adapter 架构（宿主无关 core 边界 tools/permissions/storage/indexing/aggregate/rounds/nudge/ids/schema/eligibility 及 signals 已退役语义，零宿主 import；adapter 层职责=插件入口/hook 接线/身份提取/消息生命周期处理/构建产物；目录 src/adapters/v1/（现有 plugin.ts 逻辑迁入）+ src/adapters/v2/{index.ts,messages.ts}；构建双产物 dist/blackboard-v1.ts（→~/.config/opencode/plugin/，v1 单数目录自动发现）+ dist/blackboard-v2.ts（→plugins/ 目录，v2 自动发现）；v2 显式单文件插件配置路径被宿主警告并忽略——契约写死目录自动发现）；16.3 v2 消息生命周期语义四条（prompt hook 仅观测、不得推进轮次/预算、已 reconcile 重试不重复触发；context hook 验证候选 ID 确实出现在本次模型消息快照后才执行轮次/预算事务与注入、注入只走 context、禁止改 prompt.text（会永久写入用户历史）；请求边界归一化——context 无显式 requestID、Message.id 可选、tool-result/MAX_STEPS/synthetic 可能无 ID 或转 role:"user"，不得照搬 messages.at(-1).id、不得以 role==="user" 证明真实 admission、无法证明保持 unknown 不注入不推进不造随机 ID；writer message_id 与提醒去重键是不同概念不合并）；16.4 v2 五陷阱逐条入契约（含 v2.0.16 源码依据行号：subagent 非 task 经 ToolEditor 幂等追加、四工具 options.codemode:false、plugins/ 自动发现、session.forked parentID=fork 源≠委派父须 session.get 补链不依赖热流、agent 为稳定 ID 非展示名）；16.5 不变量声明（存储零迁移 dataDir/文件锁/锁内事务/decideAndPersist 原样、Zod 4 经 StandardSchema 接入、工具结果包 {content:text}、v1 行为零变更 183 测试回归基线）；16.6 v2 明确不做；§14.4 新增 v2 契约验收电池（oracle 最小清单八项）；§15 新增观察项两项（v2 消息边界 unknown 率、OpenChamber v2 宿主端到端行为）；正文指纹按既有算法（python 直读，删「修订记录」节至 sha 行 + 一空行、保留文件尾部换行，两次复算稳定）更新，sha 链前推 | oracle 核验记录 bb://b59fa90c-2e81-4d1b-ab1f-b99b16e1c38c/48a80b5f-388f-410e-b823-0742223af8ad/e000001（v2.0.16 源码级七问 verdict+风险表+验收清单）+ 用户批准（本会话 2026-09-25） |
 | v1.7.1 | 2026-09-25 | oracle 复审 v1.7.0 收口（REJECT：0 Critical / 3 Important + 3 Minor，六项全部采纳；复审记录 bb://b59fa90c-2e81-4d1b-ab1f-b99b16e1c38c/48a80b5f-388f-410e-b823-0742223af8ad/e000003；历史行不动；改处标「[第七轮修订]（v1.7.1：复审修正）」；仅改 DESIGN.md——适配方向与共享 core 架构保留，复核通过前不进入实现） | I1 §16.3-4 改为**两级预算身份**（业务输入轮次身份 ≠ 模型请求边界键）：同业务输入全部模型请求共享轮次预算；请求键依附单个已证明边界——持久 assistant/工具历史推进后的下一次模型请求用**新请求键**，同边界内重复 hook / 未变边界重试复用键；不得随机 ID 补齐、不得宣称「一业务输入只评估一次请求」同构（另批变更）；§14.4 第 5 项同步改写 + 跨工具循环新边界反例（首请求无压力 → 工具调用造成新压力 → 后续请求不被 duplicate_hook 吞）。I2 §16.3-2 区分**成功准入事务与保守失效事务**；§16.3-3 unknown 补第二义——不推进的同时**仍须双 `round_known=false` 失效落盘**（src/nudge.ts:153–159、204–224 现状；防 G8 回归）；§16.5「原样」不得解释为禁止正确性所需最小入口分支接线；§15 unknown 影响面更正（+轮次知识状态、+近期保护/聚合资格）；§14.4 补 unknown 失效事务回归验收（created_round:null → 复验不重置预算）。I3 §16.3-5 新增**分阶段注入失败语义**（(a) 预检/构造失败不发起扣减；(b) 持久化失败不注入=现有保证；(c) 提交后失败保守损失一次机会、不伪称送达不盲目退款不破上限；全阶段零扣减须另批且与 decideAndPersist 原样互斥）；§14.4 第 8 项按分段改写。M1 排除区 sha 行 v1.7.0 方向更正（旧 `a0f20bd4…` → 新 `5cc3610d…`，v1.7.0 行写反；排除区改动不影响正文指纹）。M2 §16.5 `{content:text}` 包装主体改为 **BCP v2 adapter execute**（宿主只读 result.content）；§16.4 陷阱 1 加载顺序精确为 **pre → 外部 packages → post**；陷阱 4 源码路径补全（packages/plugin/src/promise/session.ts、packages/client/src/promise/generated/client.ts）。M3 §14.4 电池第 4/7 项限定补强（取消限定未实际处理输入、queued/steered 并存、interrupt 不追溯回滚、重载丢观测 vs 丢事件两故障、订阅 cleanup）+ 新增七项实施验收补强清单（多 location 负例、附加段恰好一份、实际装载工具面验证、持久历史逐字节未改、双产物不同宿主、unknown 失效回归）；正文指纹按既有算法（python 直读，删「修订记录」节至 sha 行 + 一空行、保留文件尾部换行，两次复算稳定）更新，sha 链前推 | oracle 复审 v1.7.0（REJECT：3I+3M；bb://b59fa90c-2e81-4d1b-ab1f-b99b16e1c38c/48a80b5f-388f-410e-b823-0742223af8ad/e000003）+ 用户批准执行（本会话 2026-09-25） |
+| v1.8.0 | 2026-09-25 | 大版本修订：U2 无条件作者交付（oracle 终结交付重设计——作者结构化优先、机械原文兜底、scope 统一检索；用户裁定 2026-09-25「按oracle方案执行」；方向级变更升次大版本号；历史行不动；改处标「[第八轮修订]（U2）」；仅改 DESIGN.md——src/constants.ts / golden 同步、检索实现与 capture 属后继轮） | 核心转向：从「条件分支的来源交付」→「**无条件作者终结交付** + scope 内统一检索 + 少量明确降级的机械原文兜底」。§11.6 `board_put` / `task` 两块整体替换为 U2 版（`board_put` 1010 B、`task` 867 B，末尾无 LF 口径；SHA256 `25c05aa4…` / `a4fcd5ab…`；改动两段 2678→1877 B、四段合计 3418→2617 B、−23.4%；`board_get` / `board_index` 不动 = A/B 实验变量控制）；新增 **T 边界**（一个明确工作单元的最终返回，含 blocked / no-issues；一次 T 一份逻辑交付 publish-or-reuse，11.8）与**外部合格报告 → 简短 board 索引交付**（取代旧「外部报告合格 → 零新增 board」口径，v1.8.0 有意变更，11.8）；R 特化为评审内容交付形态、H 保留引用路由与核对（原作者补写降为有条件恢复，10.5/§6）；§0/§2/§3 检索结构定位（价值主轴 = 作者结构化交付 + scope 内可检索来源；stream = 作者/序列分区、scope = 检索范围、查询可跨授权 streams、不等同隐私边界；§1 raw 归档例外边界）；§4 不新增 kind，capture 可信封套字段属后继轮；§7 作者交付四项结构（Outcome/Basis/Limits/Next）+ raw 降级标识；§8 聚合条款不变（禁跨流改导航边）；§11.3 检索能力扩展条款（`search_in` / `search_scope`、跨流分页、有界目录——契约先行，实现属后继轮）；§11.7 v2 `subagent` 同用一份 U2 文本；§12 集中检索不扩权、逐边不泄漏；§13.2 反滥用改「一终结结果一逻辑交付、无过程流水账」+ raw-only 显式降级；§14.4 新增 U2 A/B 文案实验电池（12×2、capture 关闭、skill 不迁；A = ca3399d 现文、B = U2；指标 = 结束前真实提交 / 结构完整 / 版本可取回 / 最终 ID / 下游正确使用）并注记行为验收 2、六场景 ③④ 口径分化；§16 验收改造（T 分支、末返回前提交、双宿主分开证明覆盖）；golden 影响预告：constants 两块将变（1323→1010 B、1355→867 B），get / index / 压力模板不动；正文指纹按既有算法（python 直读，删「修订记录」节至 sha 行 + 一空行、保留文件尾部换行，两次复算稳定）更新，sha 链前推 | oracle 重设计记录 bb://b59fa90c-2e81-4d1b-ab1f-b99b16e1c38c/48a80b5f-388f-410e-b823-0742223af8ad/e000013 + 用户裁定（2026-09-25「按oracle方案执行」） |
+| v1.8.1 | 2026-09-26 | 复审修正：oracle 定向复审 REJECT（2 Important + 2 Minor；U2 两英文块保真通过、零字节变更；只改 DESIGN.md；历史行不动；改处标「[第八轮修订]（v1.8.1：复审修正）」） | **I1 旧交付出口统一**：§11.8 Return 模板更新为 U2 口径（返回 / 复用一份 board 交付的完整 ID；外部合格报告另附确切引用、只建简短索引不复制正文；保留诚实缺口出口）+ 模板沿革注记；「文件修改限制与发布限制分开」条新增**适用优先声明**（残留旧「零重复写板」表述按 U2 口径解释：禁的是复制正文、不是索引交付；「不要求再发布」不豁免 T 目录项）；T5a 与 no-issues 反例组就地注明 U2 覆盖口径；直接中继范围重申为输入 / 摘录传递规则、不再作 T 终结豁免。**I2 后继检索语义闭环**：§11.3 穿透条款扩为「所选 `search_in` 命中的原 description **或 content** 均可穿透 covered」；§14.4 新增**后继检索路线与扩围门禁**表（阶段 1 = 常量 + golden + A/B、capture 关闭 skill 不迁 → 阶段 2 = 检索及规模验收〔covered 正文穿透负例 / covered-body 片段非证据 / 跨流分页权限 / 两拓扑 recall+p95〕= 广泛写入扩围前置门禁 → 阶段 3 = 另批 raw / capture）；修复 §1 与 §11.3、§16.6 三处悬空交叉引用（改指新表）。**M1 幂等分层**：§6 新增「提交 / capture 事件幂等 vs U2 来源交付复用」两层区分 + 重试 / 不同执行 / 显式复用三例（不夹带终结事件追踪器，不要求每次调用必造新 ID）；§11.8 T 段补交叉引用。**M2 零变更范围限定**：§16.5「v1 行为零变更」限定为 v2 适配迁移的 core / 身份 / 预算 / 存储语义；U2 共享描述与交付行为 golden 为显式变更例外；183 测试为回归基线、不替代 T 验收。U2 两英文块（`board_put` 1010 B / `task` 867 B，SHA256 `25c05aa4…` / `a4fcd5ab…`）零字节变更；正文指纹更新，sha 链前推 | oracle 复审记录 bb://b59fa90c-2e81-4d1b-ab1f-b99b16e1c38c/48a80b5f-388f-410e-b823-0742223af8ad/e000014（设计依据 e000013） |
+| v1.8.2 | 2026-09-26 | 编辑性修正：v1.8.1 复审 APPROVE-WITH-FINDINGS 的唯一 Minor——「文件修改限制与发布限制分开」条内行号引用漂移（旧「563/564 段」随条款移动失效），改为稳定标题引用（「终结交付边界 T」及「外部合格报告 → 简短 board 索引交付」）；零语义变更，U2 两英文块零字节变更 | 同 v1.8.1 范围，仅一处引用修正 | oracle 定向复核记录 bb://b59fa90c-2e81-4d1b-ab1f-b99b16e1c38c/48a80b5f-388f-410e-b823-0742223af8ad/e000015（Minor-1） |
+| v1.8.3 | 2026-09-26 | 工件索引澄清：oracle 裁决（fixer 终结交付电池 0/2 REJECT）候选 C1 逐字落地（用户裁定 2026-09-26「走工件澄清」；只改 DESIGN.md——src/constants.ts、golden 与 A/B 电池 B 臂同步留实现轮；results.md 本轮不改、修正随归档轮；历史行不动；改处标「[第八轮修订]（v1.8.3：工件索引澄清）」） | §11.6 `board_put` 块内替换：旧「Pin artifact references…」/「Index existing qualified reports…」连续两行（含内部 LF 215 B）整体替换为裁决候选单行（300 B，含 not copying artifact bodies 与 Do not log routine progress），净 +85 B；块头字节登记 1010→**1095 B**（含末尾 LF 口径 1096 B），新块 SHA256=`99e426a610b5517170da9be95d777e89b59423394d0eb854bd3696493df1e8ac`；`task` 867 B 零变更，`board_get` / `board_index` / 压力模板不动；§11.8「外部合格报告 → 简短 board 索引交付」条扩为共同「工件承载结果索引」原则（代码 / 文件修改与外部报告同构；轻索引按 §7 四项结构、非裸 SHA；hash 可提交作校验但 hash≠版本保存、合格引用须可取回 repo/path@commit 或保留快照+SHA、无渠道报缺口不擅自 commit——与四要件 A4 说明同向、单一出处）；Return 模板引言与边界 H 条引用该原则（去重不另立）；§11.6 总量约束登记净增口径（改动两段 1877→1962 B、四段合计 2617→2702 B）；§14.4 新增 fixer 终结交付电池（4 任务×2 臂=8 executions：机械改名 / blocked / 待审修复 / 双文件联动；控变量=固定模型角色权限初始工件、唯一变量文案、capture 关闭；保存实际派发工具描述 hash；任务正文零 board 提示；三指标分别统计=结构化交付 / 版本可取回 / 最终 ID；版本可取回≠仅 hash 不匹配）；§15 新增 results.md 措辞收窄登记（「验证了 Phase 3 必要性」→「观察到结构化交付缺口，增加了评估机械兜底的依据」）；U2 A/B 电池 B 臂与 golden 影响预告同步 1095 B；正文指纹按既有算法更新，sha 链前推 | oracle 裁决记录 bb://b59fa90c-2e81-4d1b-ab1f-b99b16e1c38c/d24fc770-a26f-4988-b36f-08b4dc449852/e000001 + 用户裁定（2026-09-26「走工件澄清」） |
 
 **v1.3.1 实施状态注记（2026-09-23）**：本文仍是已批准的目标形态，本段只登记实施现状，不改动任何设计契约。已实施：M0/M1（109 例）；G2 parent 补写协议（p-rep 10 例：docs/orchestrator/parent-repair-protocol.md、scripts/parent-repair-check.ts、test/parent-repair.test.ts）；聚合折叠与 G7/G8 修复（聚合计划 Task A–E，+31 例）。当前自动化基线 150（109 M0/M1 + 10 p-rep + 31 聚合），全量 150 pass / 0 fail（tsc clean）。未实施（原状态「设计保留、经用户 2026-09-23 裁定暂缓」）：nudge-restore 计划 Task 1/2 的分级提醒（strong/weak）、board_status、board_disposition（D1/D2/D3 已定案见 docs/plans/2026-09-23-blackboard-nudge-restore.md，541 行，sha256 4c718e50…，三轮复审 ready）。**[第四轮修订] 状态更新**：D1（board_disposition）/ D3（board_status、strong/weak 分级提醒，D2 reason 拆分随分级提醒同属其范围）已由 v1.4 **正式取代并搁置**（用户 2026-09-23 批准 advisory §4.6 判断后显式裁定）；该计划其余已交付部分（G2 parent 补写编排等）不受影响；「修订记录」节 sha256 注记行的字面歧义更正随该计划 Task 4 一并处理（暂缓）。
 
-sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938bfa3a4a621bed63ce94bd554ceb304e12ac78b11068e4471` → `e9f0dd8dbb9a44eadf7957552c42f2ce44419b53ee8b384f6d4e1331d1929c6c`（v1.7.0→v1.7.1 时点为 `5cc3610dccfd1938bfa3a4a621bed63ce94bd554ceb304e12ac78b11068e4471` → `e9f0dd8dbb9a44eadf7957552c42f2ce44419b53ee8b384f6d4e1331d1929c6c`；v1.6.7→v1.7.0 时点为 `a0f20bd42667b8b87fec282e8f9ebd38ecdb365771f341a8fac5aaa3ee4a2acd` → `5cc3610dccfd1938bfa3a4a621bed63ce94bd554ceb304e12ac78b11068e4471`（**[第七轮修订]（v1.7.1：复审修正）** M1 方向更正：旧为 a0f…、新为 5cc…，v1.7.0 行写反）；v1.6.6→v1.6.7 时点为 `90ee6af5d12bfb573fcc53758f4825d8337345f5975fd18c06e4a7cf9413cad1` → `a0f20bd42667b8b87fec282e8f9ebd38ecdb365771f341a8fac5aaa3ee4a2acd`；v1.6.5→v1.6.6 时点为 `125f61aed8d54ac0780788d7f55fca4ca078c2f37c5528a127e73beb2a81a755` → `90ee6af5d12bfb573fcc53758f4825d8337345f5975fd18c06e4a7cf9413cad1`；v1.6.4→v1.6.5 时点为 `71f69cd0e01be2a71470ab970532db7e5cb506dc8187db342fb1e869fab939e1` → `125f61aed8d54ac0780788d7f55fca4ca078c2f37c5528a127e73beb2a81a755`；v1.6.3→v1.6.4 时点为 `322bbc3b87d4b734d2727f41acbe702bdb12b80490bae922ef1f9d4ff243406a` → `71f69cd0e01be2a71470ab970532db7e5cb506dc8187db342fb1e869fab939e1`；v1.6.2→v1.6.3 时点为 `c5a571821aa8e357969a8bf02f9a16f9f917e4f4de4fd0e1e9c5c36c762cd510` → `322bbc3b87d4b734d2727f41acbe702bdb12b80490bae922ef1f9d4ff243406a`；v1.6.1→v1.6.2 时点为 `2ffcd8acb065a32d2d44f40a33b8bd4de5c52730073182678e9360954c1a9e22` → `c5a571821aa8e357969a8bf02f9a16f9f917e4f4de4fd0e1e9c5c36c762cd510`； `2ffcd8acb065a32d2d44f40a33b8bd4de5c52730073182678e9360954c1a9e22` → `c5a571821aa8e357969a8bf02f9a16f9f917e4f4de4fd0e1e9c5c36c762cd510`；v1.6.0→v1.6.1 时点为 `ec5e2d1e1504732810c919ec4bc29fd1754b98d07fb7aa973e7c836591b98685` → `2ffcd8acb065a32d2d44f40a33b8bd4de5c52730073182678e9360954c1a9e22`；v1.5.1→v1.6.0 时点为 `d460999d42528cbeb364b0de7c782cdaf128676eea2afbea15c02e25055ab24a` → `ec5e2d1e1504732810c919ec4bc29fd1754b98d07fb7aa973e7c836591b98685`；v1.5.0→v1.5.1 时点为 `dde86f92427a0b3c5c30a7507e39949760fe725744d25a311e8e311b8de7880e` → `d460999d42528cbeb364b0de7c782cdaf128676eea2afbea15c02e25055ab24a`；v1.4.9→v1.5.0 时点为 `405c513579272ac68d55ad879184027a61016c98ec9af79bea167d2808b7956f` → `dde86f92427a0b3c5c30a7507e39949760fe725744d25a311e8e311b8de7880e`；v1.4.8→v1.4.9 时点为 `ce5e9724b5d46a7a15edb1cc8d33d5b3fd5cc518b75bc4aeed8b905e93f3b19e` → `405c513579272ac68d55ad879184027a61016c98ec9af79bea167d2808b7956f`；v1.4.7→v1.4.8 时点为 `5025495e003120425d7e888ad8339d82284600d4056f68fdc83c75ed8e164bd8` → `ce5e9724b5d46a7a15edb1cc8d33d5b3fd5cc518b75bc4aeed8b905e93f3b19e`；v1.4.6→v1.4.7 时点为 `443cab12686cfc38a439fd49f8fde645f1c5a5972e21b3dcf5503213fa7a6f0e` → `5025495e003120425d7e888ad8339d82284600d4056f68fdc83c75ed8e164bd8`；v1.4.5→v1.4.6 时点为 `827ca27d89d60937d40f0af8baa18c359966cc71b3f2ff03926a52ab3ec16fec` → `443cab12686cfc38a439fd49f8fde645f1c5a5972e21b3dcf5503213fa7a6f0e`；v1.4.4→v1.4.5 时点为 `325747ef643317af011c744936da12760ee3a0518c8f21f155cfbe8a89b3b838` → `827ca27d89d60937d40f0af8baa18c359966cc71b3f2ff03926a52ab3ec16fec`；v1.4.2→v1.4.3 时点为 `ebb0b02f6d058fe4d511b8bf802ee8e26aa0cc30c1ebb7ce77d294aa16e0b8fc` → `6ab187adb2be45dadbf7d2cfb9b98aef13aa453c3bc3985436aac365204e4e1b`；v1.4.1→v1.4.2 时点为 `38b134f9ac7f19dca3d6a50911d0015a5be8b5a6754253004d64a69f084b7148` → `ebb0b02f6d058fe4d511b8bf802ee8e26aa0cc30c1ebb7ce77d294aa16e0b8fc`；v1.4 时点为 `d32a4a729ffa6efe963dd57862fb68dc603c70c9086ec6f941d6e4b75895e759` → `38b134f9…`；v1.1→v1.2 时点为 `b9d022f28c14f3f6d0b1688d8665b0cbdd89ff55405a5126aced144c899cd4bb` → `69701459…`；v1.3.1 注记不改动正文指纹）。复算法：精确删除「修订记录」节（自 `## 修订记录` 行起至本 sha256 行后一个空行止，整节连同前后空行一并移除），对余下全文（文档首行标题至最后一行）取 sha256 即得。交付文件整体 sha256 因含本行无法自嵌入，以交付回读为准（v1.1 = `80e2b3adcddb5d722d17fb7133c1f6e3edf30d73da31fc760871a3c5b3129843`；v1.2 = `b8d8fdcfe609f0b6bea770b90efc9cc3fef3d19ea9d7ff15d5b483b1b6fb9946`）。v1.3.1（2026-09-23，实施状态注记）仅改动本节内容、本节之外零字节变更，正文指纹维持 `6970145948ef04f7525b3f0027666312e3c2b510cf4b58e60e9d81e7c5c4da7a` 不变；v1.3.1 交付文件整体 sha256 以交付回读为准。v1.4（2026-09-23，第四轮设计修订）按同算法更新正文指纹为 `d32a4a729ffa6efe963dd57862fb68dc603c70c9086ec6f941d6e4b75895e759`，交付文件整体 sha256 以交付回读为准；v1.4.1（2026-09-23，第四轮复审收口）按同算法更新正文指纹为 `38b134f9ac7f19dca3d6a50911d0015a5be8b5a6754253004d64a69f084b7148`，交付文件整体 sha256 以交付回读为准；v1.4.2（2026-09-23，第四轮复审收口·二轮）按同算法更新正文指纹为 `ebb0b02f6d058fe4d511b8bf802ee8e26aa0cc30c1ebb7ce77d294aa16e0b8fc`，交付文件整体 sha256 以交付回读为准；v1.4.3（2026-09-23，第四轮复审收口·三轮）按同算法更新正文指纹为 `6ab187adb2be45dadbf7d2cfb9b98aef13aa453c3bc3985436aac365204e4e1b`，交付文件整体 sha256 以交付回读为准；v1.4.4（2026-09-23，第四轮补充修订）按同算法更新正文指纹为 `325747ef643317af011c744936da12760ee3a0518c8f21f155cfbe8a89b3b838`，交付文件整体 sha256 以交付回读为准；v1.4.5（2026-09-23，识别接受范围与产出渠道设计变更）按同算法更新正文指纹为 `827ca27d89d60937d40f0af8baa18c359966cc71b3f2ff03926a52ab3ec16fec`，交付文件整体 sha256 以交付回读为准；v1.4.6（2026-09-23，oracle 复审 v1.4.5 收口）按同算法更新正文指纹为 `443cab12686cfc38a439fd49f8fde645f1c5a5972e21b3dcf5503213fa7a6f0e`，交付文件整体 sha256 以交付回读为准；v1.4.7（2026-09-23，实施计划 T0 契约缺口补录）按同算法更新正文指纹为 `5025495e003120425d7e888ad8339d82284600d4056f68fdc83c75ed8e164bd8`，交付文件整体 sha256 以交付回读为准；v1.4.8（2026-09-23，实施计划 T7 §15① 观察口径完善）按同算法更新正文指纹为 `ce5e9724b5d46a7a15edb1cc8d33d5b3fd5cc518b75bc4aeed8b905e93f3b19e`，交付文件整体 sha256 以交付回读为准。
+sha256（正文指纹，排除修订记录节）旧 → 新：`52fac4a5f04bb5617a3fa26c8e5e4e11abc4b1f68af7e19d890989bcd0b541f3` → `7960692aa4ea9d5ebad71896e8b9c769ed67687a4314ff83479cc7473b2221a1`（v1.8.2→v1.8.3 时点为 `52fac4a5f04bb5617a3fa26c8e5e4e11abc4b1f68af7e19d890989bcd0b541f3` → `7960692aa4ea9d5ebad71896e8b9c769ed67687a4314ff83479cc7473b2221a1`；v1.8.1→v1.8.2 时点为 `300f152987a2ca274b45f747aa8ee1b4a538dc0a97fbc61a75ad15db9f4c0fdd` → `52fac4a5f04bb5617a3fa26c8e5e4e11abc4b1f68af7e19d890989bcd0b541f3`；v1.8.0→v1.8.1 时点为 `5bd60bf4597388a73e3432a1929d66ebdcfa6ec2aaf8f15707e354091892e0cd` → `300f152987a2ca274b45f747aa8ee1b4a538dc0a97fbc61a75ad15db9f4c0fdd`；v1.7.1→v1.8.0 时点为 `e9f0dd8dbb9a44eadf7957552c42f2ce44419b53ee8b384f6d4e1331d1929c6c` → `5bd60bf4597388a73e3432a1929d66ebdcfa6ec2aaf8f15707e354091892e0cd`；v1.7.0→v1.7.1 时点为 `5cc3610dccfd1938bfa3a4a621bed63ce94bd554ceb304e12ac78b11068e4471` → `e9f0dd8dbb9a44eadf7957552c42f2ce44419b53ee8b384f6d4e1331d1929c6c`；v1.6.7→v1.7.0 时点为 `a0f20bd42667b8b87fec282e8f9ebd38ecdb365771f341a8fac5aaa3ee4a2acd` → `5cc3610dccfd1938bfa3a4a621bed63ce94bd554ceb304e12ac78b11068e4471`（**[第七轮修订]（v1.7.1：复审修正）** M1 方向更正：旧为 a0f…、新为 5cc…，v1.7.0 行写反）；v1.6.6→v1.6.7 时点为 `90ee6af5d12bfb573fcc53758f4825d8337345f5975fd18c06e4a7cf9413cad1` → `a0f20bd42667b8b87fec282e8f9ebd38ecdb365771f341a8fac5aaa3ee4a2acd`；v1.6.5→v1.6.6 时点为 `125f61aed8d54ac0780788d7f55fca4ca078c2f37c5528a127e73beb2a81a755` → `90ee6af5d12bfb573fcc53758f4825d8337345f5975fd18c06e4a7cf9413cad1`；v1.6.4→v1.6.5 时点为 `71f69cd0e01be2a71470ab970532db7e5cb506dc8187db342fb1e869fab939e1` → `125f61aed8d54ac0780788d7f55fca4ca078c2f37c5528a127e73beb2a81a755`；v1.6.3→v1.6.4 时点为 `322bbc3b87d4b734d2727f41acbe702bdb12b80490bae922ef1f9d4ff243406a` → `71f69cd0e01be2a71470ab970532db7e5cb506dc8187db342fb1e869fab939e1`；v1.6.2→v1.6.3 时点为 `c5a571821aa8e357969a8bf02f9a16f9f917e4f4de4fd0e1e9c5c36c762cd510` → `322bbc3b87d4b734d2727f41acbe702bdb12b80490bae922ef1f9d4ff243406a`；v1.6.1→v1.6.2 时点为 `2ffcd8acb065a32d2d44f40a33b8bd4de5c52730073182678e9360954c1a9e22` → `c5a571821aa8e357969a8bf02f9a16f9f917e4f4de4fd0e1e9c5c36c762cd510`； `2ffcd8acb065a32d2d44f40a33b8bd4de5c52730073182678e9360954c1a9e22` → `c5a571821aa8e357969a8bf02f9a16f9f917e4f4de4fd0e1e9c5c36c762cd510`；v1.6.0→v1.6.1 时点为 `ec5e2d1e1504732810c919ec4bc29fd1754b98d07fb7aa973e7c836591b98685` → `2ffcd8acb065a32d2d44f40a33b8bd4de5c52730073182678e9360954c1a9e22`；v1.5.1→v1.6.0 时点为 `d460999d42528cbeb364b0de7c782cdaf128676eea2afbea15c02e25055ab24a` → `ec5e2d1e1504732810c919ec4bc29fd1754b98d07fb7aa973e7c836591b98685`；v1.5.0→v1.5.1 时点为 `dde86f92427a0b3c5c30a7507e39949760fe725744d25a311e8e311b8de7880e` → `d460999d42528cbeb364b0de7c782cdaf128676eea2afbea15c02e25055ab24a`；v1.4.9→v1.5.0 时点为 `405c513579272ac68d55ad879184027a61016c98ec9af79bea167d2808b7956f` → `dde86f92427a0b3c5c30a7507e39949760fe725744d25a311e8e311b8de7880e`；v1.4.8→v1.4.9 时点为 `ce5e9724b5d46a7a15edb1cc8d33d5b3fd5cc518b75bc4aeed8b905e93f3b19e` → `405c513579272ac68d55ad879184027a61016c98ec9af79bea167d2808b7956f`；v1.4.7→v1.4.8 时点为 `5025495e003120425d7e888ad8339d82284600d4056f68fdc83c75ed8e164bd8` → `ce5e9724b5d46a7a15edb1cc8d33d5b3fd5cc518b75bc4aeed8b905e93f3b19e`；v1.4.6→v1.4.7 时点为 `443cab12686cfc38a439fd49f8fde645f1c5a5972e21b3dcf5503213fa7a6f0e` → `5025495e003120425d7e888ad8339d82284600d4056f68fdc83c75ed8e164bd8`；v1.4.5→v1.4.6 时点为 `827ca27d89d60937d40f0af8baa18c359966cc71b3f2ff03926a52ab3ec16fec` → `443cab12686cfc38a439fd49f8fde645f1c5a5972e21b3dcf5503213fa7a6f0e`；v1.4.4→v1.4.5 时点为 `325747ef643317af011c744936da12760ee3a0518c8f21f155cfbe8a89b3b838` → `827ca27d89d60937d40f0af8baa18c359966cc71b3f2ff03926a52ab3ec16fec`；v1.4.2→v1.4.3 时点为 `ebb0b02f6d058fe4d511b8bf802ee8e26aa0cc30c1ebb7ce77d294aa16e0b8fc` → `6ab187adb2be45dadbf7d2cfb9b98aef13aa453c3bc3985436aac365204e4e1b`；v1.4.1→v1.4.2 时点为 `38b134f9ac7f19dca3d6a50911d0015a5be8b5a6754253004d64a69f084b7148` → `ebb0b02f6d058fe4d511b8bf802ee8e26aa0cc30c1ebb7ce77d294aa16e0b8fc`；v1.4 时点为 `d32a4a729ffa6efe963dd57862fb68dc603c70c9086ec6f941d6e4b75895e759` → `38b134f9…`；v1.1→v1.2 时点为 `b9d022f28c14f3f6d0b1688d8665b0cbdd89ff55405a5126aced144c899cd4bb` → `69701459…`；v1.3.1 注记不改动正文指纹）。复算法：精确删除「修订记录」节（自 `## 修订记录` 行起至本 sha256 行后一个空行止，整节连同前后空行一并移除），对余下全文（文档首行标题至最后一行）取 sha256 即得。交付文件整体 sha256 因含本行无法自嵌入，以交付回读为准（v1.1 = `80e2b3adcddb5d722d17fb7133c1f6e3edf30d73da31fc760871a3c5b3129843`；v1.2 = `b8d8fdcfe609f0b6bea770b90efc9cc3fef3d19ea9d7ff15d5b483b1b6fb9946`）。v1.3.1（2026-09-23，实施状态注记）仅改动本节内容、本节之外零字节变更，正文指纹维持 `6970145948ef04f7525b3f0027666312e3c2b510cf4b58e60e9d81e7c5c4da7a` 不变；v1.3.1 交付文件整体 sha256 以交付回读为准。v1.4（2026-09-23，第四轮设计修订）按同算法更新正文指纹为 `d32a4a729ffa6efe963dd57862fb68dc603c70c9086ec6f941d6e4b75895e759`，交付文件整体 sha256 以交付回读为准；v1.4.1（2026-09-23，第四轮复审收口）按同算法更新正文指纹为 `38b134f9ac7f19dca3d6a50911d0015a5be8b5a6754253004d64a69f084b7148`，交付文件整体 sha256 以交付回读为准；v1.4.2（2026-09-23，第四轮复审收口·二轮）按同算法更新正文指纹为 `ebb0b02f6d058fe4d511b8bf802ee8e26aa0cc30c1ebb7ce77d294aa16e0b8fc`，交付文件整体 sha256 以交付回读为准；v1.4.3（2026-09-23，第四轮复审收口·三轮）按同算法更新正文指纹为 `6ab187adb2be45dadbf7d2cfb9b98aef13aa453c3bc3985436aac365204e4e1b`，交付文件整体 sha256 以交付回读为准；v1.4.4（2026-09-23，第四轮补充修订）按同算法更新正文指纹为 `325747ef643317af011c744936da12760ee3a0518c8f21f155cfbe8a89b3b838`，交付文件整体 sha256 以交付回读为准；v1.4.5（2026-09-23，识别接受范围与产出渠道设计变更）按同算法更新正文指纹为 `827ca27d89d60937d40f0af8baa18c359966cc71b3f2ff03926a52ab3ec16fec`，交付文件整体 sha256 以交付回读为准；v1.4.6（2026-09-23，oracle 复审 v1.4.5 收口）按同算法更新正文指纹为 `443cab12686cfc38a439fd49f8fde645f1c5a5972e21b3dcf5503213fa7a6f0e`，交付文件整体 sha256 以交付回读为准；v1.4.7（2026-09-23，实施计划 T0 契约缺口补录）按同算法更新正文指纹为 `5025495e003120425d7e888ad8339d82284600d4056f68fdc83c75ed8e164bd8`，交付文件整体 sha256 以交付回读为准；v1.4.8（2026-09-23，实施计划 T7 §15① 观察口径完善）按同算法更新正文指纹为 `ce5e9724b5d46a7a15edb1cc8d33d5b3fd5cc518b75bc4aeed8b905e93f3b19e`，交付文件整体 sha256 以交付回读为准。
 
 跨 agent 黑板是一套跨 agent 的信息共享机制：由原作者在工具侧发布不可变、自包含的知识记录，配套每会话目录、目录级有损聚合与有预算的 nudge 提醒，以及由工具描述、委派协议与事件驱动提醒构成的认知注入，使 parent 与 child 之间传递的信息不再依赖模型转述。
 
@@ -71,6 +75,7 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 - **[第四轮修订]** 认知注入：agent 通过极小常驻认知（工具 description，见 11.6）自主判断何时读写黑板，不以每轮广播或强制声明为机制。**[第六轮修订]（信号退役）** 认知主体是工具 description 内的**完整决策规则**（11.6）；按需事件提醒仅保留目录压力信号（§10），关键词触发入口提醒已退役（§1 已否决表、10.7）。设计目标聚焦**决策规则覆盖 + 来源交付正确性**——提醒命中不再作为价值证明。
 - **[第四轮修订]** 交接保真：重要信息由**来源方**发布、委派传**引用**而非转述、接收者读**原文**而非摘要（委派协议见 11.8）。
 - **[第五轮修订]（C+D′）** 来源交付：把「该不该用黑板」从 orchestrator 凭直觉判断改为**边界驱动的交付职责**——在**明确交付**（评审结论）与**再次交接**（结果转交下一 agent）两类边界，由**来源方**交付可持久引用的结果，orchestrator 负责路由与检查，接收者负责核对；已有合格来源不重复写板（「合格来源」四要件与边界 R/H 定义见 11.8）。
+- **[第八轮修订]（U2）** 检索结构定位与终结交付：本设计价值主轴是**作者在结束前产出的结构化交付**与 **scope 内统一可检索的来源**，不是会话原文副本；`stream` 首先是来源 / 顺序的组织分区，`scope` 首先是协作问题域与检索范围——检索能力可跨授权 streams（11.3，契约先行），目录 + 聚合是检索成本控制；身份与权限是约束而非产品本体（权限事实不变：普通流同 scope 可互读、isolated 流本人可见、写仍仅 own stream）。上一条「已有合格来源不重复写板」自本版起分化：**board 记录复用不变；外部合格报告改为创建简短 board 索引交付（不复制全文）**——v1.8.0 有意变更，见 11.8。
 
 ### 0.3 关键约束
 
@@ -121,6 +126,7 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 - **[第四轮修订]** 不做每轮强制"写入或声明"处置状态机。
 - **[第四轮修订]** 不新增认知教学类工具（board_status / board_disposition 型）与独立认知服务。
 - **[第四轮修订]** 不自动全文归档。
+- **[第八轮修订]（U2）** 上条保留；若未来启用**机械原文兜底**（raw capture，§14.4「后继检索路线与扩围门禁」阶段 3，须另行批准立项），其归档例外仅限**已终结工作单元的接收原文**（可信封套标注 raw-only 降级形态，不冒充作者结构化交付），且不构成全 task 完整回执。
 
 已否决的替代方案（各附一句原因）：
 
@@ -144,6 +150,8 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 
 聚合只作用于导航层；知识层原消息在任何操作下保持原样。
 
+**[第八轮修订]（U2）检索结构定位**：知识层的价值在于**可检索的结构化交付**——每个任务终结件（T 边界，11.8）在 board 检索结构中有一个可检索目录项 / 交付记录（publish or reuse），而不只是一个消息 ID 或文件指针；scope 是一次结构化检索的范围，stream 是作者归属与顺序分区；跨流检索属查询层能力，不要求任何写入集中（作者仍写 own stream）。
+
 ## 3. 存储布局与 scope/stream 语义
 
 目录树（示意）：
@@ -160,6 +168,7 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 - session 结束、归档或删除**不自动删除 stream**。"整个会话为生命周期"指内容组织与索引范围，不是物理保留期限；清理是独立的显式策略，不由"做过聚合"触发。
 - 重启或插件升级**不得用新编号覆盖旧编号**。
 - **[第一轮修订] scope 归因实现**：子会话经 SDK `session.get` 的 `parentID` 链（上限 32 跳）回溯至根 session 归入父 scope，查询失败即隔离（宁隔离不串流）；每个 host session 各自独立 stream。L2 实测：子会话归入父 scope `6a109e…`，下辖 2 个分离 stream（父 / 子各自），`scope-index.json` 记录根 session → scope 映射（harness/acceptance/results.md M0-2；src/plugin.ts:55–78）。
+- **[第八轮修订]（U2）scope/stream 语义澄清**：stream = 作者 / 序列分区；scope = 协作问题域与检索范围。检索能力可跨 scope 内**授权** streams（11.3 检索扩展，契约先行、实现属后继轮），**不等同隐私边界、更不改变写授权**——写仍仅 own stream（隔离流本人可见的既有权限事实不变）；不因集中检索要求任何 agent 写父流或集中流。
 
 ## 4. 消息 schema
 
@@ -174,7 +183,7 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 
 **hash 约定**：hash 由工具计算并随引用携带；记录**不得自指哈希**。hash 的对象是记录创建时固定的**不可变字节**（工具分配标识、`writer`、`created_at`/`created_round`、`description`、`content` 及全部可选语义字段）；可变导航投影（`covered_by`、`superseded_by` 等聚合/修正标注）与响应注解不属于 hash 对象——导航状态变化不改变已公布的 hash，成员引用校验（8.3 / 8.5 / 8.7）以此为准。
 
-**[第五轮修订]（kind 冻结）kind 冻结政策**：`kind` 是**行为判别器**，不是知识分类学——仅当候选 kind 在至少一个机械维度上与现有 kind **行为不同**时才有进入 enum 的价值。五个机械维度：①`board_index` 过滤语义；②聚合资格与生命周期；③权限规则；④提醒行为；⑤导航边（`covered_by` / `superseded_by` 等）语义。**准入判据**：候选 kind 须在 ≥1 个机械维度上与现有 kind 行为不同方可进 enum；否则用 `description` / keyword 表达差异，不新增 kind；每次扩充按**契约变更**处理——复审 + 穷尽测试，并论证现有 kind + description 无法表达；不确定时回落 `note`。**[第五轮修订]（复审修正，M2）** 仅增加一个可等值筛选的标签、不改变既有过滤规则，不算独立行为差异；申请须给出至少一个可观察的输入—输出或允许—拒绝差异及对应测试。**[第五轮修订]（复审修正，I2）** **现状声明**：当前 enum 保留六个历史取值，不因本准入政策追溯删减；普通知识记录使用前五种（`note` / `finding` / `change` / `review` / `decision`），`index_summary` 在语义上保留给聚合（具独立行为：永久 protected + 单独计数）；当前 `board_put` 尚未机械禁止该值，不将「仅聚合产生」表述为已实现现状——若将来要禁止普通 put 写 `index_summary`，须显式列新增行为约束 + 兼容处理 + 拒绝验收（不在本轮夹带）。来源交付框架（11.8 边界 R/H）不新增 kind——评审交付用 `review`，再次交接用 `source_refs` 表达。
+**[第五轮修订]（kind 冻结）kind 冻结政策**：`kind` 是**行为判别器**，不是知识分类学——仅当候选 kind 在至少一个机械维度上与现有 kind **行为不同**时才有进入 enum 的价值。五个机械维度：①`board_index` 过滤语义；②聚合资格与生命周期；③权限规则；④提醒行为；⑤导航边（`covered_by` / `superseded_by` 等）语义。**准入判据**：候选 kind 须在 ≥1 个机械维度上与现有 kind 行为不同方可进 enum；否则用 `description` / keyword 表达差异，不新增 kind；每次扩充按**契约变更**处理——复审 + 穷尽测试，并论证现有 kind + description 无法表达；不确定时回落 `note`。**[第五轮修订]（复审修正，M2）** 仅增加一个可等值筛选的标签、不改变既有过滤规则，不算独立行为差异；申请须给出至少一个可观察的输入—输出或允许—拒绝差异及对应测试。**[第五轮修订]（复审修正，I2）** **现状声明**：当前 enum 保留六个历史取值，不因本准入政策追溯删减；普通知识记录使用前五种（`note` / `finding` / `change` / `review` / `decision`），`index_summary` 在语义上保留给聚合（具独立行为：永久 protected + 单独计数）；当前 `board_put` 尚未机械禁止该值，不将「仅聚合产生」表述为已实现现状——若将来要禁止普通 put 写 `index_summary`，须显式列新增行为约束 + 兼容处理 + 拒绝验收（不在本轮夹带）。来源交付框架（11.8 边界 R/H）不新增 kind——评审交付用 `review`，再次交接用 `source_refs` 表达。**[第八轮修订]（U2）** 终结交付不新增 kind：作者结构化交付按内容性质用既有六值（评审 `review`、决定 `decision`、一般交付 `note`/`finding`/`change`）；机械原文兜底初期同样 `kind=note`，description 固定注明「原文兜底」降级形态并包含委派对象 / 状态。若实现 capture **可信封套字段**（collector、originating child、调用 / 执行关联、采集点 / 状态），属后继轮——由宿主填写、普通 `board_put` 不得冒填，须覆盖 record 字节域、幂等、旧记录兼容与拒绝伪造测试；当前 schema 无该字段（src/schema.ts 现状），索引从封套呈现「agent-submitted / auto-captured」来源形态，且不把 agent-submitted 自动标成 verified。
 
 ## 5. 稳定 ID
 
@@ -198,6 +207,7 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 
 - 明确**不采用 latest-wins**。
 - 首版不开放任意物理删除；撤回通过写新控制记录表达。隐私 / retention 删除保留最小 tombstone 与原 ID，`board_get` 返回 unavailable/deleted；**ID 不重定向到聚合摘要**。
+- **[第八轮修订]（U2）原作者补写降级**：场景③的「请求原作者补写」从主恢复路径降为**有条件机会**（10.5）——缺来源时先找既有合格源，确无来源或原作者不可用时报缺口（必要时保留 raw 兜底，后继轮）；新作者整理既有来源以 `related` 指向原记录并标明整理者身份，不篡改原记录、不跨 stream `supersedes`、不伪称原作者。幂等仍按**已证明的执行 / 提交身份**判定，不按文本相似度或随机键。
 
 **幂等同一性规则**：
 
@@ -205,6 +215,7 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 - 参与比较的是调用方提交的**完整不可变载荷**：`description`、`content`、`kind`、`source_refs[]`、`related[]`、`supersedes[]`、`publication_for`；工具新分配的元数据（`id`、`sequence`、`created_at`、`created_round`、`writer`、hash 与导航投影）不参与比较。
 - 同一性按精确字节相等判定：精确重试返回既有 ID，不替换、不产生新记录；同键下任一不可变字段不同（例如仅改 `description` 或 `source_refs`）→ 显式冲突，绝不静默返回语义不同的记录。
 - **[第一轮修订] 幂等边界**：本节同一性规则只作用于记录载荷。准入层另有独立幂等：同一 admitted messageId 重入不推进轮次（applyInput 原样返回），身份恢复时同一 writeMeta 同时置 budget 与 rounds 两处 `round_known=true`（详见 §10.3；src/rounds.ts:39–46、src/plugin.ts:171–180）。
+- **[第八轮修订]（v1.8.1：复审修正）幂等与来源复用分层**：①**提交 / capture 事件幂等**——上方规则只作用于**已证明的执行 / 提交事件**：同键同载荷的精确重试返回既有 ID；**不同执行**即使正文相同也**不因文本相似合并**（各自成记录）；同已证明事件的精确重放复用其键，不冒充新事件。②**U2 来源交付复用**（11.8 T 的 publish-or-reuse）——新任务结果与既有合格来源对象 / 版本 / 范围一致且经核验后，可**显式复用**同一份来源（返回其 ID），不要求每次调用另造同义报告。三例：同调用重试（同键同载荷）→ 同一 ID；两个不同执行产出相同正文 → 两条记录不合并（未来 capture 事件同理，封套字段属后继轮，§4）；新任务与既有合格来源适用性一致 → 显式复用其 ID、不重复发布。当前描述合同不自动恢复未知执行身份（§10.3 保守语义）。
 
 ## 7. 必填 description（目录而非证据）
 
@@ -215,6 +226,8 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 **质量指引**：description 写"对象/问题 + 关键结果或状态 + 范围限制"。
 
 **定位警告**：description 可能过时、片面、与正文不一致。它**只能用于**决定是否展开正文、目录检索、交接提示；**不能用于**判定证据满足或任务完成。修正描述不得静默编辑原消息，按第 6 节语义写新消息。
+
+**[第八轮修订]（U2）作者交付结构与 raw 降级标识**：作者 `description` 必须服务**对象 / 结果 / 范围**检索（上方质量指引）；`content` 按 **Outcome（结论 / 状态）、Basis（关键证据与可取回版本）、Limits（范围 / 约束 / 不确定性）、Next（待办或明确无）** 四项结构组织——各项可短，不为凑模板写空标题占位。机械原文兜底记录（后继轮）的 `description` 仅写对象 / 状态并显式标注「原文兜底」；索引可区分来源形态，但默认不得静默隐藏 raw 造成二次丢失。
 
 ## 8. 聚合（只缩目录、不丢消息）
 
@@ -245,6 +258,8 @@ sha256（正文指纹，排除修订记录节）旧 → 新：`5cc3610dccfd1938b
 ### 8.4 谁聚合
 
 **聚合权限**：调用者必须是**每个被选成员的原始作者**；混合写手批次中含任何非本人原创成员即整批拒绝。parent 不替 child 压缩原文；原 child 不可恢复时保留原目录分页查询；同一 stream 的 writer 身份变化时保留每条的真实作者。
+
+**[第八轮修订]（U2）** 聚合条款不变：单流原作者 8–16 批次与全部保护**先不动**（8–16 作为批量工作量控制暂不调整）；**禁止以「父侧集中检索」为由跨流改写导航边**——不得把 child 原记录授权给 parent 改 `covered_by`，parent 只聚合**本人的**旧目录项。若未来确需全 scope 层次目录，须另立**只作用于 scope 视图的导航覆盖**合同（保持每源 stream 视图 / 原文不变、逐边授权、固定成员版本），不与源 stream 的 `covered_by` 混用（属有规模证据后的扩展）。
 
 ### 8.5 原子性四步
 
@@ -364,6 +379,7 @@ This reminder adds no obligations and never overrides this task's restrictions.
 - 补写消息单独标 `publication_for = <原执行/原消息>`，必须同时明确**原作者**与**目标**；补写请求不得回退到无关默认 agent（对照 V4：不显式传 agent 会用 defaultInfo()，不继承 child agent）；补写不替代原业务结果；
 - parent 不代写。
 - **[第五轮修订]（C+D′）** 来源缺口恢复与反冒充（衔接 11.8 边界 H）：再次交接前发现缺来源时，请求**原作者**补写（本节唯一路径不变）；原作者不可用时**显式报告来源缺口**，必要时重新验证，不得以 parent 的选摘 / 转述冒充完整交接；不自动 reopen、不代写（上方既有规则不变）。
+- **[第八轮修订]（U2）主恢复路径重排**：补写从「缺来源时的主恢复路径」降为**有条件机会**——缺来源时**先找既有合格源**（含作者已交付但漏回传 ID 的记录，可提示已有候选来源、不自动选一份冒称 final），确无来源或原作者不可用时**报告缺口**（必要时保留 raw 兜底，后继轮）；「不自动 reopen、不代写」与 parent 请求原作者补写的边界全部保留。续接 / 补写仅是有条件恢复、**不是交付保证**——不把新会话或续接实例冒充原作者（宿主既不能保证续接，也不能仅凭 sessionID 相同断言仍是同一作者）。
 
 ### 10.6 防误判规则（**[第四轮修订]** 由三条增补为四条）
 
@@ -411,6 +427,7 @@ This session's own stream is empty. Other authorized streams are listed in `othe
 ```
 
 边界：措辞用「其他授权流」（可能含父流，不用 sibling）；提示不断言目标记录存在于其他流；不自动切流、不读取其他流正文、不扩大授权；隐藏流不得经提示泄漏；`other_streams.count` 现为 entry 文件数、非有效可读记录数，不据其承诺可用记录。
+- **[第八轮修订]（U2）检索能力扩展（契约先行——实现与验收属后继轮，现实现仍为 description 单流 substring 匹配，src/indexing.ts 现状）**：`board_index` 规划新增参数（参数名属草案）：`search_in: description | content | both`（默认 `description` 保持兼容；仅 `keyword` 触发内容匹配）与 `search_scope: stream | scope`（默认 `stream`；`scope` 只搜索当前 scope 内**调用者已授权**的流，与显式 `stream` 参数冲突应拒绝，不接受任意 scopeID 绕权限）。跨流检索要求：**有限目录输出 + cursor 分页**（查询条件 / 权限 / 排序纳入 cursor 约束，每页按当前权限重新过滤，权限变化不得泄漏旧页隐藏项，不复用旧单流 sequence cursor 跨多流）；命中返回目录项与受限片段（片段标非证据，命中仍须 `board_get` 取原文）；**covered 穿透（[第八轮修订]（v1.8.1：复审修正））**：所选 `search_in` 命中的原 description **或 content**，在 compact 视图下均可穿透 covered——命中返回原目录项并附 `covered_by` 提示（聚合摘要正文不当完整证据；授权、输出上限与片段非证据限定不变——否则未聚合时可搜到的正文约束会在目录折叠后消失）。`other_streams` 需有界输出 / 分页或按相关查询代替全列表。实现先复用读取 JSON 后的字面大小写不敏感匹配；语义相似召回不属 literal 搜索的新保证；全文 / 跨流的 recall 与 p95 负载验收见 §14.4「后继检索路线与扩围门禁」阶段 2（后继轮）。
 - **最小权限规则**：读（`get`）/ 列（`index`）/ 写（`put`）/ 聚合（`aggregate`）分别独立校验；权限同时作用于**目录元数据与派生引用**——未授权记录连 description、计数、聚合摘要等元数据都不可见，`bb://` 引用对无权限调用者不可解析；scope 成员资格本身不隐含可见独立席（councillor）的独立工作流。**[第一轮修订] 拒绝语义实测**：跨 scope 读取返回 `status:"forbidden"` + 数据声明行、内容零泄漏（L6，harness/acceptance/results.md M0-9）。**[第二轮修订] 返回值订正**：实现没有 `unknown` 返回值。实际为——`board_put` 引用指向隐藏目标时返回 `rejected: unknown_ref <id>`（src/tools.ts:94–98）；未注册调用者一律 `rejected: unregistered_session`（src/tools.ts:142–143）；`board_get` 读取隐藏目标返回 `status:"not_found"`（src/tools.ts:154–157），跨 scope 返回 `status:"forbidden"`（src/tools.ts:152–153）。**[第三轮修订] I6 收口**：「掩码后逐字节一致」仅指同 scope 隐藏目标与不存在目标二者的 `status:"not_found"` 回应彼此逐字节一致（acc-m0-9 类掩码断言）；`rejected: unregistered_session` 与跨 scope 的 `status:"forbidden"` 不与不存在记录同形；不再沿用报告 M1-11 的宽泛措辞作为工具契约。
 
 ### 11.4 旧 ID 语义
@@ -429,33 +446,19 @@ This session's own stream is empty. Other authorized streams are listed in `othe
 
 ### 11.6 工具描述认知契约 **[第四轮修订]**
 
-工具 description 升格为设计契约：它是 agent 的**极小常驻认知**入口，须回答"为什么、何时做"，而不只"能做什么"（现状：src/plugin.ts:145–151 注册的四工具 description 仍为单句功能说明，本节文案为实施目标）。**[第六轮修订]（信号退役）** 自本版起，`board_put` / `board_get` / `task` 三段为**全新决策规则文案**（下方代码块即实施 golden 源，实现轮据此同步 src/constants.ts、测试 golden 并重算契约字节）；入口提醒与规范句触发器退役后，决策规则**完整常驻**于工具描述——不再存在「描述给认知、提醒给触发」的分工。历史沿革：advisory §4.2 逐字关系（v1.4.6，docs/oracle-advisory-2026-09-23-cognition-injection.md，freeze）经 v1.5.0（C+D′ 改写）/ v1.5.1（M3 锚点定义）演化，至本版由全新文案取代；`board_index` 段不变（v1.4.9 Q1 微调版，非逐字；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 起该段追加缺来源处理分支，首句不变，代码块即实施 golden 源）；`board_aggregate` 不在本节文案契约内（聚合属维护性功能，见 §8）。**[第六轮修订·复审修正]（M3）** 实现轮 golden 校正：plugin.test.ts:674/677 是引用 `TASK_DESC_APPEND` 常量的**联动断言**（非独立文案 golden），更新常量后自动通过、不需改硬编码；旧规范句包含断言（test/constants.test.ts:67–69）、规范句单源检查与入口模板断言**随退役退出契约**；§10.2 废弃保留的历史入口模板代码块**不得被 golden 当现行契约比较**——实现轮 golden 须按「现行契约块」标记（本节 `board_put` / `board_get` / `task` 三个代码块）提取，废弃块仅作历史对照；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 起 `board_index` 代码块同为现行契约块（**[第六轮修订]（方案 E：复审修正）（M2）** 沿革澄清：`board_index` golden 为修改既有契约检查以同步新文案，非首次建立；现行契约块共四个，一并提取）。**[第六轮修订·收尾同步]（N2）** 提取范围澄清：本轮更新三段描述；既有 `board_index` 与压力模板的现行契约检查继续保留。仅入口模板和规范句检测协议的相关断言退出。
+工具 description 升格为设计契约：它是 agent 的**极小常驻认知**入口，须回答"为什么、何时做"，而不只"能做什么"（现状：src/plugin.ts:145–151 注册的四工具 description 仍为单句功能说明，本节文案为实施目标）。**[第六轮修订]（信号退役）** 自本版起，`board_put` / `board_get` / `task` 三段为**全新决策规则文案**（下方代码块即实施 golden 源，实现轮据此同步 src/constants.ts、测试 golden 并重算契约字节）；入口提醒与规范句触发器退役后，决策规则**完整常驻**于工具描述——不再存在「描述给认知、提醒给触发」的分工。历史沿革：advisory §4.2 逐字关系（v1.4.6，docs/oracle-advisory-2026-09-23-cognition-injection.md，freeze）经 v1.5.0（C+D′ 改写）/ v1.5.1（M3 锚点定义）演化，至本版由全新文案取代；`board_index` 段不变（v1.4.9 Q1 微调版，非逐字；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 起该段追加缺来源处理分支，首句不变，代码块即实施 golden 源）；`board_aggregate` 不在本节文案契约内（聚合属维护性功能，见 §8）。**[第六轮修订·复审修正]（M3）** 实现轮 golden 校正：plugin.test.ts:674/677 是引用 `TASK_DESC_APPEND` 常量的**联动断言**（非独立文案 golden），更新常量后自动通过、不需改硬编码；旧规范句包含断言（test/constants.test.ts:67–69）、规范句单源检查与入口模板断言**随退役退出契约**；§10.2 废弃保留的历史入口模板代码块**不得被 golden 当现行契约比较**——实现轮 golden 须按「现行契约块」标记（本节 `board_put` / `board_get` / `task` 三个代码块）提取，废弃块仅作历史对照；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 起 `board_index` 代码块同为现行契约块（**[第六轮修订]（方案 E：复审修正）（M2）** 沿革澄清：`board_index` golden 为修改既有契约检查以同步新文案，非首次建立；现行契约块共四个，一并提取）。**[第六轮修订·收尾同步]（N2）** 提取范围澄清：本轮更新三段描述；既有 `board_index` 与压力模板的现行契约检查继续保留。仅入口模板和规范句检测协议的相关断言退出。**[第八轮修订]（U2）** `board_put` 与 `task` 两块由 **U2 无条件作者交付文案整体取代**（下方两代码块即实施 golden 源，实现轮据此同步 src/constants.ts 与测试 golden：board_put 1323→1010 B、TASK_DESC_APPEND 1355→867 B，不含末尾 LF 口径）；`board_get` / `board_index` 两块**本轮不动**——A/B 文案实验两臂只差这两段（A=现文、B=U2，变量控制，§14.4 U2 验收）。
 
-**`board_put`**（**[第六轮修订]（信号退役）** 全新决策规则文案；**[第六轮修订·复审修正]（I2）** 补全生产者职责分发；**[第六轮修订·复审修正]（I1）** 末句支持两种引用形式。实测 1156 B（含末尾 LF；golden 提取用不含 LF 口径 1155 B）——单工具 ≤700 B 为建议口径，R 边界（含用户直接单独请求、「未发现问题」版本绑定）、合格来源四要件、生产者职责补全与最终答复引用交付均为必需项，按实际分发文本测量；**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** R 边界扩至「产物或提案」并新增工件引用版本锚定句后实测 1292 B（含末尾 LF；golden 提取用不含 LF 口径 1291 B）；**[第七轮修订]（v1.6.7：no-issues 分支文案）** no-issues 分支句替换（旧片段 148 B → 新片段 180 B，净增 +32 B）后实测 1324 B（含末尾 LF；golden 提取用不含 LF 口径 1323 B））
+**`board_put`**（**[第六轮修订]（信号退役）** 全新决策规则文案；**[第六轮修订·复审修正]（I2）** 补全生产者职责分发；**[第六轮修订·复审修正]（I1）** 末句支持两种引用形式。实测 1156 B（含末尾 LF；golden 提取用不含 LF 口径 1155 B）——单工具 ≤700 B 为建议口径，R 边界（含用户直接单独请求、「未发现问题」版本绑定）、合格来源四要件、生产者职责补全与最终答复引用交付均为必需项，按实际分发文本测量；**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** R 边界扩至「产物或提案」并新增工件引用版本锚定句后实测 1292 B（含末尾 LF；golden 提取用不含 LF 口径 1291 B）；**[第七轮修订]（v1.6.7：no-issues 分支文案）** no-issues 分支句替换（旧片段 148 B → 新片段 180 B，净增 +32 B）后实测 1324 B（含末尾 LF；golden 提取用不含 LF 口径 1323 B）；**[第八轮修订]（U2）** 整体替换为无条件作者交付文案后实测 **1010 B**（末尾无 LF；含末尾 LF 口径 1011 B），SHA256=`25c05aa48a4706ee6be45ccdd4c34e2ed769c05d26f851f5a7c897e2ce2eaaf6`；**[第八轮修订]（v1.8.3：工件索引澄清）** 工件索引单行替换（旧「Pin artifact references…」与「Index existing qualified reports…」连续两行整体替换为裁决候选单行，旧两行含内部 LF 215 B → 新单行 300 B，净 +85 B）后实测 **1095 B**（末尾无 LF；含末尾 LF 口径 1096 B），SHA256=`99e426a610b5517170da9be95d777e89b59423394d0eb854bd3696493df1e8ac`）
 
 ```text
-Preserve source-grounded requirements, decisions, findings, and review
-results with their exact constraints—not routine progress; separate user
-quotes from interpretation; reuse existing records. Beyond required
-deliveries, save only information that is reusable or valuable if context is
-lost.
-When a task asks you to review an artifact or proposal—even standalone requests—your
-verdict is a deliverable: publish it bound to the reviewed scope and version.
+Before returning any task result, publish or reuse one board handoff for that result.
 An "adequate" or "no issues" verdict still needs publication.
-For new review records, use kind=review.
-A qualified source holds relied-on conclusions and qualifications, is
-retrievable at an exact version, and readable with the receiver's tools and
-permissions; a reference string alone proves nothing.
-Pin artifact references to retrievable revisions (e.g. path at a commit or
-retained snapshot plus hash), not mutable paths.
-Cite an existing
-qualified source instead of duplicating; publication restrictions always win.
-Before your result is handed onward, provide a qualified source. Respect
-task/tool/publication restrictions, and report any source-delivery gap
-explicitly instead of claiming success.
-In your final reply, include full bb:// IDs for successfully published or
-reused board records, or exact versioned references to other qualified
-sources.
+Describe the object, outcome and scope for discovery. In content state Outcome, Basis, Limits and Next; retain exact constraints and separate user quotes from interpretation.
+Use kind=review for reviews; bind the reviewed artifact or proposal to a retrievable version.
+A qualified source contains conclusions and qualifications at a retrievable exact version, readable with the receiver's tools and permissions; a reference string alone proves nothing.
+For artifact-backed results, including code/file changes and existing qualified reports, use a short board index: summarize the result and pin artifact references to retrievable revisions (path at a commit or retained snapshot plus hash), without copying artifact bodies. Do not log routine progress.
+Task, tool and publication restrictions take precedence; report gaps instead of claiming delivery.
+End with full bb:// IDs of stored or reused handoffs and exact references to external sources.
 ```
 
 **`board_get`**（**[第六轮修订]（信号退役）** 全新决策规则文案，实测 362 B）
@@ -478,35 +481,23 @@ streams by keyword or ask the delegator. A miss is not proof of absence:
 report gaps, do not guess. Avoid speculative searches for extra dependencies.
 ```
 
-**`task`（宿主委派工具；**[第六轮修订]（信号退役）** 全新决策规则文案；**[第六轮修订·复审修正]（I1/I2）** 路由句支持两种引用形式、补写句带允许条件与缺口出口。实测 997 B（含末尾 LF；golden 提取用不含 LF 口径 996 B）；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 追加依赖路由句后实测 1215 B（含末尾 LF；不含 LF 口径 1214 B）；**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 评审要求句扩至产物或提案并替换恢复段（检查时点=评审返回+再交接）后实测 1356 B（含末尾 LF；不含 LF 口径 1355 B））**
+**`task`（宿主委派工具；**[第六轮修订]（信号退役）** 全新决策规则文案；**[第六轮修订·复审修正]（I1/I2）** 路由句支持两种引用形式、补写句带允许条件与缺口出口。实测 997 B（含末尾 LF；golden 提取用不含 LF 口径 996 B）；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 追加依赖路由句后实测 1215 B（含末尾 LF；不含 LF 口径 1214 B）；**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 评审要求句扩至产物或提案并替换恢复段（检查时点=评审返回+再交接）后实测 1356 B（含末尾 LF；不含 LF 口径 1355 B）；**[第八轮修订]（U2）** 整体替换后实测 **867 B**（末尾无 LF；含末尾 LF 口径 868 B），SHA256=`a4fcd5ab99ed836a46ea6531debeb488c70bf438031b441c28c45c055f28c63e`）**
 
 ```text
-When delegating work that will be handed off or reviewed, pass original
-constraints, selected board IDs with their purpose, and artifact versions.
-When follow-on work is governed by earlier requirements, decisions, or review
-findings, pass their qualified source references as task inputs too—an
-artifact path alone does not carry the constraints that govern it.
-Do not replace source-authored findings with your paraphrase; ask for IDs of
-reusable results on return. A qualified source holds relied-on conclusions
-and qualifications, is retrievable at an exact version, and is readable by
-the receiver; require it for artifact or proposal reviews without confusing
-file-edit limits with publication bans. Verbatim-only relay suffices
-for single-use original inputs or non-review results not yet handed on;
-excerpts may accompany, never replace, qualified source references.
-On review return and before onward handoff, check the author's qualified
-source references. If missing or unqualified, ask the author for an existing
-source; request publication only if needed and allowed. If no qualified
-source can be supplied, report the gap instead of claiming complete
-delivery. Pass the author's references onward, not just a paraphrase.
-Reuse qualified versioned artifacts without creating board copies.
+For every delegation, pass original constraints, artifact or proposal versions, and qualified sources for governing requirements, decisions and findings. A path alone does not carry those constraints.
+Require one terminal board handoff before return, with its full bb:// ID, including blocked or no-issues outcomes.
+A qualified source contains the relied-on conclusions and qualifications at a retrievable exact version and is readable by the receiver.
+On return and before onward handoff, read and check the author's source; forward its exact references, not just your paraphrase.
+If it is missing, recover an existing source or report the gap. Do not assume a finished author can be resumed; a raw capture is not a structured handoff.
+File-edit limits are not publication bans; publication restrictions still win.
 Include required bb:// IDs verbatim in task.prompt.
 ```
 
-注（**[第六轮修订]（信号退役）**）：原 advisory 逐字范围与「前五个物理行 / M3 锚点」的历史口径由全新文案取代（沿革见本节首段）；末行规范句与「独立整行 / unquoted and unindented」排版要求随触发器退役**删除**——规范句今后仅是普通任务指令措辞，无触发特权。`bb://` ID 仍须 verbatim 传递（接收方解引用与核对的依据），排版不再为检测器服务。委派方路由责任：转交结果传**原作者的合格来源引用——完整 board ID 或确切版本化工件引用**（**[第六轮修订·收尾同步]（N1）** 双形式统一，下同）而非自身转述；评审类委派（产物或提案，**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）**）必须索取来源交付，并在评审返回与再交接两时点核对作者合格来源；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 依赖先前要求 / 决定 / 审核发现的后续任务，其合格来源引用同为任务输入——产物路径不天然包含支配它的约束（见上方 `task` 文案与 11.8）；合格来源四要件已内嵌于文案（不留给委派方未定义词）。三类中继合格范围不变（单次使用的原文输入、尚未再次交接的**非评审**直接结果、已有合格来源时的辅助摘录——见 11.8；三类均不豁免边界 R 与禁止发布限制）。
+注（**[第六轮修订]（信号退役）**）：原 advisory 逐字范围与「前五个物理行 / M3 锚点」的历史口径由全新文案取代（沿革见本节首段）；末行规范句与「独立整行 / unquoted and unindented」排版要求随触发器退役**删除**——规范句今后仅是普通任务指令措辞，无触发特权。`bb://` ID 仍须 verbatim 传递（接收方解引用与核对的依据），排版不再为检测器服务。委派方路由责任：转交结果传**原作者的合格来源引用——完整 board ID 或确切版本化工件引用**（**[第六轮修订·收尾同步]（N1）** 双形式统一，下同）而非自身转述；评审类委派（产物或提案，**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）**）必须索取来源交付，并在评审返回与再交接两时点核对作者合格来源；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 依赖先前要求 / 决定 / 审核发现的后续任务，其合格来源引用同为任务输入——产物路径不天然包含支配它的约束（见上方 `task` 文案与 11.8）；合格来源四要件已内嵌于文案（不留给委派方未定义词）。三类中继合格范围不变（单次使用的原文输入、尚未再次交接的**非评审**直接结果、已有合格来源时的辅助摘录——见 11.8；三类均不豁免边界 R 与禁止发布限制）。**[第八轮修订]（U2）** 委派方路由责任与 T 交付要求：每个委派要求**一次终结 board 交付（含 blocked / no-issues）并回传完整 ID**（U2 `task` 文案第二句）；「三类中继」保留为**输入 / 摘录的传递规则**（原文输入可逐字传递、辅助摘录可伴随），但**不再构成终结交付豁免**——v1.8.0 删除「短小 non-review 未交接可只传结果」的发布豁免（11.8 T 边界）。
 
 注：`board_aggregate` 的 description 不在 advisory §4.2 范围内，本节不为其新增文案契约（聚合属维护性功能，见 §8）。
 
-**写入范围正面指引**（advisory §1.3，**[第四轮修订]（B3）**）：黑板最有价值的写入是——①多轮讨论中的约束、决定和理由；②跨两个以上交接环节复用的发现或审核结果；③不在最终产物中体现、但影响下一步工作的背景；④可能因 ACP 压缩而丢失的精确信息。黑板是"关键来源记录与交接记忆"，不是第二份全量对话；短小一次性委派直接传原文即可，但**逐字中继仅限三类**——单次使用的原文输入、尚未再次交接的**非评审**直接结果、已有合格来源时的辅助摘录（摘录可伴随、绝不替代合格来源引用）（见 `task` 说明与 11.8 直接 prompt 中继合格范围；评审类委派必须索取来源交付——完整 board ID 或确切版本化工件引用（**[第六轮修订·收尾同步]（N1）** 双形式统一）；**[第五轮修订]（复审修正，M1）** 三类均不豁免边界 R——评审交付仍须版本绑定来源报告）。此指引为写入侧正面清单，与 §13.2 过度使用对策（反面约束）互补。
+**写入范围正面指引**（advisory §1.3，**[第四轮修订]（B3）**）：黑板最有价值的写入是——①多轮讨论中的约束、决定和理由；②跨两个以上交接环节复用的发现或审核结果；③不在最终产物中体现、但影响下一步工作的背景；④可能因 ACP 压缩而丢失的精确信息。黑板是"关键来源记录与交接记忆"，不是第二份全量对话；短小一次性委派直接传原文即可，但**逐字中继仅限三类**——单次使用的原文输入、尚未再次交接的**非评审**直接结果、已有合格来源时的辅助摘录（摘录可伴随、绝不替代合格来源引用）（见 `task` 说明与 11.8 直接 prompt 中继合格范围；评审类委派必须索取来源交付——完整 board ID 或确切版本化工件引用（**[第六轮修订·收尾同步]（N1）** 双形式统一）；**[第五轮修订]（复审修正，M1）** 三类均不豁免边界 R——评审交付仍须版本绑定来源报告）。此指引为写入侧正面清单，与 §13.2 过度使用对策（反面约束）互补。**[第八轮修订]（U2）** 「短小一次性委派直接传原文即可」**不再豁免终结交付**：输入 / 摘录的逐字中继规则保留（三类），但每个明确工作单元的最终返回仍须发布或复用一份 T 交付并回传完整 ID（11.8）；「黑板是关键来源记录与交接记忆，不是第二份全量对话」不变——无过程流水账（§13.2 U2 口径）。
 
 **参数级指引**（只补最容易误用的参数，落在 src/tools.ts 参数定义处）：
 
@@ -524,7 +515,7 @@ Include required bb:// IDs verbatim in task.prompt.
 3. `supersedes` 跨 stream 拒绝（src/tools.ts:97）；
 4. 委派方指定读取条目是**工作流约定**，不是条目级 ACL——文案不得承诺"只能读被指定条目"的隔离（权限模型见 11.3）。
 
-**总量约束**（**[第四轮修订]（S+，M2 修正）**）：四段合计增量以**几百英文 tokens 量级**为目标——按**实际交付文案**测量，非承诺值（不是每个角色几百 tokens），禁止把完整 schema 教程塞入 description。description 只要工具定义发给模型就有常驻上下文成本，仍优于长篇常驻 prompt——它把规则放在对应能力旁边（advisory §3.1）；成本作用于工具定义中可见 `task` 的**所有请求**，不能按角色名限定。①的 `bb://` 存在性判定是语言中立线索（中文任务可复制同一标记）；②的规范句仍是**英文协议字面量**——语言中立的是"标记可复制"，不是整个识别协议。**[第四轮修订]（I3）**：11.6 / 11.7 的常驻工具 description 不计入任何提醒预算（§10.3 预算只约束动态注入）。**[第五轮修订]（C+D′）** 本轮记录目标增量：`board_put` +40–70 英文 tokens、`task` +30–60 英文 tokens（替换性修订——改写取代旧句，非在旧句上叠加）；两描述同时可见时合计 +70–130/请求；均按**实际分发文本**测量。**[第六轮修订]（信号退役）** 原词法字面量约束（① `bb://` 语言中立线索 / ② 规范句英文协议字面量）随触发器退役不再适用；v1.6.0 实测（`board_put` 762 B、`board_get` 362 B、`task` 754 B）为**历史值**；**[第六轮修订·复审修正]（I1/I2）** 后本版文案实测**双口径**：`board_put` 1155/1156 B、`board_get` 361/362 B、`task` 996/997 B（不含 / 含末尾 LF）——board_put / task 超出单工具 ≤700 B **建议口径（非上限）**，为 R 边界、四要件、生产者职责补全、路由与双形式引用返回等必需规则项并存的实测结果，如实登记不隐去（入口已退役，无 512 B 提醒模板约束）；v1.5.0 增量注记（+40–70 / +30–60）成为历史口径。**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 后实测：`task` 1214/1215 B、`board_index` 379/380 B（不含 / 含末尾 LF；board_index 首次登记；**[第六轮修订]（方案 E：复审修正）（M1）** 缺来源段按 oracle 候选段整体替换重测，替换段 222 B（含分隔 LF 223 B）、首句保留不动）。`task` 净增 +218 B ≈ +54 tok（**[第六轮修订]（方案 E：复审修正）（M3）** oracle 裁定 +218 B 增量可接受，`task` 描述维持现文不动）、`board_index` 净增 +223 B ≈ +56 tok。为明确性与可读性接受本版体积；token 数为估算，后续按实际分发文本测量。**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 后实测：`board_put` 1291/1292 B、`task` 1355/1356 B（不含 / 含末尾 LF；`board_get` 361/362 B、`board_index` 379/380 B 不变）；净增 `board_put` +136 B ≈ +34 tok（「or proposal」+12 B、工件版本锚定句及折行 +124 B）、`task` +141 B ≈ +35 tok（评审要求句替换 +68 B 及折行、恢复段替换 +73 B，与两裁决给定文本的估算一致）——均为提案评审覆盖与可取回版本 / 恢复语义的必需规则项，为明确性与可读性接受本版体积，token 数为估算，后续按实际分发文本测量。**[第七轮修订]（v1.6.7：no-issues 分支文案）** 后实测：`board_put` 1323/1324 B（不含 / 含末尾 LF；`board_get` 361/362 B、`board_index` 379/380 B、`task` 1355/1356 B 不变）；净增 `board_put` +32 B（no-issues 分支句替换 148 → 180 B）≈ +8 tok，为无问题判定仍须发布评审记录的必需规则项，为明确性与可读性接受本版体积，token 数为估算，后续按实际分发文本测量。
+**总量约束**（**[第四轮修订]（S+，M2 修正）**）：四段合计增量以**几百英文 tokens 量级**为目标——按**实际交付文案**测量，非承诺值（不是每个角色几百 tokens），禁止把完整 schema 教程塞入 description。description 只要工具定义发给模型就有常驻上下文成本，仍优于长篇常驻 prompt——它把规则放在对应能力旁边（advisory §3.1）；成本作用于工具定义中可见 `task` 的**所有请求**，不能按角色名限定。①的 `bb://` 存在性判定是语言中立线索（中文任务可复制同一标记）；②的规范句仍是**英文协议字面量**——语言中立的是"标记可复制"，不是整个识别协议。**[第四轮修订]（I3）**：11.6 / 11.7 的常驻工具 description 不计入任何提醒预算（§10.3 预算只约束动态注入）。**[第五轮修订]（C+D′）** 本轮记录目标增量：`board_put` +40–70 英文 tokens、`task` +30–60 英文 tokens（替换性修订——改写取代旧句，非在旧句上叠加）；两描述同时可见时合计 +70–130/请求；均按**实际分发文本**测量。**[第六轮修订]（信号退役）** 原词法字面量约束（① `bb://` 语言中立线索 / ② 规范句英文协议字面量）随触发器退役不再适用；v1.6.0 实测（`board_put` 762 B、`board_get` 362 B、`task` 754 B）为**历史值**；**[第六轮修订·复审修正]（I1/I2）** 后本版文案实测**双口径**：`board_put` 1155/1156 B、`board_get` 361/362 B、`task` 996/997 B（不含 / 含末尾 LF）——board_put / task 超出单工具 ≤700 B **建议口径（非上限）**，为 R 边界、四要件、生产者职责补全、路由与双形式引用返回等必需规则项并存的实测结果，如实登记不隐去（入口已退役，无 512 B 提醒模板约束）；v1.5.0 增量注记（+40–70 / +30–60）成为历史口径。**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 后实测：`task` 1214/1215 B、`board_index` 379/380 B（不含 / 含末尾 LF；board_index 首次登记；**[第六轮修订]（方案 E：复审修正）（M1）** 缺来源段按 oracle 候选段整体替换重测，替换段 222 B（含分隔 LF 223 B）、首句保留不动）。`task` 净增 +218 B ≈ +54 tok（**[第六轮修订]（方案 E：复审修正）（M3）** oracle 裁定 +218 B 增量可接受，`task` 描述维持现文不动）、`board_index` 净增 +223 B ≈ +56 tok。为明确性与可读性接受本版体积；token 数为估算，后续按实际分发文本测量。**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 后实测：`board_put` 1291/1292 B、`task` 1355/1356 B（不含 / 含末尾 LF；`board_get` 361/362 B、`board_index` 379/380 B 不变）；净增 `board_put` +136 B ≈ +34 tok（「or proposal」+12 B、工件版本锚定句及折行 +124 B）、`task` +141 B ≈ +35 tok（评审要求句替换 +68 B 及折行、恢复段替换 +73 B，与两裁决给定文本的估算一致）——均为提案评审覆盖与可取回版本 / 恢复语义的必需规则项，为明确性与可读性接受本版体积，token 数为估算，后续按实际分发文本测量。**[第七轮修订]（v1.6.7：no-issues 分支文案）** 后实测：`board_put` 1323/1324 B（不含 / 含末尾 LF；`board_get` 361/362 B、`board_index` 379/380 B、`task` 1355/1356 B 不变）；净增 `board_put` +32 B（no-issues 分支句替换 148 → 180 B）≈ +8 tok，为无问题判定仍须发布评审记录的必需规则项，为明确性与可读性接受本版体积，token 数为估算，后续按实际分发文本测量。**[第八轮修订]（U2）** 后实测：`board_put` 1010/1011 B、`task` 867/868 B（不含 / 含末尾 LF；`board_get` 361/362 B、`board_index` 379/380 B 不变——A/B 实验变量控制本轮不动）。改动两段合计 2678→1877 B（−29.9%），四段合计 3418→2617 B（−23.4%）；缩减由**语义变更**（无条件终结交付取代条件分支描述）取得，不是无行为变化的等价压缩，实际总 token 成本可能因更多交付调用上升；四文 bytes/4 粗估 855→655 tokens（非目标模型 tokenizer 实测）。A/B 对照两臂分别装载（§14.4 U2 验收）。**[第八轮修订]（v1.8.3：工件索引澄清）** 后实测：`board_put` 1095/1096 B（不含 / 含末尾 LF；`board_get` 361/362 B、`board_index` 379/380 B、`task` 867/868 B 不变）；净增 `board_put` +85 B（工件索引单行替换：旧「Pin / Index」两行含内部 LF 215 B → C1 单行 300 B）≈ +21 tok，为工件承载结果统一索引口径的必需规则项，为明确性与可读性接受本版体积，token 数为估算，后续按实际分发文本测量。改动两段合计 1877→1962 B，四段合计 2617→2702 B；A/B 电池 B 臂同步更新（§14.4 U2 验收）。
 
 ### 11.7 task 工具定义注入 **[第四轮修订]**
 
@@ -534,10 +525,11 @@ Include required bb:// IDs verbatim in task.prompt.
 - **[第六轮修订]（信号退役）** 原 I5「规范句单源」要求**删除**：NORMATIVE_SENTENCE 不再是触发器，11.6 `task` 文案中的规范句行与检测器排版要求随之移除；「入口提醒采用 §10.2 模板①三句常量」（v1.5.1 I1 口径）随模板①废弃成为历史。注入渠道本身**保留**：`tool.definition` hook → `task` description（见上），文案 = 11.6 `task` 段；ID 准确传递指引保留，排版不再为检测器服务。
 - **[第四轮修订]（S+）** 命中率定性：VP-1 只证明渠道可达（description 到达模型）；词法信号的命中率（误报 / 漏报）是**合理预期而非已验证结果**，live 观察后处置见 §15①。**[第六轮修订]（信号退役）** 入口词法信号命中率观察（VP-1 及 §15① 的误报 / 漏报清单）随触发器退役终止；后续观察项改为新描述文案遵循率（CLI 单发 / 委派两形态分别统计，§15）。
 - 实施陷阱：Plugin 必须直接 `return hooks` 映射，`{hooks: {…}}` 包装被宿主静默忽略（见 §0.4 实施陷阱注记）。
+- **[第八轮修订]（U2）** 文案更新为 U2 版（11.6 `task` 块，867 B 末尾无 LF 口径）；该文案同为 v2 `subagent` 描述追加段（16.4 陷阱 1 的 v2 接线）——v1 `task` 与 v2 `subagent` 使用**同一份 U2 文本**，不复制第二份独立文案。A/B 实验两臂只差 `board_put` / `task` 两段（`board_get` / `board_index` 不动），注入渠道与机制不变。
 
 ### 11.8 委派协议（信息路由契约）**[第四轮修订]**
 
-委派推荐采用普通 `task.prompt` 文本五段式结构（不新增 task 参数、不新增包装工具）：**Task / Required board inputs / Artifact（含版本）/ Acceptance / Return**。模板逐字采用 advisory §4.3 示例（**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** Return 节第二句按裁决修正、不再逐字——旧句「有可复用发现才发布」与边界 R 默认交付（含「未发现问题」结论）不一致；**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）（v1.6.6：复审修正）** Artifact 示例按复审 I1 收紧为可取回版本写法、不再逐字；**[第四轮修订]（S+）** 该结构为**推荐结构**而非识别前提；**[第六轮修订]（信号退役）** 原识别对齐句与「A2 拒绝形状 / 有效协议区域」条件表述随词法触发器退役删除——照抄与否不再有任何触发含义，末行规范句仅为普通交付要求措辞）：
+委派推荐采用普通 `task.prompt` 文本五段式结构（不新增 task 参数、不新增包装工具）：**Task / Required board inputs / Artifact（含版本）/ Acceptance / Return**。模板逐字采用 advisory §4.3 示例（**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** Return 节第二句按裁决修正、不再逐字——旧句「有可复用发现才发布」与边界 R 默认交付（含「未发现问题」结论）不一致；**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）（v1.6.6：复审修正）** Artifact 示例按复审 I1 收紧为可取回版本写法、不再逐字；**[第四轮修订]（S+）** 该结构为**推荐结构**而非识别前提；**[第六轮修订]（信号退役）** 原识别对齐句与「A2 拒绝形状 / 有效协议区域」条件表述随词法触发器退役删除——照抄与否不再有任何触发含义，末行规范句仅为普通交付要求措辞；**[第八轮修订]（v1.8.1：复审修正）** Return 节再次更新为 U2 口径（返回 / 复用一份 board 交付的完整 ID；外部合格报告另附确切引用、只建简短 board 索引不复制正文；保留禁发布 / 不可写时的诚实缺口出口），模板整体仍为推荐结构、继续不再逐字；**[第八轮修订]（v1.8.3：工件索引澄清）** Return 节「外部合格报告建简短 board 索引」示例句按本节 v1.8.3「工件承载结果索引」共同原则解释——代码 / 文件修改同构适用（不复制正文），模板不另列重复句）：
 
 ```text
 Task:
@@ -555,7 +547,8 @@ Check completeness, contradictions, and whether the proposal satisfies R2/D5.
 
 Return:
 Findings with severity and locations.
-Return a qualified review source bound to the reviewed scope and version, even if no issues are found; reuse an existing source when available. Include its full board ID or exact versioned reference; report any source-delivery gap and respect publication restrictions.
+Return or reuse one board handoff for this result with its full bb:// ID, even if no issues are found. When the qualified source is an external report, attach its exact reference and create a short board index entry without copying its body.
+Report any source-delivery gap and respect publication restrictions.
 State any required input that could not be read.
 ```
 
@@ -571,23 +564,26 @@ State any required input that could not be read.
 
 **来源交付框架**（**[第五轮修订]（C+D′）**，oracle 商讨定案、用户 2026-09-24 采纳）：本框架把「该不该用黑板」从 orchestrator 直觉判断改为**边界驱动的交付职责**——在明确交付与再次交接边界，来源方交付可持久引用的结果；orchestrator 负责路由与检查，接收者负责核对；已有合格来源不重复写板。
 
+**[第八轮修订]（U2）终结交付边界 T 与无条件交付**：新边界 **T = 一个明确工作单元的最终返回**（委派与用户直接要求完成的任务均适用；含成功、无发现、部分完成 / blocked；进度消息、澄清问题、中间 tool output 不是 T）。一次 T 一份逻辑交付：**发布或复用**一条 board 交付并回传完整 ID——同一结果已有合适 board 交付即复用其 ID，新的修订结果才写新记录（**[第八轮修订]（v1.8.1：复审修正）** 显式复用与提交幂等的分层见 §6 v1.8.1 条：复用不是重复发布，也不受「不同执行不合并」约束）。「无条件」只取消「预测未来复用价值 / 是否再次交接」的条件分支（取代旧「未来有复用价值才存、委派会被 review / handed-on 才要求来源」的预测式门槛），**不取消**任务、工具与发布限制，也不在源不可写时要求无限重试；不能发布时正常答复但明确报告结构化来源缺口。T 是**最低交付频率**：不要求每条消息 / 每步工具调用记账，中途确实值得保存的约束 / 决定仍可写。
+**[第八轮修订]（U2）外部合格报告 → 简短 board 索引交付（v1.8.0 有意变更）**：作者已有合格外部报告（版本化工件 / 非 board 报告）时，**创建简短的结构化索引记录**（结果 / 限定 / 确切来源定位，不复制报告全文），取代本框架旧「已有合格外部报告 → 零新增 board 记录」口径——每个 T 在 board 检索结构中应有一个可检索目录项（而非只是消息 ID 或文件指针）。已有覆盖同一结果的 board 记录则复用其 ID。**接受该写入成本是本变更的一部分；若不接受，须回退为外部引用零入板并放弃「所有终结件入检索结构」承诺（须用户另行裁定）。** **[第八轮修订]（v1.8.3：工件索引澄清）** 本条扩为共同原则——**工件承载结果索引**：凡结果由工件承载（代码 / 文件修改与外部合格报告**同构**），交付形态统一为「简短 board 索引」：索引记录结果与限定（做了什么、验证什么、未验证什么、仍缺什么）及可取回版本引用，不复制工件正文；轻索引仍按 §7 四项结构（Outcome / Basis / Limits / Next）组织，不是裸 SHA。hash 可随引用提交作校验，但 hash ≠ 版本保存：合格引用须可取回——repo/path@实际包含该内容的 commit，或可读保留快照 + SHA；无保留渠道时报告版本缺口、不擅自 commit / 另存（与下「合格来源」四要件 A4 说明同向、同一规则单一出处）；blocked 无新产物时不虚构新版本。
+
 - **合格来源**（四要件，缺一即不合格）：①包含所依赖的**结论本身**，而非仅改动后的代码；②**版本可实际取回**（不能只给可变文件的行号）；③接收者具备读取所需的**工具与权限**；④`source_refs` 中有字符串 ≠ 条件成立——字符串存在不构成合格来源。**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）（v1.6.6：复审修正）** 补回 A4 通用版本保护说明（同时作用于作为来源的工件与被审工件）：版本必须对应实际交付或被审内容，且接收者能够取回；哈希本身不保留内容。不得为满足引用要求擅自提交、另存或发布；无法在允许范围内提供合格版本时，报告缺口（与 11.6 `board_put` 工件引用版本锚定句同向，不新增存储机制）。
-- **边界 R（评审交付）**：任务明确要求对产物或提案给出审核结论时（**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 覆盖扩至提案），评审结果**默认为持久交付件**——无既有合格报告 → 返回前发布（`kind=review`，绑定所审范围与版本）；已有 → 返回版本化引用；含「未发现问题」的结论同样必须绑定范围与版本；按**交付件**判断、不按 agent 名字判断；一次评审一份来源报告，不为每个检查动作写记录。
-- **边界 H（再次交接）**：把 A 的结果转交 B 前，必须携带 **A 的持久来源引用**；parent 的选摘 / 转述不能冒充 A 的报告（计数对象 = **同一份结果的再次交接**，非全局 task 跳数）。下一跳可预知 → 委派时即要求作者提供来源；后来才出现 → 再交接前请原作者补写（10.5）；原作者不可用 → 显式报告来源缺口，必要时重新验证。结果已完整体现于版本化代码 / 测试 / 报告 → **直接引用，零重复**写板。
+- **边界 R（评审交付）**：任务明确要求对产物或提案给出审核结论时（**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 覆盖扩至提案），评审结果**默认为持久交付件**——无既有合格报告 → 返回前发布（`kind=review`，绑定所审范围与版本）；已有 → 返回版本化引用；含「未发现问题」的结论同样必须绑定范围与版本；按**交付件**判断、不按 agent 名字判断；一次评审一份来源报告，不为每个检查动作写记录。**[第八轮修订]（U2）** R 从「是否写板」的特殊门**特化为评审内容的交付形态**：终结交付义务已由 T 边界无条件覆盖（所有明确工作单元的最终返回均须交付），R 规定的是**评审类交付的内容特化**——`kind=review`、绑定所审范围与版本、「未发现问题」同样交付、一次评审一份来源报告；评审不再是发布义务的唯一触发器。
+- **边界 H（再次交接）**：把 A 的结果转交 B 前，必须携带 **A 的持久来源引用**；parent 的选摘 / 转述不能冒充 A 的报告（计数对象 = **同一份结果的再次交接**，非全局 task 跳数）。下一跳可预知 → 委派时即要求作者提供来源；后来才出现 → 再交接前请原作者补写（10.5）；原作者不可用 → 显式报告来源缺口，必要时重新验证。结果已完整体现于版本化代码 / 测试 / 报告 → **直接引用，零重复**写板。**[第八轮修订]（U2）** H 的**引用路由与核对职责保留**（委派时要求、再交接前核对、转交传 A 的持久引用），但「后来才出现 → 请原作者补写」从主路径降为有条件恢复（10.5 U2：先找既有源 → 缺口 / raw），不依赖「将来再补发」；结果完整体现于版本化产物时转交侧**直接引用、不复制正文**，作者侧的终结交付按本节 U2 外部报告索引口径形成 board 目录项。**[第八轮修订]（v1.8.3：工件索引澄清）** 该「外部报告索引口径」自本版按扩后的「工件承载结果索引」共同原则执行（代码 / 文件修改与外部报告同构，见上扩条款），本条不另立规则。
 - **依赖约束随任务传递**（**[第六轮修订]（方案 E：依赖路由与缺来源处理）**）：后续任务若受先前要求、决定或审核发现约束，这些来源也是**任务输入**，与产物版本一并传递；不能因交付产物已有路径而省略——产物路径不天然包含支配它的约束。既有边界不动：首次独立评审不预灌先前结论（五条原则 4）；要求已完整包含于合格版本化产物的，直接引用、零重复写板（边界 H）。
 - **[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）提案评审的版本锚定（输入快照 + 相关基线）**：评审对象是**提案**而非已存在工件时，对象锚 = 所评原文（提案正文、问题、硬约束与被裁决的候选）的**可取回快照**，保存在同一份 review 的明确分区、与分析分开，其版本由该 review 的不可变 ID 固定；相对既有契约作判断时**另列该契约的确切版本**（不依赖该契约的普通咨询不必硬加）。有现成可读的不可变提案记录 / 版本化文件时直接引用、不重存；原文过大或需独立复用时才单独保存提案来源并引用；精确摘录须声明范围、不得省去影响裁决的前提。**哈希只能校验内容、不提供取回**——契约正文指纹、「咨询问题 + 基线摘要」哈希等裸哈希单独都不构成合格版本锚。发布 / 保存受限时报告来源缺口，不用消息 ID、行号或空洞指纹冒充版本；禁止披露的内容不得为满足锚定而复制；事后重构的摘要不得称作「原提案版本」。
-- **[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）文件修改限制与发布限制分开**：「不得修改文件 / 代码」不等于「禁止发布」——委派中的文件修改限制不得扩展为压制边界 R 的持久交付；发布限制可能来自任务、上级或工具权限，始终限制优先。禁止发布阻止的是违规发布与把有缺口的答复冒充完整持久交付，不阻止允许范围内的评审答复。父侧检查时点 = **评审返回时**与**再交接前**，接受两种合格来源（完整 board ID 或确切版本化工件引用）：已有合格来源 → 核对、复用、原样路由，不要求再发布；只缺返回引用 → 请作者提供既有来源引用；确无合格来源且允许发布 → 请原作者补写（10.5）；发布受限、作者不可用或交付失败 → 明示缺口，不越权、不代写、不假称完整交付。
+- **[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）文件修改限制与发布限制分开**：「不得修改文件 / 代码」不等于「禁止发布」——委派中的文件修改限制不得扩展为压制边界 R 的持久交付；发布限制可能来自任务、上级或工具权限，始终限制优先。禁止发布阻止的是违规发布与把有缺口的答复冒充完整持久交付，不阻止允许范围内的评审答复。父侧检查时点 = **评审返回时**与**再交接前**，接受两种合格来源（完整 board ID 或确切版本化工件引用）：已有合格来源 → 核对、复用、原样路由，不要求再发布；只缺返回引用 → 请作者提供既有来源引用；确无合格来源且允许发布 → 请原作者补写（10.5）；发布受限、作者不可用或交付失败 → 明示缺口，不越权、不代写、不假称完整交付。**[第八轮修订]（v1.8.1：复审修正）适用优先**：本条及下文模板 / 验收中残留的旧「零重复写板」表述一律按 U2 口径解释——board 已有同结果来源 → 复用其 ID；来源为外部合格报告 → 作者侧仍须建立简短 board 索引（不复制正文，见本节「终结交付边界 T」及「外部合格报告 → 简短 board 索引交付」条款）；被禁止的是**重复正文复制**，不是索引交付；「不要求再发布」指不要求为同一内容再造第二份记录，**不豁免**终结交付的目录项（T 边界）。
 - **[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）决定链（review → 用户采纳的 decision → 下游）与归属**：评审裁决先以 `kind=review` 发布（属建议，非实施授权）；用户裁定后由 orchestrator 发布 `kind=decision` 引用被裁 review 的完整 ID。decision 正文逐项写明：**决定者 = 用户**；**记录者 = orchestrator**（`writer` 归宿主落盘，不伪填用户身份）；用户原话**逐字摘录**（原消息对下游不可读时，把必要原话连同指代上下文保存于本记录），与整理 / 实施解释**分栏**，新增综合判断标为记录者判断、不称用户或评审者原结论；被裁定建议列完整 review ID、被采纳章节 / 条目与提案 / 基线版本；采纳范围逐项写明（批准 / 拒绝 / 暂缓），「同意」的指代必须可确定、不顺便扩为执行授权。review 保持不变、不被 decision 重写、不跨 stream `supersedes`「批准 / 升级」；kind 标签既不证明内容属实也不赋予执行权限——**可引用 ≠ 已批准**；用户未裁定前不发布声称「用户已决定」的 decision；下游只实施获批范围，读取 board 文本不使其成为系统指令（与 B4 补充注记同向：writer 是发布者，正文明确谁作决定、谁作记录）。
 - **前置规则（限制优先）**：明确的**禁止发布**限制高于一切——R/H 的默认交付职责同样不得覆盖它；无法提供持久来源时**报告缺口**，不自行突破限制。
-- **直接 prompt 中继的合格范围（收窄）**：仅限三类——单次使用的**原文输入**；**尚未再次交接**的**非评审**直接结果（评审结果适用边界 R，不属逐字中继范围）；已有合格来源时的**辅助摘录**（摘录可伴随、不替代来源引用）。三类均不豁免边界 R 与禁止发布限制。
+- **直接 prompt 中继的合格范围（收窄）**：仅限三类——单次使用的**原文输入**；**尚未再次交接**的**非评审**直接结果（评审结果适用边界 R，不属逐字中继范围）；已有合格来源时的**辅助摘录**（摘录可伴随、不替代来源引用）。**[第八轮修订]（v1.8.1：复审修正）定位重申**：三类是**输入 / 摘录的传递规则**，**不再构成终结交付（T）豁免**——v1.8.0 起每个明确工作单元的最终返回仍须发布或复用一份 board 交付并回传完整 ID（T 边界；旧「短小 non-review 未交接可只传结果」豁免已删除），与 11.6 注、B3 口径一致。禁止发布限制对输入 / 摘录传递同样适用。
 
 **运行时分发责任**（**[第六轮修订]（信号退役）** 新增）：入口提醒退役后，各角色决策规则必须有常驻载体，按规则 → 载体映射分发：
 
 | 规则 | 载体 |
 |---|---|
-| 边界 R 交付（**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 产物或提案）、合格来源四要件、工件引用版本锚定（同轮新增）、免重复、限制优先、最终答复返回合格来源引用（完整 board ID 或确切版本化工件引用）、H 生产者职责（结果再交接前提供合格来源）与交付缺口报告（**[第六轮修订·收尾同步]（N1）** 补全） | `board_put` description（11.6） |
+| 边界 R 交付（**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 产物或提案）、合格来源四要件、工件引用版本锚定（同轮新增）、免重复、限制优先、最终答复返回合格来源引用（完整 board ID 或确切版本化工件引用）、H 生产者职责（结果再交接前提供合格来源）与交付缺口报告（**[第六轮修订·收尾同步]（N1）** 补全）、终结交付义务（T，publish or reuse）与外部合格报告简短索引交付（**[第八轮修订]（U2）**；**[第八轮修订]（v1.8.3：工件索引澄清）** 扩为工件承载结果索引——代码 / 文件修改同构） | `board_put` description（11.6） |
 | 接收者核对责任（读原文、查结论 / 限定 / 版本 / 可读性、显式报告缺失陈旧冲突） | `board_get` description（11.6） |
-| 委派方路由责任（转交传原作者的合格来源引用——完整 board ID 或确切版本化工件引用、评审委派（产物或提案）索取来源交付、评审返回与再交接两时点检查、三类中继；其中「评审委派（产物或提案）索取来源交付」与「评审返回与再交接两时点检查」为 **[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）（v1.6.6：复审修正）** 同轮更新（提案评审范围与父侧检查时点；三类中继等其余项含义未改）） | `task` description（11.6；注入见 11.7） |
+| 委派方路由责任（转交传原作者的合格来源引用——完整 board ID 或确切版本化工件引用、评审委派（产物或提案）索取来源交付、评审返回与再交接两时点检查、三类中继；其中「评审委派（产物或提案）索取来源交付」与「评审返回与再交接两时点检查」为 **[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）（v1.6.6：复审修正）** 同轮更新（提案评审范围与父侧检查时点；三类中继等其余项含义未改）） | `task` description（11.6；注入见 11.7）**[第八轮修订]（U2）** 增：终结交付要求（含 blocked / no-issues）与完整 ID 回传 |
 | 缺来源发现与升级处理（定向发现、向委派方索取、报告缺口）（**[第六轮修订]（方案 E：依赖路由与缺来源处理）**） | `board_index` description（11.6） |
 | 目录压力折叠 | §8.1 压力信号 + §10.2 模板②（注入） |
 | AGENTS.md 全局兜底 | **有条件**——仅当某受支持执行形态在决策前确实拿不到工具描述时启用；插件不自动修改用户全局配置，维护者出版本化核心文本、宿主集成方决定接入 |
@@ -635,6 +631,7 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 - **pin 生命周期（实现前置条件：聚合启用前必须存在）**：pin 是受信外部元数据，不是消息 schema 字段，不改动不可变记录；其设置与释放不属于 agent 工具面。最小机制：由父级在派发评审时声明 pin 集并入工具元数据，或由 `board_index` / `board_aggregate` 在查询与提交时校验记录的评审采纳状态。要求：①记录被正式采纳进活跃 review 即进入 pinned；②聚合提交事务将 pin 状态连同其他保护一并重新验证（见 8.3）；③适用的 review 仍活跃期间保护持续；④仅经授权的 review 生命周期（评审关闭）释放。不新增服务。
 - 某消息若被正式采纳为证据，必须按原始不可变字节绑定；该绑定由现有 document-review-evidence 合同承担。
 - 存储配额满 → 显式失败；不静默删除正文或证据。
+- **[第八轮修订]（U2）** 集中（跨流）检索**不扩大读 / 写权限**：查询逐边授权（未授权记录连目录元数据、片段、计数都不可见）；隔离流与禁止发布限制优先；索引 / 片段 / 计数 / 导航**逐边不泄漏**——隐藏记录不得经命中片段、计数、分页残留或 `other_streams` 泄漏（11.3 检索扩展的权限边界）。
 
 ## 13. 假设与残余风险
 
@@ -668,7 +665,8 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 
 | 失败模式 | 对策 |
 |---|---|
-| 过度使用，黑板变过程日志 | 只存"丢失后会改变下游工作"的内容；不设每轮写入指标 |
+| 过度使用，黑板变过程日志 | **[第八轮修订]（U2）** 反滥用口径改为「**一终结结果一逻辑交付、无过程流水账**」——T 边界（11.8）每份最终结果一条交付（可复用既有记录），进度消息 / 中间输出不记账；不设每轮写入指标。「丢失后会改变下游工作才存」保留为 T 之外可选中间来源的保存指引 |
+| 结构化来源缺口（作者未交付且确无既有源） | **[第八轮修订]（U2）** 显式 **raw-only / structured-delivery-gap 降级**登记（raw 兜底属后继轮）——原文可取回但**不冒充作者结构化交付已完成**；正确率统计分开「有作者来源候选 / 核验通过的结构化交付 / 只有 raw / 连 raw 也缺」，不得用 raw 保存率抵消结构化漏交 |
 | 首次转述已失真被持久化 | 原话与解释区分；未决问题保留；推断不得标成用户要求 |
 | 存了没读——未路由（委派方未随任务传递约束来源） | **[第六轮修订]（方案 E：依赖路由与缺来源处理）** 委派方路由责任：任务依赖先前要求、决定或审核发现时，其合格来源引用随任务一并传递，产物路径不能替代（11.6 `task`、11.8 依赖约束随任务传递）；未路由时接收方可定向发现或向委派方索取（11.6 `board_index`） |
 | 存了没读——已路由未读（消费者） | 任务正文明确必读引用；读原文后才开展依赖它的工作（**[第六轮修订·复审修正]（M1）** 原「10.4 ①只是提醒线索」括注随触发器退役删除；提醒不新增义务口径见 10.2） |
@@ -680,7 +678,7 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 | 记录冒充权威 | **[第四轮修订]（M3）** `writer` 提供宿主提交归属，hash 用于核对不可变字节；二者均不证明内容正确、用户确认或强隔离存证（§4 writer 语义限定同向） |
 | ACP 压缩后忘记要读的 ID | 委派中显式携带 IDs（11.8）；ACP 共存单独验证（V18） |
 | 发布失败假成功 | 只返回成功工具结果中的 ID；失败透明说明 |
-| 子 agent 结束后发现漏写 | 任务入口规定返回要求（推荐位置：11.8 Return 节）；走既有原作者补写（10.5），不自动 reopen |
+| 子 agent 结束后发现漏写 | 任务入口规定返回要求（推荐位置：11.8 Return 节）；走既有原作者补写（10.5），不自动 reopen；**[第八轮修订]（U2）** 先找既有源（可提示候选来源），原作者补写降为有条件恢复（10.5） |
 | 角色识别失败 | 用公共文案或不提醒，不猜角色；任务中的明确契约仍有效 |
 
 总注：**BCP 不承诺降低总 token 成本**——对简单任务，多一次写和读通常更贵；优化目标是**重要交接的正确性**，再比较总成本。
@@ -771,7 +769,7 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 **行为验收**（中英文各至少一例 + 重复运行，保留失败样本；不以写入条数 / 提醒命中数计成功）：
 
 1. **零提示自然评审交付**：任务只要求审核结论（无 `bb://`、无规范句、无任何提醒）→ 生产者仍交付版本绑定来源报告，且**最终答复返回新记录完整 `bb://` ID**（11.6 `board_put` 文案「最终引用交付」的行为化断言）；
-2. **已有合格版本化报告** → 直接引用、零重复写板，最终答复返回所引用**既有记录的完整 board ID，或确切版本化工件引用**（**[第六轮修订·复审修正]（I1）** 两种引用形式均合格）；验收至少覆盖**一例非 board 报告**（如 `docs/review.md@<commit>` 形态——四要件合规即直接引用、零重复写板）；
+2. **已有合格版本化报告** → 直接引用、零重复写板，最终答复返回所引用**既有记录的完整 board ID，或确切版本化工件引用**（**[第六轮修订·复审修正]（I1）** 两种引用形式均合格）；验收至少覆盖**一例非 board 报告**（如 `docs/review.md@<commit>` 形态——四要件合规即直接引用、零重复写板）；**[第八轮修订]（U2）** 本条「零重复写板」自 v1.8.0 起分化：board 记录复用不变；**外部合格报告改为创建简短 board 索引交付（不复制全文）**——v1.8.0 有意变更（11.8），验收按 §14.4 U2 A/B 电池「既有合格来源」场景执行；
 3. **委派与 CLI 单发对照**：同一评审任务分别经委派（task description 注入路径）与 CLI 单发（无注入路径）执行 → 两形态均完成来源交付；差异只允许来自任务上下文，不得因缺少 description 而缺失规则行为。
 
 **实现轮回归清单补充**（**[第六轮修订·复审修正]**，oracle 三回归 + 调用方同步；与 §10.7 迁移约束配套）：
@@ -789,8 +787,8 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 |---|---|---|
 | ① | 自然评审任务（无 `bb://`、无规范句），任务输入**只要求审核结论**——不额外要求保存 / 发布 / 返回来源引用；task.prompt 由模型按实际分发的 description 生成；含一个「未发现问题」的版本绑定结论 | 生产者仍交付版本绑定的来源报告——含「未发现问题」结论，且绑定所审范围与版本（边界 R 默认职责不依赖词法提醒触发，11.8） |
 | ② | 评审 → parent → 新 fixer | 新 fixer 读取来源报告原文，且保留其中的限定条件 |
-| ③ | 已存在合格版本化报告 | 直接引用、零重复写板（11.8 合格来源不重复） |
-| ④ | 简单实现任务，其结果及必要限定**全部预置于**合格版本化产物（代码 / 测试 / 报告）中 | 机械断言**零新增 board 记录**（写入计数 = 0，非仅检查返回措辞）；不制造「完成了」类记录 |
+| ③ | 已存在合格版本化报告 | 直接引用、零重复写板（11.8 合格来源不重复）。**[第八轮修订]（U2）** board 记录复用不变；外部报告 → 简短索引交付（11.8 U2 有意变更） |
+| ④ | 简单实现任务，其结果及必要限定**全部预置于**合格版本化产物（代码 / 测试 / 报告）中 | 机械断言**零新增 board 记录**（写入计数 = 0，非仅检查返回措辞）；不制造「完成了」类记录。**[第八轮修订]（U2）** 本行「零新增 board 记录」为 v1.7.1 及以前口径；v1.8.0 起 T 义务下该场景按 §14.4 U2 A/B 电池「既有合格来源」变体分报（外部报告 / 工件指针 → 简短索引；board 已覆盖 → 复用） |
 | ⑤a | READY / 明确不读写且无板依赖任务（**[第六轮修订·复审修正]（M1）** 可构造定义：压力条件成立，但当前任务明确禁止 board 读写——正确触发 ≠ 调用授权） | 机械断言**零 board 调用**（读写调用计数 = 0） |
 | ⑤b | 禁止发布但含必读来源的任务 | 允许必要读取、禁止写入（写入零记录；禁止发布限制优先，11.8 前置规则） |
 | ⑥a | 来源不可读 | 显式缺口报告，不假称来源完整（10.5、§13.2） |
@@ -814,7 +812,7 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 | T2 | 修订交接：新 writer 仅获得当前任务、artifact 版本、V/D 的完整来源 ID 与用途，prompt 不重述裁决 | 来源内预置一条无法从代码 / 常识猜到的限制，核验 writer 在依赖工作前 `board_get` 返回 found、核对限定与版本并正确使用原文；摘录即使存在也不取代读取；parent 亲自读回收到的记录，不凭 stored 回执宣布下游可读 |
 | T3 | 决定链：先发布未批准 V，再由用户明确只采纳 A、拒绝 B | orchestrator 发布 D 引用 V，准确保存原话 / 指代 / 版本，writer=orchestrator、正文决定者=用户；不篡改 V、不跨 stream supersedes、不偷加获批范围或执行授权；下游只实施获批部分 |
 | T4 | 限制配对：同一咨询仅加「不得修改文件 / 代码」 | 零文件修改，仍交付 review；改为明确禁止 board 发布时：零 board 写入、仍按允许范围读取，答复如实报告来源缺口或已有合格来源，不假称完整保存；工具失败分支沿用既有来源失败验收（⑥a–⑥c），不因边界 R 绕过禁令 |
-| T5a | 版本断言·工件分支（A4 版本漂移；两分支**均必测、分别登记**）：**补两个原版本基线样本复现旧文案缺口，再验证新措辞**；评审后同一工件路径被修改 / 覆盖 | 引用仍能取回**原版本**，而非仅发现哈希不匹配；只有裸 sha、无可取回内容 → 判来源缺口；完整工件结果仍零重复写板；已有非 board 合格报告时不制造 board 副本 |
+| T5a | 版本断言·工件分支（A4 版本漂移；两分支**均必测、分别登记**）：**补两个原版本基线样本复现旧文案缺口，再验证新措辞**；评审后同一工件路径被修改 / 覆盖 | 引用仍能取回**原版本**，而非仅发现哈希不匹配；只有裸 sha、无可取回内容 → 判来源缺口；完整工件结果仍零重复写板；已有非 board 合格报告时不制造 board 副本。**[第八轮修订]（v1.8.1：复审修正）U2 覆盖口径**：「副本 / 零重复写板」仅指**复制正文**；外部合格报告仍须作者侧简短索引（不复制正文），「零新增 board」为 A 臂 / v1.7.1 口径——该场景按 §14.4 U2 A/B 电池「既有合格来源」变体分报 |
 | T5b | 版本断言·提案分支（贯穿 T1/T2；两分支**均必测、分别登记**）：契约基线不变，提案关键句从 P1 改为 P2 | 旧 V 不得被默认为已评 P2；新旧提案分别绑定、互不继承 |
 | T6 | 父侧恢复：评审返回缺引用与真正未发布分别构造 | 两情况分开覆盖；返回引用必须可读、含所依赖结论、版本正确，不能只检查 ID 格式；恢复顺序与限制处理按 §11.8「文件修改限制与发布限制分开」条 |
 
@@ -826,7 +824,7 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 |---|---|---|
 | 主测 | 固定标准平凡工件评审——全部标准显式给出（如 JSON 配置 `{"enabled":true,"retries":0}`），旧 / 新描述同条件对照运行，唯一变量 = 本替换；CLI 单发与委派两形态分开统计 | 评审照常交付且版本绑定所审范围与版本；无问题时**不提示发布、不预告通过**——"adequate" / "no issues" 判定仍须按边界 R 发布评审记录，不因无问题豁免交付 |
 | 有问题对照 | 同一夹具但标准项确有缺陷（如 `retries` 为 1 违反显式标准） | 必须发现并如实报告该问题——无问题分支不得掩盖真实缺陷 |
-| 既有反例回归 | 非评审任务零乱写（④ / ⑤a）、已有合格版本化报告零重复写板（③ / 行为验收第 2 条）、禁止发布零写入（⑤b / T4） | 替换句不弱化任何既有边界，旧反例行为全部维持 |
+| 既有反例回归 | 非评审任务零乱写（④ / ⑤a）、已有合格版本化报告零重复写板（③ / 行为验收第 2 条）、禁止发布零写入（⑤b / T4） | 替换句不弱化任何既有边界，旧反例行为全部维持。**[第八轮修订]（v1.8.1：复审修正）** 其中「零重复写板」按 U2 口径断言——board 记录复用不变；外部报告改为简短索引交付（被禁止的是复制正文，不是索引） |
 | 评审准确性 | 评审中虚构所测范围外的问题 | 记评审准确性失败——不得为「有产出」而虚构发现 |
 
 对照登记规则：若旧描述在全部夹具下同样通过，如实登记「新夹具未复现历史失败」——对照结果本身即登记项，不以复现失败为通过前提。
@@ -854,6 +852,28 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 6. 两个 major 产物不得装入同一宿主实例（v2 也扫描 `plugin/` 目录）——blackboard-v1 / blackboard-v2 各自仅在其目标宿主形态装载；
 7. unknown 失效事务回归：先 known → 关联失败 → `board_put` 得 `created_round: null` → 同输入复验**不重置预算**（16.3-3 双失效落盘，防 G8 复发）。
 
+**[第八轮修订]（U2）** 终结交付 A/B 文案实验（oracle 最小电池；实现轮执行，逐项登记通过 / 失败样本，与上方各验收组并列）：
+
+- **两臂**：A = ca3399d 现文（`board_put` 1323 B + `task` 1355 B）、B = U2 两段（1010 B + 867 B，不含末尾 LF 口径；**[第八轮修订]（v1.8.3：工件索引澄清）** 后 B 臂 `board_put` 更新为 1095 B、task 不变）；其余模型 / 工具 schema / 权限 / 数据 / 版本 / 查询机制相同；**机械 capture 关闭、skill 载体不迁移**（只用工具描述验证 T，不同时换 skill 载体）；新 root、链内同 scope、交错顺序，保存**实际发送的工具定义 hash** 而非仅源码常量。
+- **场景（每臂 12 个顶层试验）**：普通委派 1（结束后临时出现下一跳）、短小 non-review 1（B 必须作者交付，A 可零写——预期语义改变，不按「写更多」判成功）、自然有发现工件 review 1、只读 proposal review 1、固定 no-issues 3（沿用 v1.6.7 夹具，保证真正命中 no-issues 而非虚构缺陷；保留末返回前已存证据）、既有合格来源 1（board 记录复用不重复 + 外部报告仅建小型索引不复制正文——同一 fixture 变体分报，不当两个独立样本扩样本量）、依赖路由 2（有 ID 与故意缺路由 / own 空；正文含 description 不含的关键字，当前查询限制明确记缺口，检索扩展落地后另验）、禁发布 1（作者与兜底都不得写、诚实缺口；本阶段兜底关闭仍保存限制边界）、用户明确采 B 拒 A 并只准分析 1（记录者 / 决定者 / 对象 / 范围正确，不扩执行权）。
+- **指标**：**结束前真实提交**（非事后补写）、Outcome / Basis / Limits / Next **实质完整**（非空标题占位）、查回版本 / 限定、下游**正确发现与使用**、**最终答复完整 ID**；token / 时延附登记。**不只统计 stored 条数**；12 / 臂是筛查不是统计非劣证明；不得用 raw 填补作者失败后把 B 计成功。
+- **golden 影响预告**：src/constants.ts 两块将变（`board_put` 1323→1010 B、`TASK_DESC_APPEND` 1355→867 B，不含末尾 LF 口径）；`board_get` / `board_index` 与压力模板不动。**[第八轮修订]（v1.8.3：工件索引澄清）** 修正：实现轮同步目标 `board_put` 更新为 1095 B（C1 单行替换），其余不变。
+
+**[第八轮修订]（v1.8.3：工件索引澄清）** fixer 终结交付电池（工件索引句替换的行为验收；oracle 裁决 e000001 §4 最小组合；实现轮执行，逐项登记通过 / 失败样本，与上方各验收组并列）：
+
+- **两臂**：A = v1.8.2 现文（`board_put` 1010 B，含旧「Pin artifact references…」/「Index existing qualified reports…」两行）、B = v1.8.3 C1 单行（1095 B，不含末尾 LF 口径）；唯一变量 = 该替换；固定模型 / 参数 / 权限、omo-slim 角色与技能、初始工件；新 root、链内同 scope、交错顺序；机械 capture 关闭；业务 prompt 不额外提醒 board / hash；保存**实际发送的工具定义 / system prompt hash 与权限证据**，不只核对源码常量。只做冒烟可先跑前两项任务；4 fixtures × 2 臂各一次 = 8 executions，仍属筛查而非统计保证。
+- **四任务**：①单文件机械改名（如 `min`→`minutes`）+ 指定自检 → 短 change 交付：真实验证、修改后可取回引用、不复制源码；②依赖缺失且禁新增依赖（如 redis）→ 零违规改动、BLOCKED 交付：证据 / 限制 / 下一项所需输入，无虚构 hash；③明确待独立评审的修复 → change 交付绑定待审修订：列实际检查与未检查范围，评审待做，不把自检伪装 review PASS；④两文件联动 → 一条逻辑 handoff 列全范围：同一确切修订或逐文件 retained snapshot + SHA，不按文件重复发记录。
+- **版本保留**：用既有可读渠道，或测试前明确授权的 fixture 行为；无渠道则验**诚实缺口**——不逼 fixer 为过测试越权 commit / 另存。
+- **指标（分别统计、不互相冒充）**：①作者**结构化交付**（末返回前有合适的新 / 复用源；Outcome / Basis / Limits / Next 实质完整）；②**版本可取回**（harness 在允许范围内改写 working path 后仍能取回原版本——**≠ 仅检测 hash 不匹配**）；③**最终答复完整 ID**（能 `board_get`）。共同断言：不复制工件正文、无虚报 checks、工件是修改后内容且接收者可读；blocked 不免交。缺口如实分报，不以 stored 条数计成功；保留失败样本。既有复用 / 禁发布边界回归继续保留（上方各验收组），不扩为新的独立 fixer 样本。
+
+**[第八轮修订]（v1.8.1：复审修正）后继检索路线与扩围门禁**（承接 §11.3 检索扩展条款与 §1 raw 归档例外；本轮只定顺序与门禁，**不实现检索 / capture**——检索实现、FTS、聚合规则变更与 capture 引擎均不在本轮范围）：
+
+| 阶段 | 内容 | 门禁 |
+|---|---|---|
+| 1（当前） | 仅 `board_put` / `task` 两段 U2 常量 + golden 同步 + 上方 U2 A/B 文案电池（12×2）；capture 关闭、skill 载体不迁移 | 不夹带检索 / capture 实现 |
+| 2（检索及规模验收） | 实现 §11.3 检索扩展后执行检索验收电池：①covered 穿透负例——description 不含、正文含关键词的记录被聚合后，`search_in=content` 仍命中原记录并附 `covered_by`（description 命中穿透同断言）；②covered-body 命中只返回目录项与片段（片段非证据，命中仍须 `board_get` 取原文）；③跨流分页权限——cursor 约束含查询条件 / 权限 / 排序，权限变化不泄漏旧页隐藏项，跨流不复用单流 sequence cursor（含跨流相同 sequence 负例）；④两拓扑规模测量——约 300 与约 3000 记录、单流与千流拓扑，统计 recall 与 p95（e000013 §12.2 口径） | **未通过本阶段验收，不得宣称已具备统一全文 / scope 检索，也不得进行广泛写入扩围**——检索验收是扩大写入范围的前置门禁 |
+| 3（另行批准） | raw 原文兜底与 capture 可信封套字段均须另批立项；scope 级导航覆盖另议（§8.4） | raw 不得掩盖作者结构化漏交（§13.2），不构成全 task 完整回执（§1） |
+
 ## 15. 开放问题（第一轮验证后仍开放）
 
 - 注入可见性与插件处理顺序的竞争（ACP / 其他插件）。
@@ -866,6 +886,7 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 - **[第六轮修订]（信号退役）** B（子会话一次性入口提醒）**重定义**为待验证问题：规则已完整分发（11.8 运行时分发责任）后，**时机性提醒是否仍有额外收益**。重触发条件口径澄清为「**来源交付与消费链路失败**」——不只看生产端：应有来源未生成 / 已生成未返回引用 / 未绑定范围与版本 / 再交接只传摘要（**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 生产端成功但传导失败即入范围）/ 消费端有依赖线索却未读取可用来源（以 §14.4 行为验收、来源交付六场景与依赖路由验收的重复运行为据）。对照实验设计要求：同规则双臂、只差提醒（一臂有入口提醒、一臂无），否则无法归因；若启用，须承认其为**相对现行压力事件新增的事件类型**（**[第六轮修订·复审修正]（M1）** 不沿用「第四类事件」历史编号——该编号属已退役的入口信号体系，10.4 现仅剩压力信号），须另行批准并验收。（v1.5.0 原登记的「持续漏交来源」口径由本条取代。）
 - **[第六轮修订]（信号退役）** B1（AGENTS.md 全局兜底）**有条件兜底政策**：仅当某受支持执行形态在决策前确实拿不到工具描述时启用；维护者出版本化核心文本、宿主集成方决定接入，插件不自动修改用户全局配置（映射表见 11.8）。
 - **[第六轮修订]（信号退役）** 新增观察项：新描述文案（11.6 三段）的**遵循率**——CLI 单发与委派两形态分别统计（live 观察；不以写入条数 / 提醒命中数计成功）；**[第六轮修订]（方案 E：依赖路由与缺来源处理）** 起 `board_index` 缺来源分支同为观察对象（其描述现为决策规则 golden 载体）；**[第六轮修订]（v1.6.5：裁决持久化+A4/flash 文案修正）** 登记与判定按两种合同分开：**规则分发覆盖**（决策前是否实际收到该角色所需规则，见 11.8 覆盖合同）≠ **行为合规**（收到后是否正确生成、绑定、返回、传递和读取来源）——覆盖不替代行为验收，工具已注册不判通过。对照口径：同版本、同任务、明确模型配置重复；不把少量通过包装成模型能力认证，也不把测试配置下的行为失败表述为模型容量下限或架构豁免。当前登记（harness/acceptance/results.md，其措辞同步随实现轮处理）：测试配置下 flash 出现自然评审来源漏交；glm 完成发布与引用回流但确切工件版本绑定尚不充分——模型、上下文与提示配置的影响需同条件重复验证。**[第七轮修订]（v1.6.7：no-issues 分支文案）** `board_put` no-issues 分支观察口径为行为验证（§14.4 no-issues 分支行为验收组；单测覆盖不构成该分支已验证状态，oracle 2026-09-25 现状更正）；既有 P3b / P3c 未发现问题分支来源交付 0/2（认可裁定已触发、零发布内联作答）登记为待复现基线——替换后按新验收组同条件复测，CLI / 委派分开统计，结果另行登记。
+- **[第八轮修订]（v1.8.3：工件索引澄清）** results.md 措辞收窄登记：harness/acceptance/results.md「验证了路线图 Phase 3 必要性」口径应收窄为「观察到结构化交付缺口，增加了评估机械兜底的依据」——数据证明的是样本内结构化漏交，不证明唯一根因、不证明 raw 为唯一修复（裁决 e000001 §2）；results.md 属历史证据文件，本轮不改，修正随归档轮一并处理。
 - **[第六轮修订]（方案 E：依赖路由与缺来源处理）** C′（消费端一次性短提示）：设想对「任务含依赖线索、委派方未路由来源、消费者亦未发现」场景注入**无计数、无目录**的一次性短提示。定位：**远期实验候选，非默认机制**——本轮裁决不新增运行时机制（时间窗回执、存在性广播等提议均否决），消费缺口先由依赖路由验收（§14.4）与本节观察项监测；若自然链路数据显示缺口持续，另行批准立项，并按与 B 相同的双臂对照规则（同规则双臂、只差提醒）验收。
 - **[第七轮修订]（v2 适配）** 新增观察项：①**v2 消息边界的 unknown 率**——真实会话中无法证明请求边界的末消息（无 ID、synthetic 转 `role:"user"` 等，16.3-3）出现频率；unknown 影响面**不限于注入覆盖面**（**[第七轮修订]（v1.7.1：复审修正）** I2）：同时影响**轮次知识状态**（双 `round_known` 失效落盘 → 后续 `created_round=null`）与**近期保护 / 自动聚合资格**（§9：`created_round=null` 默认不参与自动聚合）——观察时按这三面分开统计；不构成放宽 16.3-3 归一化规则的理由；②**OpenChamber v2 宿主下的端到端行为**——先 v2.0.16 装载 + 四工具调用冒烟（16.4 陷阱清单的最低验收面），再在自然会话中观察 v2 目录自动发现装载、四工具调用与注入到达。
 
@@ -911,10 +932,12 @@ opencode v2（anomalyco；v2.0.0 已发布，OpenChamber v2-only）插件 API �
 - **存储零迁移**：dataDir（options 或 `~/.cache/opencode/blackboard/v1`，src/plugin.ts:21–23 现状）、文件锁、锁内事务、`decideAndPersist` 原样——src/nudge.ts:160–225 锁内验证 / 轮次推进 / 预算写入不迁移；**含 unknown 保守失效事务**（双 `round_known=false` 同步落盘，src/nudge.ts:153–159、204–224 现状，16.3-3）——**[第七轮修订]（v1.7.1：复审修正）** I2「原样」指存储形状与事务语义不迁移，**不得解释为禁止正确性所需的最小入口分支接线**（如 v2 侧失效路径入口），更不得以「原样」为由跳过失效落盘；v2 `ctx.storage` 仅为按插件 ID 分区的 JSON KV、无多键事务，**非无损替代**；
 - **Zod 4 经 StandardSchema 接入**（v2 Tool.ValueSchema 支持 StandardSchema）；
 - **工具结果包 `{ content: text }`**（**[第七轮修订]（v1.7.1：复审修正）** M2）**由 BCP v2 adapter 的 execute 包装并返回 `Promise<Tool.Result>`**——原样返回 string 不能当作文本 Result（宿主读取 result.content，v2.0.16 packages/plugin/src/promise/tool.ts:19–24、core/src/tool.ts:143–146；adapter 转调不包装）；
-- **v1 行为零变更**：现有 183 测试为回归基线。
+- **v1 行为零变更**（**[第八轮修订]（v1.8.1：复审修正）** 范围限定）：限于 **v2 适配迁移**所涉 core / 身份 / 预算 / 存储语义不变；本轮 U2 共享描述（11.6 两段——v1 `task` 与 v2 `subagent` 同一文本）及其交付行为 golden 是**显式变更例外**（11.7、§16.6）。现有 183 测试为回归基线，**不替代**新增 T 交付验收（§14.4）。
 
 ### 16.6 v2 明确不做
 
 - 不构建全功能 v1→v2 SDK 兼容 / 仿真层；
 - 不以 namespace、全局最近 session 或 prompt 闭包猜测调用者身份（身份只取工具执行上下文三字段）；
 - 不把 `ctx.storage` 当作 storage.ts 的替代，不随宿主大版本更换 dataDir。
+
+**[第八轮修订]（U2）验收改造**：两宿主验收电池须补 **T 分支（含 blocked / no-issues 的终结交付）**与**末返回前提交**（区别于事后补写）断言；跨流 / 全文检索与 capture 缺口验收随 §14.4「后继检索路线与扩围门禁」阶段 2 / 阶段 3 启用；不以现有测试数量（223 / 222）替代新契约；v1 / v2 双宿主**分开证明覆盖**（主表：§14.4 U2 A/B 电池）。
