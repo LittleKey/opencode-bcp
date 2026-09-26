@@ -507,3 +507,7 @@ fixer 实际工具面 26 项（探针逐项列举）：board 四工具全在✓�
 - **F2 契约+文档**：DESIGN v1.8.4（分发责任表补 fixer_append 桥接行、规则所有权表 8 条→13 条、:643 口径修正、F1 三态登记、R1 留实验）；INSTALL 增「已验证 omo-slim 集成配置」章节（快照表+承诺边界+H_loaded 可复现步骤）；README 同步。快核 REJECT（N1 承诺越界/N2 表遗漏/N3 复现不可执行）→ 三修落地（指纹 36ae7c63…，N1 越界承诺清除、v2 如实标实验性质）。
 - **F1 版本锚定夹具电池三态全 PASS**（v3 NOTE 欠账清偿）：①git 渠道正例——fix-28 修复+自主 commit b5f14af+交付钉 "clamp.ts at commit b5f14af (main)"，后续提交 5ad11b6 后 `git show b5f14af:clamp.ts` 仍取回修复版（渠道真用+可取回双证）；②无渠道负例——fix-29 Basis 显式申报 "No hash retained — unversioned path only"+未越权建库（nogit/.git 不存在）+ASCII 限制诚实标注；③blocked N/A——v3 B1/B2 已证（No artifact version retained 申报）。
 - **结论**：版本锚定能力从未验证变为有正反夹具结论；「已验证集成配置」成为版本化交付单位；R0 路线（零运行时文本变更）完整落地。
+
+## 2026-09-26 v1.8.5 回滚（v1.8.6）：content 上限放大无可达收益
+
+三层实测：①schema 层放大正确（262144/262145 边界精确）；②宿主传输层——三条发射路径（CLI deepseek-flash 68K/100K、oracle 角色拒绝+契约优先拒绝两形态、orchestrator glm-5.3@max 自发 68K）全部在参数发射层截断（JSON Parse error: Unterminated string），**从未到达 schema 校验器**——本机任何模型的单参数发射上限低于旧 64K 边界，原痛点前提（被 content_too_large 拒）不可复现；③行为层意外收获——oracle 把常驻工件索引条款置于任务指令之上（反膨胀教学实证生效）。裁定：回滚（git revert ed045d4 + 契约 v1.8.6 记录）；超大内容正路=文件+source_refs；将来大发射窗口模型/宿主出现且有实测拒绝样本时可低成本重升。
