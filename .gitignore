@@ -10,3 +10,4 @@ harness/scratch/
 # raw run dumps (keep curated acceptance evidence + Phase A probe evidence)
 harness/runs/*
 !harness/runs/evidence-*.jsonl
+.opencode/
