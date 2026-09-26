@@ -511,3 +511,7 @@ fixer 实际工具面 26 项（探针逐项列举）：board 四工具全在✓�
 ## 2026-09-26 v1.8.5 回滚（v1.8.6）：content 上限放大无可达收益
 
 三层实测：①schema 层放大正确（262144/262145 边界精确）；②宿主传输层——三条发射路径（CLI deepseek-flash 68K/100K、oracle 角色拒绝+契约优先拒绝两形态、orchestrator glm-5.3@max 自发 68K）全部在参数发射层截断（JSON Parse error: Unterminated string），**从未到达 schema 校验器**——本机任何模型的单参数发射上限低于旧 64K 边界，原痛点前提（被 content_too_large 拒）不可复现；③行为层意外收获——oracle 把常驻工件索引条款置于任务指令之上（反膨胀教学实证生效）。裁定：回滚（git revert ed045d4 + 契约 v1.8.6 记录）；超大内容正路=文件+source_refs；将来大发射窗口模型/宿主出现且有实测拒绝样本时可低成本重升。
+
+### ⚠️ v1.8.6 结论更正（2026-09-26，用户他机实测）
+
+v1.8.6 的「放大无可达收益」**不成立**：发射层截断是本机（newapi 中转+deepseek-flash/glm-5.3）模型发射预算特性；用户另一机器实测 256K 版生效（大 content 存储通过，仅 description>80 code points 被拒=符合契约）。v1.8.7 已恢复 256 KiB（revert-the-revert）。opencode 本身无工具调用大小拦截——「Unterminated string」是模型发射中断（输出预算耗尽）后宿主解析残缺 JSON 的表现，不同机器/模型/中转的发射预算不同所致。
