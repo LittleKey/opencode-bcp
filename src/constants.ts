@@ -1,33 +1,19 @@
-// 认知契约常量单源（DESIGN v1.6.6 §10.2/§11.6/§11.7）。
+// 认知契约常量单源（DESIGN v1.8.2 §10.2/§11.6/§11.7）。
 // 入口词法提醒已退役（v1.6.0 信号退役）：模板① 与规范句 NORMATIVE_SENTENCE 废除，
 // 自动注入仅剩聚合压力提醒（模板②）；决策规则改为常驻工具描述文案。
 // 本文件常量文案逐字节取自 DESIGN，禁止改写（test/constants.test.ts golden 校验）。
 
-/** §11.6 工具描述认知契约：board_put 为 v1.6.5 决策规则文案（or proposal + 工件引用版本锚定句，非逐字）；board_get 为 v1.6.0 决策规则文案（非逐字，不再是 advisory §4.2 逐字）；board_index 为 v1.4.9 微调版基础上 v1.6.3/v1.6.4 追加缺来源处理分支（非逐字）；board_aggregate 无文案契约（§11.6 注），维持既有中文描述不变。 */
+/** §11.6 工具描述认知契约（U2 版，v1.8.0 整体替换 + v1.8.2 放行同步）：board_put / board_get / board_index 为 §11.6 ```text golden 逐字节；board_aggregate 无文案契约（§11.6 注），维持既有中文描述不变。 */
 export const TOOL_DESCRIPTIONS = {
   board_put:
-    "Preserve source-grounded requirements, decisions, findings, and review\n" +
-    "results with their exact constraints—not routine progress; separate user\n" +
-    "quotes from interpretation; reuse existing records. Beyond required\n" +
-    "deliveries, save only information that is reusable or valuable if context is\n" +
-    "lost.\n" +
-    "When a task asks you to review an artifact or proposal—even standalone requests—your\n" +
-    "verdict is a deliverable: publish it bound to the reviewed scope and version.\n" +
+    "Before returning any task result, publish or reuse one board handoff for that result.\n" +
     "An \"adequate\" or \"no issues\" verdict still needs publication.\n" +
-    "For new review records, use kind=review.\n" +
-    "A qualified source holds relied-on conclusions and qualifications, is\n" +
-    "retrievable at an exact version, and readable with the receiver's tools and\n" +
-    "permissions; a reference string alone proves nothing.\n" +
-    "Pin artifact references to retrievable revisions (e.g. path at a commit or\n" +
-    "retained snapshot plus hash), not mutable paths.\n" +
-    "Cite an existing\n" +
-    "qualified source instead of duplicating; publication restrictions always win.\n" +
-    "Before your result is handed onward, provide a qualified source. Respect\n" +
-    "task/tool/publication restrictions, and report any source-delivery gap\n" +
-    "explicitly instead of claiming success.\n" +
-    "In your final reply, include full bb:// IDs for successfully published or\n" +
-    "reused board records, or exact versioned references to other qualified\n" +
-    "sources.",
+    "Describe the object, outcome and scope for discovery. In content state Outcome, Basis, Limits and Next; retain exact constraints and separate user quotes from interpretation.\n" +
+    "Use kind=review for reviews; bind the reviewed artifact or proposal to a retrievable version.\n" +
+    "A qualified source contains conclusions and qualifications at a retrievable exact version, readable with the receiver's tools and permissions; a reference string alone proves nothing.\n" +
+    "For artifact-backed results, including code/file changes and existing qualified reports, use a short board index: summarize the result and pin artifact references to retrievable revisions (path at a commit or retained snapshot plus hash), without copying artifact bodies. Do not log routine progress.\n" +
+    "Task, tool and publication restrictions take precedence; report gaps instead of claiming delivery.\n" +
+    "End with full bb:// IDs of stored or reused handoffs and exact references to external sources.",
   board_get:
     "Read exact task-relevant records by ID before relying on them. Verify what you\n" +
     "rely on: the conclusions, their qualifications, the artifact version, and that\n" +
@@ -43,26 +29,14 @@ export const TOOL_DESCRIPTIONS = {
   board_aggregate: "把本流 8–16 条旧目录项折叠为一个索引摘要（仅目录折叠，原条目可继续 board.get）",
 }
 
-/** §11.6 task 段全文（v1.6.1 委派方路由责任文案，v1.6.3 起追加依赖路由三行，v1.6.5 评审要求句扩至产物或提案并替换恢复段，非逐字）。 */
+/** §11.6 task 段全文（U2 版，v1.8.0 整体替换 + v1.8.2 放行同步；v1 `task` 与 v2 `subagent` 同一份文本，§11.7/§16.4-1）。 */
 export const TASK_DESC_APPEND =
-    "When delegating work that will be handed off or reviewed, pass original\n" +
-    "constraints, selected board IDs with their purpose, and artifact versions.\n" +
-    "When follow-on work is governed by earlier requirements, decisions, or review\n" +
-    "findings, pass their qualified source references as task inputs too—an\n" +
-    "artifact path alone does not carry the constraints that govern it.\n" +
-    "Do not replace source-authored findings with your paraphrase; ask for IDs of\n" +
-    "reusable results on return. A qualified source holds relied-on conclusions\n" +
-    "and qualifications, is retrievable at an exact version, and is readable by\n" +
-    "the receiver; require it for artifact or proposal reviews without confusing\n" +
-    "file-edit limits with publication bans. Verbatim-only relay suffices\n" +
-    "for single-use original inputs or non-review results not yet handed on;\n" +
-    "excerpts may accompany, never replace, qualified source references.\n" +
-    "On review return and before onward handoff, check the author's qualified\n" +
-    "source references. If missing or unqualified, ask the author for an existing\n" +
-    "source; request publication only if needed and allowed. If no qualified\n" +
-    "source can be supplied, report the gap instead of claiming complete\n" +
-    "delivery. Pass the author's references onward, not just a paraphrase.\n" +
-    "Reuse qualified versioned artifacts without creating board copies.\n" +
+    "For every delegation, pass original constraints, artifact or proposal versions, and qualified sources for governing requirements, decisions and findings. A path alone does not carry those constraints.\n" +
+    "Require one terminal board handoff before return, with its full bb:// ID, including blocked or no-issues outcomes.\n" +
+    "A qualified source contains the relied-on conclusions and qualifications at a retrievable exact version and is readable by the receiver.\n" +
+    "On return and before onward handoff, read and check the author's source; forward its exact references, not just your paraphrase.\n" +
+    "If it is missing, recover an existing source or report the gap. Do not assume a finished author can be resumed; a raw capture is not a structured handoff.\n" +
+    "File-edit limits are not publication bans; publication restrictions still win.\n" +
     "Include required bb:// IDs verbatim in task.prompt."
 
 /** §10.2 模板② 聚合压力提醒（v1.4.7 T0 补缺逐字常量，v1.6.0 保留；278B/LF，≤512B，无板数据） */

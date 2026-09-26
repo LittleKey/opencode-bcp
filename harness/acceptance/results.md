@@ -426,3 +426,72 @@ entry_signal_1（nudge-1/8、n-old-1）· entry_signal_2（nudge-8）· entry_si
 **判定**：方向一致（基线 0/2 → A 1/3 → B 3/3），新独立句在本夹具下改善 no-issues 交付。**口径限制（按裁决要求如实登记）**：n=3 不构成统计显著；固定标准夹具本身可能部分激活交付行为（A 组 1/3 高于自然基线 0/2 即其证据）；本结果证明「本夹具下改善」，不外推自然场景修复率。
 
 **流程注记**：①A-B 电池经「重装旧构建→跑→恢复新构建→sha 验证」完成，唯一变量控制成立；②实验期间旧构建短暂在线（~3 分钟）无残留影响；③会话复用跨 scope 世代的引用断裂（doc-5 forbidden）为授权设计正确行为——需要引用现行 scope 记录的委派应使用同时代/新会话。
+
+## 2026-09-26 U2 无条件作者交付 A/B 电池（B 臂 12 任务 in-host 全量；A 臂复用历史基线）
+
+构建 815453B（U2 文案 1010/867B）；工作区 /tmp/opencode/u2-battery（scope b59fa90c，本电池新增 13 条姊妹流）。
+
+| # | 场景 | 类 | 判定 | 证据 |
+|---|---|---|---|---|
+| 1 | 自然工件评审 | oracle | PASS | 发布 kind=review+SHA 版本钉+ID 回传（4c357cc7…/e000001） |
+| 2 | 提案评审 | oracle | PASS | FIFO≠LRU 阻断项+Node 取证+提案快照保留（7a69619b…/e000001） |
+| 3-5 | no-issues ×3 | oracle | **3/3 PASS** | 全部发布+ID；对照 v1.7.1 自然基线 0/2 → U2 翻转 |
+| 6 | 已有来源复用 | oracle | PASS | 未给 ID 自主发现既有评审、精确引用、声明「prior review 非新评」、零重复发布 |
+| 7a | 约定裁定 | writer | PASS | 发布+ID+Outcome/Basis/Limits/Revision 四结构（a2767262…/e000001） |
+| 7b | 显式路由续跳 | writer | PASS | 读取约定记录遵循+自发布 handoff+双 ID（2c6fa946…/e000001） |
+| 8 | 无路由发现 | writer | PARTIAL | 发现并引用另两条记录（评审+裁决）但**漏约定记录**→正确 BLOCKED 不臆造+blocked 交付照发（8dab63ac…/e000001，四结构典范） |
+| 9 | 禁发布 | oracle | PASS | 零写入+完整内联交付+诚实声明 |
+| 10 | 短小机械任务 | fixer | **MISS** | 零 board 交付（0 stored） |
+| 11 | 采拒裁决 | writer | PASS | kind=decision+逐字引用+范围+诚实 Limits（3cc8e2d0…/e000001） |
+| 12 | blocked | fixer | **MISS** | 零 board 交付（对照 doc-12 同为 blocked 形态却交付） |
+
+### 三个结构性发现
+1. **类分化**：oracle 6/6、writer 4/4、fixer **0/2**——T 边界首句对「非评审任务形态」的 fixer 未生效（工件直觉延续：代码文件即来源无需入板）。验证了路线图 Phase 3（raw 机械兜底）的必要性——恰覆盖该类缺口。
+2. **发现基础设施缺口**：doc-12 声称全枚举却漏掉同 scope 的约定记录（其 description 含 "conventions" 关键词、board_get 可查）——最可能原因为 13 姊妹流下 other_streams 有界目录截断（§11.3 已预告需分页）。Phase 2 检索扩展（search_scope+跨流分页）从「重要」升格为「load-bearing」。
+3. **交付质量整体高**：四项结构/SHA 钉/逐字引用/诚实 Limits 普遍出现；doc-12 的 blocked 记录（含可复用事实包+对下游的一跳请求）是 U2 语义的最佳样本。
+
+### 判定
+B 臂（U2）在 oracle+writer 类 10/10 达成「结束前真实提交+结构完整+版本可取回+最终 ID」；fixer 类 0/2 为系统缺口待 Phase 3 兜底；发现基础设施待 Phase 2。A/B 对比：no-issues 0/2→3/3、writer 自愿档→T 全交付、blocked 交付（doc 类）从无到有。n=12/臂为筛查级，非统计非劣证明。
+
+## 2026-09-26 v1.8.3 工件索引澄清 × fixer 电池（B 臂 4 任务；A 臂复用主电池 fix-11/12）
+
+- **B 臂（澄清文案 1095B，构建 815533B）**：B1 机械改名（sumEven+自检过）**MISS**；B2 待审修复（时区符号修复+验证过，任务正文含「reviewed afterward」）**MISS**；B3 blocked（redis 缺失，验证充分零虚构，行为典范）**MISS**；B4 双文件联动（常量+依赖注释同步改+grep 验证）**MISS**——**0/4，全部零 board 交付（日志证实）**。
+- **A 臂（v1.8.2 文案）**：机械 0/1（fix-11）、blocked 0/1（fix-12）——两臂无信号差，A 臂补测（待审修复/双文件）取消（无差异可检，省 build 换装）。
+- **判定**：工件索引澄清（+85B）对 fixer 类**无效**——根因 c（角色框架）确认为约束主项：omo-slim fixer 定义的终点模板（summary/changes/verification）无任何交付步骤，任务正文含「reviewed afterward」也不触发。澄清文案语义正确（B 臂执行质量全部合格），保留为正确形态教学，不回退。
+- **建议**（按证据）：①omo-slim fixer 定义补终结交付步骤（用户配置域，四行模板加一行）或 ②Phase 3 raw 机械兜底优先级上调（ora-28 裁决预设路径：澄清后仍漏交→上调）。两者互补：①治角色框架，②保原文不丢。
+- 记录链：裁决 bb://…/d24fc770…/e000001、快核 e000002、契约交付 bb://…/c1bd1624…/e000001。
+
+### ⚠️ 归因更正（2026-09-26，orchestrator 自查）
+
+上表「B 臂（澄清文案 1095B）」归因**错误**：fixer 电池 B1-B4 派发时宿主未重启，in-host 子会话实际运行驻留的 v1.8.2 文案（815453B，board_put 1010B）——澄清文案（1095B，构建 815533B 已安装但未驻留）**未被测试**。因此 B1-B4 实为 v1.8.2 文案下的 fixer 重复测量（累计 0/6，与主电池一致），「澄清对 fixer 无效」的结论**不成立**，根因 c 仅为待检假设。待宿主重启后以驻留 v1.8.3 构建重跑同规格 4 任务再判。教训：in-host 电池前必须确认构建驻留（日志/决策字节特征或重启确认），安装≠生效。
+
+## 2026-09-26 fixer 电池有效轮（v1.8.3 澄清文案驻留确认后重跑 4 任务）
+
+驻留确认：子会话逐字引用 board_put 描述含 artifact 句=C1 澄清句（For artifact-backed results, including code/file changes…）——宿主已载 1095B 文案；夹具全重置后原样重派。
+
+| 任务 | 发布 | ID 回传 | 四结构 | 版本锚 |
+|---|---|---|---|---|
+| v2-1 机械改名 | ✓（b8b7f44f…/e000001） | ✓（Handoff 行） | ✓（含 deno 可移植性 Limits） | ✗ 仅路径 |
+| v2-2 待审修复 | ✓（eabe51d0…/e000001，Next 捕获「user-requested review」） | ✗ 答复无 ID 行 | ✓ | ✗ 仅路径 |
+| v2-3 blocked | ✗（0 stored；阻塞分析典范：查 npm root/redis-server/I-O 面） | — | — | — |
+| v2-4 双文件联动 | ✗（0 stored） | — | — | — |
+
+### 终判（推翻无效轮的错误结论）
+- **澄清文案部分起效**：fixer 发布率 v1.8.2 文案 0/6 → v1.8.3 文案 **2/4**，完整 T（发布+ID）1/4——澄清保留，不回退；
+- 残余缺口：blocked 形态与多文件形态仍零交付；版本锚定（hash/commit 钉）在 fixer 记录中仍缺席（与 A4 以来注册的工件锚定弱观察一致）；ID 回传不稳定；
+- 根因画像修正：c（角色模板无交付步骤）仍成立但非全量解释——同模板下机械/待审形态被文案推动、blocked/多文件未推动，形态×文案存在交互；
+- 后续选项：①omo-slim fixer 模板补交付行（治残余形态）②Phase 3 raw 兜底（保底覆盖）——可组合，待用户裁定。
+
+### 诊断补全（2026-09-26，fixer 工具面枚举探针，只读）
+
+fixer 实际工具面 26 项（探针逐项列举）：board 四工具全在✓；**`task` 工具不在**（仅 task_reply）；edit/write/bash/read 等全在。定案：TASK_DESC_APPEND（含唯一的 "including blocked or no-issues outcomes" 显式覆盖）**从未进入 fixer 上下文**；board_put 文本（fixer 可见）显式点名 no-issues 但**从不出现 blocked**。替身裁决的方向性主张经直接枚举证实（其 VP-2 引用不足的缺陷由本探针补证）。成因栈最终版：①blocked 语义在 fixer 可见文本缺席（新证实）+②终消息模板捕获（部分合规签名：v2-2 发布✓/ID✗）+③多文件粒度/报告错觉（弱假设）。修复路径不变（fixer_append.md 终结步骤=同治①②），按用户指示暂缓。
+
+## 2026-09-26 fixer_append.md 终结步骤 × v3 电池（PASS-WITH-NOTE，L1 保留 append）
+
+- **修复**：`~/.config/opencode/oh-my-opencode-slim/fixer_append.md` 单行 433B（SHA fa03f0a7…/文件 8d07d566…，ora-23 方案包 e000002 逐字）——对症两机制：`including for blocked or no-change outcomes`（成因①语义缺席）+ `end your reply with the full bb:// ID`（成因②终消息模板捕获）。
+- **驻留三级证据**：H_file=双 hash 一致；H_loaded=宿主重启后运行态 agent 导出（Basic auth via OPENCODE_SERVER_PASSWORD，端口 42227）fixer prompt 2836B 中片段恰现 1 次且 SHA 匹配；H_wire 未取（运行态导出已达方案证据级）。
+- **S0 smoke**：READY 形态零交付（H2 数据点：模型判「无实现要求=无结果」；不在通过线，留观察）；驻留半证由 H_loaded 定案。
+- **业务五样本 5/5**：B1/B2 blocked（交付+末行 ID+版本 N/A 诚实申报+第二阻塞理由）；M1/M2 双文件（kind=change+双 source_refs，M2 附运行时语义验证）；R1 待审修复（四结构+"/tmp artifact (no version control)" 显式申报+Next 保留待审语境——v2-2 的 ID 缺失回归修复）。反滥用：五会话 stored 各恰 1。
+- **三个历史缺口全闭**：blocked 0/2→2/2；多文件 0/2→2/2；ID 回传不稳→末行 ID 字面执行。
+- **NOTE**：M1 未申报版本缺口（M2 未查）；版本锚定能力未验证（需 git 渠道夹具另测）——不影响 L1。
+- **判定**：L1 全项满足→append 永久保留；Phase 3 无触发（零「允许交付却无等价可读 handoff」样本），维持二段门禁。
