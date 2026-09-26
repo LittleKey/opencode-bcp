@@ -446,8 +446,8 @@ entry_signal_1（nudge-1/8、n-old-1）· entry_signal_2（nudge-8）· entry_si
 | 12 | blocked | fixer | **MISS** | 零 board 交付（对照 doc-12 同为 blocked 形态却交付） |
 
 ### 三个结构性发现
-1. **类分化**：oracle 6/6、writer 4/4、fixer **0/2**——T 边界首句对「非评审任务形态」的 fixer 未生效（工件直觉延续：代码文件即来源无需入板）。验证了路线图 Phase 3（raw 机械兜底）的必要性——恰覆盖该类缺口。
-2. **发现基础设施缺口**：doc-12 声称全枚举却漏掉同 scope 的约定记录（其 description 含 "conventions" 关键词、board_get 可查）——最可能原因为 13 姊妹流下 other_streams 有界目录截断（§11.3 已预告需分页）。Phase 2 检索扩展（search_scope+跨流分页）从「重要」升格为「load-bearing」。
+1. **类分化**：oracle 6/6、writer 4/4、fixer **0/2**——T 边界首句对「非评审任务形态」的 fixer 未生效（工件直觉延续：代码文件即来源无需入板）。**【2026-09-26 收窄】此为当时观察：该缺口其后由 fixer_append 桥接修复（v3 电池 5/5），不构成 Phase 3（raw 兜底）的必要性证据；raw 只保原文不替代作者交付（ora-24 e000001 F3）。**
+2. **发现基础设施缺口**：doc-12 声称全枚举却漏掉同 scope 的约定记录（其 description 含 "conventions" 关键词、board_get 可查）——**【2026-09-26 收窄】成因未定案：源码 other_streams 对授权流为直接 filter/map 无截断上限（src/tools.ts:247-249），「目录截断」假说无源码依据；真实原因需宿主实际响应证据才能定责（ora-24 e000001 F3）。Phase 2「load-bearing 升格」结论随之降回待验证假设（该轮实现已被用户裁定撤销）。**
 3. **交付质量整体高**：四项结构/SHA 钉/逐字引用/诚实 Limits 普遍出现；doc-12 的 blocked 记录（含可复用事实包+对下游的一跳请求）是 U2 语义的最佳样本。
 
 ### 判定
@@ -495,3 +495,15 @@ fixer 实际工具面 26 项（探针逐项列举）：board 四工具全在✓�
 - **三个历史缺口全闭**：blocked 0/2→2/2；多文件 0/2→2/2；ID 回传不稳→末行 ID 字面执行。
 - **NOTE**：M1 未申报版本缺口（M2 未查）；版本锚定能力未验证（需 git 渠道夹具另测）——不影响 L1。
 - **判定**：L1 全项满足→append 永久保留；Phase 3 无触发（零「允许交付却无等价可读 handoff」样本），维持二段门禁。
+
+### v3 判定表述修正（oracle 2026-09-26，e000003 纠偏）
+
+上节「L1 全项满足」**限定为：五业务样本（B 2/2+M 2/2+R 1/1）的交付与末行 ID 维度全项满足**——非原方案全项：S0 实际零交付（READY 形态缺口保留观察）；M1 未申报版本渠道缺口（版本锚定维度未达）。append 收益与 L1 保留结论不变。
+
+## 2026-09-26 R0 治理整合轮（F1/F2/F3 三修；DESIGN v1.8.4 @36ae7c63…；零运行时文本变更）
+
+- **背景**：ora-24 全新视角整体重评估（bb://…/85716e00…/e000001，REJECT prompt 合并：三触点 T 是多触点非冗余、R1 合并无净收益）→ 用户批准 R0 五项计划全量执行。
+- **F3 归因收窄**：results.md 两处过强归因收窄（fixer 漏交≠raw 必要性证据——已被 append 修复关闭；「目录截断」无源码依据未定案）。
+- **F2 契约+文档**：DESIGN v1.8.4（分发责任表补 fixer_append 桥接行、规则所有权表 8 条→13 条、:643 口径修正、F1 三态登记、R1 留实验）；INSTALL 增「已验证 omo-slim 集成配置」章节（快照表+承诺边界+H_loaded 可复现步骤）；README 同步。快核 REJECT（N1 承诺越界/N2 表遗漏/N3 复现不可执行）→ 三修落地（指纹 36ae7c63…，N1 越界承诺清除、v2 如实标实验性质）。
+- **F1 版本锚定夹具电池三态全 PASS**（v3 NOTE 欠账清偿）：①git 渠道正例——fix-28 修复+自主 commit b5f14af+交付钉 "clamp.ts at commit b5f14af (main)"，后续提交 5ad11b6 后 `git show b5f14af:clamp.ts` 仍取回修复版（渠道真用+可取回双证）；②无渠道负例——fix-29 Basis 显式申报 "No hash retained — unversioned path only"+未越权建库（nogit/.git 不存在）+ASCII 限制诚实标注；③blocked N/A——v3 B1/B2 已证（No artifact version retained 申报）。
+- **结论**：版本锚定能力从未验证变为有正反夹具结论；「已验证集成配置」成为版本化交付单位；R0 路线（零运行时文本变更）完整落地。

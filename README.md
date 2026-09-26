@@ -15,7 +15,9 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 | opencode 1.x（v1 插件 API） | 生产验证完整：单元 + 验收 + 多轮 live 验收（详见 [harness/acceptance/results.md](harness/acceptance/results.md)） |
 | opencode 2.0.16+（v2 插件 API） | 适配层已实现，41 项 adapter 测试通过；**真实 v2 宿主端到端验收尚未执行**，v2 安装属尝鲜性质 |
 
-设计契约见 [DESIGN.md](DESIGN.md)（v1.7.1，双版本适配架构）。
+「独立插件」与「已验证集成」是两种不同的承诺：前者只提供四工具与决策规则描述及安装接线检查（工具可见 + decision 日志；**接线检查不等于描述分发或行为验证**；v2 为实验性质，真实加载与行为未验收，不承诺任意宿主行为实效），后者附带经行为电池验证的集成快照（插件构建、宿主、模型、fixer 工具面与角色桥接 hash、驻留验证方法）。已验证 omo-slim 集成配置与承诺边界见 [INSTALL.md](INSTALL.md)「已验证 omo-slim 集成配置」。
+
+设计契约见 [DESIGN.md](DESIGN.md)（v1.8.4；U2 无条件作者交付 + 规则所有权表与已验证集成配置登记）。
 
 ## 核心模型速览
 
@@ -30,7 +32,7 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 | 工具 | 职责 |
 |---|---|
-| `board_put` | 写入持久记录：精确约束、结论、适用范围与必要来源；返回完整 `bb://` ID |
+| `board_put` | 发布或复用一份任务交付（终结交付，含 blocked / no-issues）：精确约束、结论、适用范围与必要来源；返回完整 `bb://` ID |
 | `board_get` | 按 ID 读回确切记录：读原文而非凭引用字符串行事 |
 | `board_index` | 检索发现：按 stream / kind / 关键词定位相关 ID |
 | `board_aggregate` | 把多条旧目录项折叠为一条索引摘要：只缩目录，原文恒可 `board_get` |
@@ -107,7 +109,7 @@ src/
 test/               # 224 项测试（含 live 验收迁移断言）
 scripts/install.sh  # 安装脚本（v1/v2 双模式）
 harness/            # 验收记录与工具
-DESIGN.md           # 设计契约全文（v1.7.1）
+DESIGN.md           # 设计契约全文（v1.8.4）
 ```
 
 ## License

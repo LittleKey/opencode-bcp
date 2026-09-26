@@ -63,6 +63,64 @@ rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 
 日志出现 `decision` 事件即插件已接线。同时确认会话内可见四个工具：`board_put`、`board_get`、`board_index`、`board_aggregate`。
 
+## 已验证 omo-slim 集成配置（2026-09-26 快照）
+
+上述「验证」只证明**接线**（工具注册与日志）。以下是经行为电池验证的**集成快照**（DESIGN.md v1.8.4「规则所有权与配置版本化」；v3 电池 5/5 证据见 [harness/acceptance/results.md](harness/acceptance/results.md):489–501）：其中磁盘与配置数值可直接核验（H_file），运行态驻留按下方「可复现步骤」执行（omo-slim 角色 profile 未保留不可变快照，此前**不称「完整可复现快照」**）。超出本快照的宿主 / 模型 / 角色配置**不自动继承**行为结论。
+
+| 项 | 已验证值 |
+|---|---|
+| 插件 commit | `1cf6c08`（feat+docs: sync U2 descriptions (board_put 1095B, task 867B); U2/fixer battery evidence） |
+| 构建产物 | `dist/blackboard.ts` 815533 B，SHA-256 `761ca36fdbc1d3ab9976e7a841119182fc9e797d7e334c675ff8dda2ba6c8293` |
+| 已安装文件 | `~/.config/opencode/plugin/blackboard.ts`——与构建产物逐字节一致（双 hash 相同） |
+| 宿主 | opencode 1.18.31（v1 插件 API，`opencode serve` 运行态；运行态导出走 Basic auth） |
+| 模型变体 | fixer = `newapi/glm-5.3-flash`（variant `max`，`oh-my-opencode-slim.json` presets/newapi/fixer） |
+| fixer 工具面 | 实测 26 项：board 四工具全在；**`task` 不在**（仅 task_reply）——results.md:487 只读探针 |
+| fixer 角色桥接 | `~/.config/opencode/oh-my-opencode-slim/fixer_append.md`：内容 433 B（无末尾 LF）SHA-256 `fa03f0a7be6b918ccc5d480212c36d57c297f1d1d373d4ccc45ce212b608859d`；文件含 LF 434 B，SHA-256 `8d07d56681fae8aa5642a0733cd06caa59b4f918f4903aab1825d0032b810ffc` |
+| 驻留验证方法 | H_file = 磁盘双 hash 一致；H_loaded = 宿主**重启后**运行态 agent 导出，fixer prompt 2836 B 中桥接片段恰现 1 次且 SHA 匹配（results.md:492）；H_wire 未取 |
+
+**教训注记（安装 ≠ 驻留）**：v1.8.3 澄清文案构建已安装但宿主未重启时，in-host 电池实际运行的是旧驻留文案（815453 B），结论被误归因后经重启重跑纠正（results.md:466）。任何行为断言前必须先确认驻留：重启宿主，或以日志 / 决策字节特征确认当前运行文本。
+
+### 承诺边界
+
+- **独立插件承诺**（接口与接线）：插件提供四工具 `board_put` / `board_get` / `board_index` / `board_aggregate` 及其决策规则描述，并附带安装接线检查（`decision` 日志事件 + 会话内四工具可见）。**接线检查 ≠ 描述分发或行为验证**（DESIGN.md §11.8 覆盖合同：不能以「插件注册过工具」代替实际分发证明）；实际描述分发须另以加载 / 请求证据验证（H_loaded 类方法，见「可复现步骤」）。v2 为**实验性质**——适配层已实现，但真实 v2 宿主加载与行为验收尚未执行（与上方安装注记及 README 状态表一致），不承诺任意宿主行为实效。
+- **已验证集成承诺**（仅限本快照配置）：omo-slim + fixer_append 桥接下，fixer 角色的终结交付（T）行为全绿——v3 电池 5/5：交付 + 末行完整 `bb://` ID + blocked / no-change 显式交付。**不保证**：版本锚定维度（v3 电池 M1 未申报版本渠道缺口，results.md:501——补齐电池为 F1 版本夹具电池，DESIGN.md §14.4 待执行验收）；其他宿主 / 模型 / 角色配置下的同等行为。
+
+### 可复现步骤
+
+```bash
+# H_file：磁盘 hash 校验（构建产物 vs 已安装 vs 角色桥接）
+sha256sum dist/blackboard.ts \
+          ~/.config/opencode/plugin/blackboard.ts \
+          ~/.config/opencode/oh-my-opencode-slim/fixer_append.md
+
+# fixer_append.md 内容口径（433 B，去末尾 LF）及其 hash
+python3 -c "import hashlib;d=open('$HOME/.config/opencode/oh-my-opencode-slim/fixer_append.md','rb').read().rstrip(b'\n');print(len(d), hashlib.sha256(d).hexdigest())"
+# 期望：433 fa03f0a7be6b918ccc5d480212c36d57c297f1d1d373d4ccc45ce212b608859d
+```
+
+**H_loaded（运行态驻留）**——按 results.md:492 记录的方法参数化的步骤；导出端点与凭据随宿主部署而异，**未随本稿重验**（历史运行：opencode serve HTTP API + Basic auth，凭据经 `OPENCODE_SERVER_PASSWORD` 环境变量提供，不硬编码）：
+
+```bash
+# 1) 重启宿主后导出运行态 agent（端点/端口按你的部署填充；凭据取自环境变量）
+curl -s -u ":${OPENCODE_SERVER_PASSWORD}" \
+     "http://127.0.0.1:${OC_PORT}/agent" -o /tmp/agents_export.json
+# 2) 从导出中取出 fixer 的运行态 prompt 文本，存为 /tmp/fixer_prompt.txt
+#    （历史运行导出为 2836 B——比对对象是 433 B 桥接片段，不是整份 prompt 的 SHA）
+
+# 3) 桥接片段驻留比对（本段脚本文法已验证：恰现 1 次 + SHA 匹配方 PASS）
+python3 - /tmp/fixer_prompt.txt <<'EOF'
+import hashlib, sys
+frag = open(f"{__import__('os').path.expanduser('~')}/.config/opencode/oh-my-opencode-slim/fixer_append.md","rb").read().rstrip(b'\n')
+prompt = open(sys.argv[1], "rb").read()
+n = prompt.count(frag)
+print("fragment bytes:", len(frag))
+print("sha256(frag)  :", hashlib.sha256(frag).hexdigest())
+print("occurrences   :", n)
+assert n == 1 and hashlib.sha256(frag).hexdigest() == "fa03f0a7be6b918ccc5d480212c36d57c297f1d1d373d4ccc45ce212b608859d"
+print("H_loaded PASS: bridge fragment resident exactly once, SHA matches")
+EOF
+```
+
 ## 卸载
 
 删除对应插件文件后重启 opencode：
