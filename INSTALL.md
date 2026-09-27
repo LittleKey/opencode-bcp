@@ -63,6 +63,22 @@ rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 
 日志出现 `decision` 事件即插件已接线。同时确认会话内可见四个工具：`board_put`、`board_get`、`board_index`、`board_aggregate`。
 
+## v1.11.0 本地工件与交付观测
+
+安装方式不变。v1 宿主可在 `source_refs` 提交获准发布的本地绝对路径，BCP 通过调用者文件权限保留快照并计算 SHA-256。接收方检查 `board_get.artifact_check`，其中 `verified_bytes_only` 仅证明文件字节。每次最多 8 个文件、每文件 4 MiB，快照计入 scope 配额；当前 v2 没有文件授权接口，此类请求会明确拒绝。
+
+v1 的 `delivery_observation` 日志关联本进程已准入输入，按编辑路径和发布修订区分已观察快照、普通发布与未确认状态；其中 `missing_handoff` / `manual_version_check` 另记 `delivery_gap` 并在可用时通知。无关路径或幂等重放不能提供新版本证明，所有状态都不是语义验收。只读复用、身份未关联、未知写入、重启前历史等仍需接收者核验；不补写作者记录、不自动续聊、不阻断最终回答。新版实验见 [harness/acceptance/v1.11.0.md](harness/acceptance/v1.11.0.md)。重新启动 OpenCode 后生效。
+
+## v1.12.0 OMO 交付元数据
+
+单独安装 BCP 保持上述四工具与观测行为。宿主关联需要同时加载 OMO 适配；本次安装使用 `~/.config/opencode/local-plugins/` 中锁定 OMO 2.2.25 的可重建补丁，配置入口为 `file:///home/littlekey/.config/opencode/local-plugins/dist/omo.js`。适配自有源码已纳入 [integrations/omo-slim](integrations/omo-slim/README.md)。本地构建、依赖锁及回退说明见部署目录的 README.md；上游升级须重新核对补丁锚点和源文件哈希。
+
+退出并重启 OpenCode 后生效。新宿主应在前台返回、`task_result`、后台完成通知与恢复结果中提供独立 `<bcp_delivery_metadata>`。原生后台通知的元数据只附于模型上下文，不回写通知原文。没有 BCP、身份不明或检查失败时返回未确认，不能把空候选理解为全局没有记录。接口见 [docs/delivery-integration-v1.12.md](docs/delivery-integration-v1.12.md)，验收见 [harness/acceptance/v1.12.0.md](harness/acceptance/v1.12.0.md)。
+
+## v1.9.1 来源核对复用（历史）
+
+v1.9.1 撤回 v1.9.0 候选的查询豁免，仅保留有条件的同版本来源核对复用，不修改工具参数、存储或授权。当前会话仍使用已加载的旧描述，重新启动 OpenCode 后生效。测试、安装指纹和已知交接缺口见 [harness/acceptance/v1.9.1.md](harness/acceptance/v1.9.1.md)。下方历史快照不替代本次验证，也不证明所有角色都完整执行交付契约。
+
 ## 已验证 omo-slim 集成配置（2026-09-26 快照）
 
 上述「验证」只证明**接线**（工具注册与日志）。以下是经行为电池验证的**集成快照**（DESIGN.md v1.8.4「规则所有权与配置版本化」；v3 电池 5/5 证据见 [harness/acceptance/results.md](harness/acceptance/results.md):489–501）：其中磁盘与配置数值可直接核验（H_file），运行态驻留按下方「可复现步骤」执行（omo-slim 角色 profile 未保留不可变快照，此前**不称「完整可复现快照」**）。超出本快照的宿主 / 模型 / 角色配置**不自动继承**行为结论。
@@ -138,4 +154,4 @@ rm <project>/.opencode/plugin/blackboard.ts      # 项目级（v2 同理，plugi
 - **宿主不加载插件**：安装后必须重启 opencode；确认文件位于上表路径。
 - **行为异常、疑似两个版本同时在跑**：跨配置根混装所致。保留一个 major，重装：先删除所有 `blackboard*.ts` 插件文件，再用单一模式重装一次。
 - **安装脚本拒绝（exit 2）**：按输出列出的路径清理另一 major，或确认后 `--force`。
-- **怀疑数据问题**：运行测试套件确认插件本身完好：`bun test`（224 pass / 0 fail）。
+- **怀疑数据问题**：运行 `bun test` 与 `bun run typecheck` 核对当前源码；具体通过数和真实宿主覆盖以对应版本的验收记录为准。

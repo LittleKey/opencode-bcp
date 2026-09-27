@@ -64,7 +64,7 @@ describe("schema", () => {
   // schema-6
   test("content 262144 字节通过；262145 → content_too_large", () => {
     expect(validatePutInput({ description: "d", content: "a".repeat(262144) })).toEqual([])
-    expect(validatePutInput({ description: "d", content: "a".repeat(65537) }).map((e) => e.code)).toContain("content_too_large")
+    expect(validatePutInput({ description: "d", content: "a".repeat(262145) }).map((e) => e.code)).toContain("content_too_large")
   })
 
   // schema-7

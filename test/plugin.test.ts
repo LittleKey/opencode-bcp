@@ -88,6 +88,67 @@ function seedPressureBoard(scope: Scope, streamId: string, sessionId: string, ag
 const byteLen = (s: string) => new TextEncoder().encode(s).length
 
 describe("plugin", () => {
+  test("native writes warn only at completed stop; publication clears the observation", async () => {
+    const dataDir = tmpDataDir()
+    const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir })
+    const sessionID = "ses_receipt"
+    const source = join(dataDir, "artifact.txt"); writeFileSync(source, "after")
+    await plugin["chat.message"]!({ sessionID, agent: "build", messageID: "u" }, { message: {} as never, parts: [] })
+    await plugin["tool.execute.after"]!({ tool: "edit", sessionID, callID: "c", args: { filePath: source } }, { title: "edited", output: "OK", metadata: {} })
+    const update = (id: string, finish: string, completed?: number) => plugin.event!({ event: { type: "message.updated", properties: { info: { id, parentID: "u", sessionID, role: "assistant", finish, time: { completed } } } } as never })
+    await update("m1", "tool-calls", 1)
+    await update("m2", "stop")
+    const logPath = join(dataDir, "log/blackboard.log")
+    expect(readFileSync(logPath, "utf8")).not.toContain('"ev":"delivery_gap"')
+    await update("m2", "stop", 2)
+    await update("m2", "stop", 2)
+    expect(readFileSync(logPath, "utf8").match(/"ev":"delivery_gap"/g)?.length).toBe(1)
+    await update("msg_tool", "tool-calls")
+    await plugin.tool!.board_put.execute({ description: "changed", content: "Outcome: after", source_refs: [source] }, { ...forgeCtx(sessionID), directory: dataDir })
+    await update("m3", "stop", 3)
+    expect(readFileSync(logPath, "utf8").match(/"ev":"delivery_gap"/g)?.length).toBe(1)
+  })
+
+  test("malformed Council fingerprint gains an explicit version warning without rewriting evidence", async () => {
+    const plugin = await BlackboardPlugin(forgeInput(tmpDataDir()))
+    const prompt = "Review SHA256: 92d81b315b8df0ebd1badb11ec9aecb7102eb3263442eedbd72333041a7"
+    const output = { args: { prompt } }
+    await plugin["tool.execute.before"]!({ tool: "task", sessionID: "ses_warning", callID: "t" }, output)
+    expect(output.args.prompt.startsWith(prompt)).toBe(true)
+    expect(output.args.prompt).toContain("BCP version warning")
+    await plugin["tool.execute.before"]!({ tool: "task", sessionID: "ses_warning", callID: "t" }, output)
+    expect(output.args.prompt.match(/BCP version warning/g)?.length).toBe(1)
+  })
+
+  test("admitted inputs, patch paths and replay classification preserve conservative observations", async () => {
+    const dataDir = tmpDataDir(), sessionID = "ses_receipt_inputs"
+    const plugin = await BlackboardPlugin({ ...forgeInput(dataDir), directory: dataDir }, { dataDir })
+    const a = join(dataDir, "A.txt"), b = join(dataDir, "B.txt")
+    writeFileSync(a, "a"); writeFileSync(b, "b")
+    const admit = (id: string) => plugin["chat.message"]!({ sessionID, agent: "build", messageID: id }, { message: {} as never, parts: [] })
+    const finish = (id: string, parentID: string) => plugin.event!({ event: { type: "message.updated", properties: { info: { id, parentID, sessionID, role: "assistant", finish: "stop", time: { completed: 1 } } } } as never })
+    let parent = "u1"
+    const put = async (path: string, key: string) => {
+      await plugin.event!({ event: { type: "message.updated", properties: { info: { id: "msg_tool", parentID: parent, sessionID, role: "assistant" } } } as never })
+      return plugin.tool!.board_put.execute({ description: key, content: "synthetic", source_refs: [path], idempotency_key: key }, { ...forgeCtx(sessionID), directory: dataDir })
+    }
+    const observations = () => readFileSync(join(dataDir, "log/blackboard.log"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(x => x.ev === "delivery_observation")
+    await admit("u1"); await put(a, "a"); await finish("f1", "u1")
+    expect(observations().at(-1).status).toBe("publication_observed")
+    parent = "u2"; await admit("u2"); await finish("stale", "u1"); await finish("f2", "u2")
+    expect(observations().length).toBe(2)
+    expect(observations().at(-1).status).toBe("unconfirmed")
+    await plugin["tool.execute.after"]!({ tool: "apply_patch", sessionID, callID: "patch", args: {} }, { title: "patched", output: "OK", metadata: { files: [{ filePath: "B.txt" }] } })
+    await put(a, "new-a"); await finish("f3", "u2")
+    expect(observations().at(-1).status).toBe("manual_version_check")
+    await put(b, "b"); await finish("f4", "u2")
+    expect(observations().at(-1).status).toBe("known_edits_snapshotted")
+    await plugin["tool.execute.after"]!({ tool: "edit", sessionID, callID: "again", args: { filePath: b } }, { title: "edited", output: "OK", metadata: {} })
+    await put(b, "b"); await finish("f5", "u2")
+    expect(observations().at(-1).status).toBe("manual_version_check")
+    expect(observations().every(o => o.coverage === "not_evaluated")).toBe(true)
+  })
+
   // oracle 回归①（DESIGN §14.4 :750，v1.6.0 信号退役）：无压力 + 旧词法标记
   //（admitted 输入含 bb:// 与规范句整行）→ 零注入；但新业务输入仍推进轮次。
   test("reg-1: legacy lexical markers without pressure — zero injection, round still advances", async () => {

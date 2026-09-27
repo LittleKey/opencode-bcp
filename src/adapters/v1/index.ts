@@ -1,7 +1,7 @@
 // Task 5：插件入口装配——会话/scope 归因、注入事务、降级。
 // 依据 harness/live-protocol.md A-C1/A-C2/A-C5/A-C6 与 DESIGN §3/§10.2/§11.1/§13.2。
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { homedir } from "node:os"
 import type { Hooks, Plugin, ToolDefinition, ToolContext } from "@opencode-ai/plugin"
 import type { Part, TextPart } from "@opencode-ai/sdk"
@@ -12,6 +12,9 @@ import { aggregateCandidates } from "../../aggregate"
 import { decideAndPersist } from "../../nudge"
 import { defineBoardTools, type BoardToolDef } from "../../tools"
 import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS } from "../../constants"
+import { malformedSha256 } from "../../artifacts"
+import { ReceiptCheck } from "../../receipt-check"
+import { DELIVERY_BRIDGE, inspectDelivery, type DeliveryRequest, type HostMessage } from "../../delivery"
 
 type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不再以空串冒充）
 
@@ -53,6 +56,7 @@ function createBlackboardState(dataDir: string | undefined) {
 export const BlackboardPlugin: Plugin = async (input, options) => {
   const dataDir = typeof options?.dataDir === "string" ? options.dataDir : undefined
   const st = createBlackboardState(dataDir)
+  const receipts = new ReceiptCheck()
 
   // A-C5：SDK 会话查询，parentID 向上回溯到根。查询失败 → null（宁隔离不串流）。
   const sessionInfo = async (sessionId: string): Promise<SessionInfo | null> => {
@@ -256,9 +260,31 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     }
   }
 
+  // Shared only with trusted in-process plugins, scoped to the host project directory.
+  // Durable record.writer + host messages reconstruct provenance after a plugin restart.
+  const globals = globalThis as typeof globalThis & { [DELIVERY_BRIDGE]?: Map<string, (request: DeliveryRequest) => Promise<unknown>> }
+  const bridges = (globals[DELIVERY_BRIDGE] ??= new Map())
+  bridges.set(input.directory, (request: DeliveryRequest) => inspectDelivery(request, {
+    scopeFor: async session => (await lookupScopeContext(session, ""))?.scope ?? null,
+    parentFor: async session => (await sessionInfo(session))?.parentID ?? null,
+    message: async (session, message) => {
+      try {
+        const result = await input.client.session.message({ path: { id: session, messageID: message } })
+        return result.data as HostMessage ?? null
+      } catch { return null }
+    },
+  }))
+
   const boardTools = defineBoardTools({
     resolveScope: lookupScopeContext,
     log: (line) => st.log(line),
+    observePublication: (session, message) => {
+      const capture = receipts.capture(session, message)
+      return (id, bindings, status) => {
+        receipts.published(session, capture, id, bindings.map(b => b.path), status)
+        st.log({ ev: "handoff_observed", session, id, status, retained_artifacts: bindings.length })
+      }
+    },
   })
   const toToolDef = (t: BoardToolDef, description: string): ToolDefinition => ({
     description,
@@ -272,6 +298,28 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
       board_get: toToolDef(boardTools.board_get, TOOL_DESCRIPTIONS.board_get),
       board_index: toToolDef(boardTools.board_index, TOOL_DESCRIPTIONS.board_index),
       board_aggregate: toToolDef(boardTools.board_aggregate, TOOL_DESCRIPTIONS.board_aggregate),
+    },
+
+    "tool.execute.before": async (hookInput, output) => {
+      if (hookInput.tool !== "task" || typeof output.args.prompt !== "string") return
+      if (!malformedSha256(output.args.prompt)) return
+      // An invalid digest may itself be the subject of analysis. Flag it without blocking that task.
+      const warning = "BCP version warning: an explicit SHA-256 declaration in this input is not 64 hex digits. Treat that version claim as unverified and check the original source before acceptance."
+      if (!output.args.prompt.includes(warning)) output.args.prompt += "\n\n" + warning
+      st.log({ ev: "invalid_sha256", session: hookInput.sessionID, call: hookInput.callID })
+    },
+
+    "tool.execute.after": async (hookInput, output) => {
+      if (!["edit", "write", "apply_patch"].includes(hookInput.tool)) return
+      if (!await lookupScopeContext(hookInput.sessionID, "")) return
+      const rawPaths = hookInput.tool === "apply_patch"
+        ? (Array.isArray(output.metadata.files) ? output.metadata.files.map((f: { filePath?: unknown }) => f?.filePath) : [])
+        : [hookInput.args.filePath]
+      const paths = rawPaths.map((path: unknown) => typeof path === "string" && path.length
+        ? isAbsolute(path) ? resolve(path) : input.directory ? resolve(input.directory, path) : null
+        : null)
+      // Unknown/partially understood patch metadata cannot establish complete path coverage.
+      receipts.changed(hookInput.sessionID, paths.some((p: string | null) => p === null) ? [] : paths as string[])
     },
 
     // §11.7 task 工具定义注入（V15/VP-1）：hook 对全部 toolID 触发，仅在 task 上追加；
@@ -303,6 +351,7 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
         const admitted = cls === "admitted_input"
         if (admitted) {
           st.admitted.set(hookInput.sessionID, signal.kind === "admitted" ? signal.inputMessageId : "")
+          receipts.begin(hookInput.sessionID, msgId)
         } else {
           // internal/unverified：不推进轮次、不写 meta（失效由 transform 侧 roundKnownFor 判定并落盘）
           st.admitted.delete(hookInput.sessionID)
@@ -439,7 +488,25 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     // session.created 事件作为注册兜底（无 agent 信息则不注册，避免空 agent 流）。
     event: async ({ event }) => {
       try {
-        const e = event as { type?: string; properties?: { info?: { id?: string } } }
+        const e = event as { type?: string; properties?: { info?: { id?: string; parentID?: string; sessionID?: string; role?: string; finish?: string; time?: { completed?: number } } } }
+        const message = e.properties?.info
+        if (e.type === "session.deleted" && message?.id) { receipts.forget(message.id); return }
+        if (e.type === "message.updated" && message?.role === "assistant" && message.sessionID && message.id) {
+          receipts.assistant(message.sessionID, message.id, message.parentID)
+        }
+        if (e.type === "message.updated" && message?.role === "assistant" && message.finish === "stop" && message.time?.completed && message.sessionID && message.id) {
+          const observation = receipts.finish(message.sessionID, message.id, message.parentID)
+          if (!observation) return
+          st.log({ ev: "delivery_observation", session: message.sessionID, message_id: message.id, ...observation })
+          if (observation.status !== "missing_handoff" && observation.status !== "manual_version_check") return
+          st.log({ ev: "delivery_gap", session: message.sessionID, message_id: message.id, ...observation })
+          const notice = observation.status === "missing_handoff"
+            ? "BCP: no subsequent handoff was observed for this input's file edits; check valid reuse, publication restrictions or the author's receipt."
+            : "BCP: observed references do not establish current snapshots for all known edited paths; verify alternative versions or reuse before acceptance."
+          try { await input.client.tui.showToast({ body: { title: "BCP delivery check", message: notice, variant: "warning", duration: 10000 } }) }
+          catch { /* API-only hosts may not render toasts; the structured log remains authoritative. */ }
+          return
+        }
         if (e.type !== "session.created") return
         const id = e.properties?.info?.id
         if (!id) return

@@ -9,8 +9,9 @@ import { resolveAuthz, refPolicy } from "./permissions"
 import { validatePutInput, KINDS } from "./schema"
 import { parseBbId } from "./ids"
 import { listIndex, decodeCursor, queryHashOf, snapshotCounts } from "./indexing"
+import { prepareArtifacts, retainArtifacts, inspectArtifacts, artifactSourceError, type ArtifactBinding, type FileAccess } from "./artifacts"
 
-export type BoardToolContext = { sessionID: string; agent: string; messageID: string }
+export type BoardToolContext = { sessionID: string; agent: string; messageID: string } & FileAccess
 
 export type BoardToolDef = {
   args: z.ZodType
@@ -28,7 +29,7 @@ const putArgs = z.object({
   description: z.string().describe("用于发现记录，不替代正文"),
   content: z.string().describe("保存精确约束、结论适用范围与必要来源，不写过程流水账"),
   kind: z.enum(KINDS).optional(),
-  source_refs: z.array(z.string()).optional().describe("来源定位；不代表工具已验证内容"),
+  source_refs: z.array(z.string()).optional().describe("来源定位；不代表工具已验证内容。本地工件用准确的可读绝对文件路径或 file:// URI，不附加说明；缺失文件和目录写入 content，不列入 source_refs。"),
   related: z.array(z.string()).optional(),
   supersedes: z.array(z.string()).optional().describe("仅用于本 stream 内明确修正的记录"),
   publication_for: z.string().optional(),
@@ -69,6 +70,7 @@ export function defineBoardTools(deps: {
   // agent = 注册路径验证的 caller 身份（I1）；缺省/未知时工具侧回退 ToolContext 原值
   resolveScope: (sessionId: string, agent: string) => Promise<{ scope: Scope; streamId: string; isolated: boolean; agent?: string | null } | null>
   log: (line: Record<string, unknown>) => void
+  observePublication?: (sessionId: string, messageId: string) => (id: string, bindings: ArtifactBinding[], status: "stored" | "replay") => void
 }): { board_put: BoardToolDef; board_get: BoardToolDef; board_index: BoardToolDef; board_aggregate: BoardToolDef } {
   const board_put: BoardToolDef = {
     args: putArgs,
@@ -110,19 +112,30 @@ export function defineBoardTools(deps: {
       }
       const meta = resolved.scope.readMeta(streamId)
       const createdRound = meta.rounds.round_known ? meta.rounds.current_round : null
-      const result = resolved.scope.put(streamId, {
+      const observePublication = deps.observePublication?.(ctx.sessionID, ctx.messageID)
+      let prepared: Awaited<ReturnType<typeof prepareArtifacts>>
+      try { prepared = await prepareArtifacts(args.source_refs, ctx) }
+      catch (error) { return `rejected: ${artifactSourceError(error)}` }
+      let retained: ReturnType<typeof retainArtifacts>
+      const result = resolved.scope.withLock(() => {
+        try { retained = retainArtifacts(resolved.scope, streamId, args.source_refs, prepared) }
+        catch (error) { return { status: "artifact_rejected" as const, error: error instanceof Error ? error.message : String(error) } }
+        return resolved.scope.put(streamId, {
         writer: { agent: resolved.agent ?? ctx.agent, session_id: ctx.sessionID, message_id: ctx.messageID },
         createdRound,
         description: args.description,
         content: args.content,
         ...(args.kind !== undefined ? { kind: args.kind } : {}),
-        ...(args.source_refs !== undefined ? { sourceRefs: args.source_refs } : {}),
+        ...(retained.sourceRefs !== undefined ? { sourceRefs: retained.sourceRefs } : {}),
         ...(args.related !== undefined ? { related: args.related } : {}),
         ...(args.supersedes !== undefined ? { supersedes: args.supersedes } : {}),
         ...(args.publication_for !== undefined ? { publicationFor: args.publication_for } : {}),
         ...(args.idempotency_key !== undefined ? { idempotencyKey: args.idempotency_key } : {}),
+        })
       })
       switch (result.status) {
+        case "artifact_rejected":
+          return `rejected: ${result.error}`
         case "stored":
         case "replay": {
           const sequence = result.status === "stored" ? result.sequence : parseBbId(result.id).seq
@@ -136,7 +149,9 @@ export function defineBoardTools(deps: {
           })
           const head =
             result.status === "replay" ? `record ${result.id} stored (idempotent replay)` : `record ${result.id} stored`
-          return `${head}\nhash sha256:${result.hash}\nsequence ${sequence}`
+          observePublication?.(result.id, retained!.bindings, result.status)
+          const evidence = retained!.bindings.length ? `\nartifacts ${JSON.stringify(retained!.bindings)}\nArtifact bytes are retained; conclusions and coverage still require review.` : ""
+          return `${head}\nhash sha256:${result.hash}\nsequence ${sequence}${evidence}`
         }
         case "conflict":
           return `rejected: idempotency_conflict key=${args.idempotency_key} existing=${result.existingId}`
@@ -188,7 +203,9 @@ export function defineBoardTools(deps: {
             covered_by = null
           }
         }
-        return { id, status: "found", record: g.record, hash: `sha256:${g.hash}`, nav: { superseded_by, covered_by } }
+        const artifacts = inspectArtifacts(resolved.scope, t.streamId, g.record.source_refs)
+        return { id, status: "found", record: g.record, hash: `sha256:${g.hash}`, nav: { superseded_by, covered_by },
+          ...(artifacts.length ? { artifacts, artifact_check: artifacts.every(a => a.status === "verified") ? "verified_bytes_only" : "incomplete" } : {}) }
       })
       return `${JSON.stringify(results, null, 2)}\n${BOARD_DATA_DECLARATION}`
     },
