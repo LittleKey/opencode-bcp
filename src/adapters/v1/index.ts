@@ -6,15 +6,20 @@ import { homedir } from "node:os"
 import type { Hooks, Plugin, ToolDefinition, ToolContext } from "@opencode-ai/plugin"
 import type { Part, TextPart } from "@opencode-ai/sdk"
 import { openScopeById, openScopeForRoot, AGG_TRIGGER_VISIBLE, AGG_TRIGGER_SUM_DESC_BYTES, type Scope } from "../../storage"
-import { isIsolatedAgent } from "../../permissions"
+import { isIsolatedAgent, refPolicy, resolveAuthz } from "../../permissions"
+import { parseBbId } from "../../ids"
 import { classifyInput, isKnownSyntheticText } from "../../rounds"
 import { aggregateCandidates } from "../../aggregate"
 import { decideAndPersist } from "../../nudge"
 import { defineBoardTools, type BoardToolDef } from "../../tools"
-import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS } from "../../constants"
+import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS, AUTO_TASK_DESC_APPEND, AUTO_TOOL_DESCRIPTIONS, AUTO_CAPTURE_INSTRUCTION } from "../../constants"
 import { malformedSha256 } from "../../artifacts"
 import { ReceiptCheck } from "../../receipt-check"
+import { normalizeTaskDescription, sourceHandoff } from "../../handoff"
 import { DELIVERY_BRIDGE, inspectDelivery, type DeliveryRequest, type HostMessage } from "../../delivery"
+import { captureFinal, NO_STORE, permissionAction, publicationAllowed, type CaptureHost, type PermissionRule } from "../../capture"
+import { beginEditObservation, invalidateEditEvidence, observeEdits, editEvidence } from "../../edit-evidence"
+import { messageStore, STORE_DESCRIPTION } from "../../message-store"
 
 type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不再以空串冒充）
 
@@ -57,6 +62,14 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
   const dataDir = typeof options?.dataDir === "string" ? options.dataDir : undefined
   const st = createBlackboardState(dataDir)
   const receipts = new ReceiptCheck()
+  const editTokens = new Map<string, ReturnType<ReceiptCheck["capture"]>>()
+  const recentSources = new Map<string, string[]>()
+  const remember = (session: string, id?: string) => {
+    if (id) recentSources.set(session, [...(recentSources.get(session) ?? []).filter(old => old !== id), id].slice(-8))
+  }
+  const autoCapture = options?.autoCapture !== false
+  const descriptions = autoCapture ? AUTO_TOOL_DESCRIPTIONS : TOOL_DESCRIPTIONS
+  const taskDescription = autoCapture ? AUTO_TASK_DESC_APPEND : TASK_DESC_APPEND
 
   // A-C5：SDK 会话查询，parentID 向上回溯到根。查询失败 → null（宁隔离不串流）。
   const sessionInfo = async (sessionId: string): Promise<SessionInfo | null> => {
@@ -264,16 +277,68 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
   // Durable record.writer + host messages reconstruct provenance after a plugin restart.
   const globals = globalThis as typeof globalThis & { [DELIVERY_BRIDGE]?: Map<string, (request: DeliveryRequest) => Promise<unknown>> }
   const bridges = (globals[DELIVERY_BRIDGE] ??= new Map())
-  bridges.set(input.directory, (request: DeliveryRequest) => inspectDelivery(request, {
+  const readMessage = async (session: string, message: string) => {
+    try { return (await input.client.session.message({ path: { id: session, messageID: message } })).data as HostMessage ?? null }
+    catch { return null }
+  }
+  // Agent configuration is immutable for a host instance. Session permission overrides are read afresh.
+  let agents: Promise<{ name: string; permission: PermissionRule[] }[]> | undefined
+  const captureHost: CaptureHost = {
+    resolve: id => lookupScopeContext(id, ""), message: readMessage,
+    current: (id, parent) => st.admitted.get(id) === parent,
+    edits: (id, parent) => receipts.edits(id, parent),
+    evidence: async (id, parent, completed, access, stage) => {
+      const resolved = await lookupScopeContext(id, "")
+      if (!resolved) return { paths: [], bindings: [], errors: ["edit_evidence_author_unavailable"] }
+      try { return await editEvidence(resolved.scope, resolved.streamId, parent, completed, access, stage) }
+      catch (error) { return { paths: receipts.edits(id, parent)?.paths ?? [], bindings: [], errors: [String(error)] } }
+    },
+    authorize: async (id, agent, authorInput) => {
+      agents ??= input.client.app.agents().then(result => {
+        if (!Array.isArray(result.data)) throw Error("agent_permissions_unavailable")
+        return result.data as unknown as { name: string; permission: PermissionRule[] }[]
+      }).catch(error => { agents = undefined; throw error })
+      const [profiles, sessionResult] = await Promise.all([agents, input.client.session.get({ path: { id } })])
+      const profile = profiles.find(p => p.name === agent)
+      const current = sessionResult.data as unknown as { id: string; permission?: PermissionRule[] } | undefined
+      if (!profile || !Array.isArray(profile.permission) || current?.id !== id ||
+          (current.permission !== undefined && !Array.isArray(current.permission))) return null
+      const rules = [...profile.permission, ...(current.permission ?? [])]
+      if (!publicationAllowed(rules, authorInput.info.tools, autoCapture)) return null
+      return { directory: input.directory, ask: async ({ permission, patterns }) => {
+        if (patterns.some(pattern => permissionAction(rules, permission, pattern) !== "allow"))
+          throw Error("capture_source_permission_not_granted")
+      } }
+    },
+  }
+  const retained = async (session: string, id?: string) => {
+    if (!id) return
+    const resolved = await lookupScopeContext(session, "")
+    if (!resolved || refPolicy(resolveAuthz(resolved.scope, { sessionId: session, agent: "" }), parseBbId(id)) !== "ok") return
+    const found = resolved.scope.getById(id)
+    if (found.status !== "found") return
+    remember(session, id)
+    if (found.record.writer.session_id === session && found.record.origin)
+      receipts.sourced(session, found.record.origin.input_message_id, id)
+  }
+  const capture = (session: string, message: string) => captureFinal(session, message, captureHost).then(async result => {
+    await retained(session, result.id)
+    // Parent delivery availability must not depend on the order of OMO's terminal callback.
+    const parent = result.id && (await sessionInfo(session))?.parentID
+    const resolved = parent && await lookupScopeContext(parent, "")
+    if (result.id && parent && resolved && refPolicy(resolveAuthz(resolved.scope, { sessionId: parent, agent: "" }), parseBbId(result.id)) === "ok") remember(parent, result.id)
+    return result
+  })
+  bridges.set(input.directory, async (request: DeliveryRequest) => {
+    const result = await inspectDelivery(request, {
     scopeFor: async session => (await lookupScopeContext(session, ""))?.scope ?? null,
     parentFor: async session => (await sessionInfo(session))?.parentID ?? null,
-    message: async (session, message) => {
-      try {
-        const result = await input.client.session.message({ path: { id: session, messageID: message } })
-        return result.data as HostMessage ?? null
-      } catch { return null }
-    },
-  }))
+    message: readMessage,
+    ...(autoCapture ? { capture } : {}),
+    })
+    if ("capture" in result && result.capture?.id) remember(request.callerSessionID, result.capture.id)
+    return result
+  })
 
   const boardTools = defineBoardTools({
     resolveScope: lookupScopeContext,
@@ -281,6 +346,7 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     observePublication: (session, message) => {
       const capture = receipts.capture(session, message)
       return (id, bindings, status) => {
+        remember(session, id)
         receipts.published(session, capture, id, bindings.map(b => b.path), status)
         st.log({ ev: "handoff_observed", session, id, status, retained_artifacts: bindings.length })
       }
@@ -291,17 +357,63 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     args: (t.args as unknown as { shape: unknown }).shape as ToolDefinition["args"],
     execute: (args: unknown, ctx: ToolContext) => t.execute(ctx, args),
   })
+  const storeTool = messageStore({ ...captureHost,
+    messages: async (session, limit) => {
+      const result = await input.client.session.messages({ path: { id: session }, query: { limit } })
+      if (!Array.isArray(result.data)) throw Error("messages_unavailable")
+      return result.data as HostMessage[]
+    },
+    authorizeCaller: async ctx => {
+      const resolved = await lookupScopeContext(ctx.sessionID, "")
+      const parent = st.admitted.get(ctx.sessionID)
+      const authorInput = parent && await readMessage(ctx.sessionID, parent)
+      if (!resolved?.agent || !authorInput || authorInput.parts?.some(p => p.type === "text" && p.text?.includes(NO_STORE))) return false
+      return Boolean(await captureHost.authorize(ctx.sessionID, resolved.agent, authorInput))
+    }, stored: retained,
+  })
 
   const hooks: Hooks = {
+    "experimental.chat.system.transform": async (hookInput, output) => {
+      if (!autoCapture || !hookInput.sessionID || !st.admitted.has(hookInput.sessionID)) return
+      if (!output.system.includes(AUTO_CAPTURE_INSTRUCTION)) output.system.push(AUTO_CAPTURE_INSTRUCTION)
+    },
     tool: {
-      board_put: toToolDef(boardTools.board_put, TOOL_DESCRIPTIONS.board_put),
-      board_get: toToolDef(boardTools.board_get, TOOL_DESCRIPTIONS.board_get),
-      board_index: toToolDef(boardTools.board_index, TOOL_DESCRIPTIONS.board_index),
-      board_aggregate: toToolDef(boardTools.board_aggregate, TOOL_DESCRIPTIONS.board_aggregate),
+      ...(!autoCapture ? { board_put: toToolDef(boardTools.board_put, TOOL_DESCRIPTIONS.board_put) } : {}),
+      board_get: toToolDef(boardTools.board_get, descriptions.board_get),
+      board_index: toToolDef(boardTools.board_index, descriptions.board_index),
+      board_aggregate: toToolDef(boardTools.board_aggregate, descriptions.board_aggregate),
+      board_store: toToolDef(storeTool, STORE_DESCRIPTION),
     },
 
     "tool.execute.before": async (hookInput, output) => {
-      if (hookInput.tool !== "task" || typeof output.args.prompt !== "string") return
+      if (["edit", "write", "apply_patch"].includes(hookInput.tool)) {
+        const started = receipts.capture(hookInput.sessionID)
+        editTokens.set(`${hookInput.sessionID}:${hookInput.callID}`, started)
+        if (editTokens.size > 128) editTokens.delete(editTokens.keys().next().value!)
+        if (started) try {
+          const resolved = await lookupScopeContext(hookInput.sessionID, "")
+          const authorInput = await readMessage(hookInput.sessionID, started.state.input)
+          if (resolved?.agent && authorInput && !authorInput.parts?.some(p => p.type === "text" && p.text?.includes(NO_STORE)) &&
+              await captureHost.authorize(hookInput.sessionID, resolved.agent, authorInput))
+            beginEditObservation(resolved.scope, resolved.streamId, started.state.input, hookInput.callID)
+        } catch (error) {
+          const resolved = await lookupScopeContext(hookInput.sessionID, "")
+          if (resolved) try { invalidateEditEvidence(resolved.scope, resolved.streamId, started.state.input) } catch { /* Disk unavailable: capture remains unconfirmed. */ }
+          st.log({ ev: "edit_evidence_failed", session: hookInput.sessionID, call: hookInput.callID, reason: String(error) })
+        }
+      }
+      if (!["task", "task_revive", "task_message"].includes(hookInput.tool) || typeof output.args.prompt !== "string") return
+      if (autoCapture) {
+        const resolved = await lookupScopeContext(hookInput.sessionID, "")
+        if (resolved) {
+          const requested = typeof output.args.task_id === "string" ? output.args.task_id : undefined
+          const recipient = requested && (await sessionInfo(requested))?.parentID === hookInput.sessionID ? requested : undefined
+          const routed = sourceHandoff(resolved.scope, hookInput.sessionID, output.args.prompt, recentSources.get(hookInput.sessionID) ?? [],
+            receipts.sources(hookInput.sessionID, st.admitted.get(hookInput.sessionID) ?? ""), recipient)
+          output.args.prompt = routed.prompt
+          if (routed.references.length) st.log({ ev: "source_handoff", session: hookInput.sessionID, references: routed.references, removed_bytes: routed.removedBytes })
+        }
+      }
       if (!malformedSha256(output.args.prompt)) return
       // An invalid digest may itself be the subject of analysis. Flag it without blocking that task.
       const warning = "BCP version warning: an explicit SHA-256 declaration in this input is not 64 hex digits. Treat that version claim as unverified and check the original source before acceptance."
@@ -311,7 +423,12 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
 
     "tool.execute.after": async (hookInput, output) => {
       if (!["edit", "write", "apply_patch"].includes(hookInput.tool)) return
-      if (!await lookupScopeContext(hookInput.sessionID, "")) return
+      const key = `${hookInput.sessionID}:${hookInput.callID}`
+      const started = editTokens.get(key)
+      editTokens.delete(key)
+      if (autoCapture && !started) return
+      const resolved = await lookupScopeContext(hookInput.sessionID, "")
+      if (!resolved) return
       const rawPaths = hookInput.tool === "apply_patch"
         ? (Array.isArray(output.metadata.files) ? output.metadata.files.map((f: { filePath?: unknown }) => f?.filePath) : [])
         : [hookInput.args.filePath]
@@ -319,16 +436,31 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
         ? isAbsolute(path) ? resolve(path) : input.directory ? resolve(input.directory, path) : null
         : null)
       // Unknown/partially understood patch metadata cannot establish complete path coverage.
-      receipts.changed(hookInput.sessionID, paths.some((p: string | null) => p === null) ? [] : paths as string[])
+      receipts.changed(hookInput.sessionID, paths.some((p: string | null) => p === null) ? [] : paths as string[], started)
+      if (!started || !resolved.agent || receipts.capture(hookInput.sessionID)?.state !== started.state) return
+      try {
+        const parent = started.state.input
+        const authorInput = await readMessage(hookInput.sessionID, parent)
+        if (!authorInput || authorInput.parts?.some(p => p.type === "text" && p.text?.includes(NO_STORE))) return
+        const access = await captureHost.authorize(hookInput.sessionID, resolved.agent, authorInput)
+        if (!access) return
+        await observeEdits(resolved.scope, resolved.streamId, parent, hookInput.callID,
+          paths.filter((p: string | null): p is string => p !== null), access,
+          () => receipts.capture(hookInput.sessionID)?.state === started.state, Date.now, paths.some((p: string | null) => p === null))
+      } catch (error) {
+        try { invalidateEditEvidence(resolved.scope, resolved.streamId, started.state.input) } catch { /* Disk unavailable: do not claim a retained version. */ }
+        st.log({ ev: "edit_evidence_failed", session: hookInput.sessionID, call: hookInput.callID, reason: String(error) })
+      }
     },
 
-    // §11.7 task 工具定义注入（V15/VP-1）：hook 对全部 toolID 触发，仅在 task 上追加；
-    // hook 无 session/agent 上下文 → 文案为 "When delegating…" 通用式（TASK_DESC_APPEND）。
+    // Automatic mode also reconciles the known host's conflicting fresh-context/summary prose.
+    // Manual mode retains the historical append-only contract.
     "tool.definition": async (hookInput, output) => {
       if (hookInput.toolID !== "task") return
+      if (autoCapture) output.description = normalizeTaskDescription(output.description)
       // M3：宿主描述不以空白结尾时补段落分隔，防追加文案与宿主末句粘连
       if (output.description && !/\s$/.test(output.description)) output.description += "\n\n"
-      output.description += TASK_DESC_APPEND
+      output.description += taskDescription
     },
 
     // 准入信号（P0）：messageID 存在即已验证 admission。G7（计划 Task C 偏差②）：
@@ -490,11 +622,25 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
       try {
         const e = event as { type?: string; properties?: { info?: { id?: string; parentID?: string; sessionID?: string; role?: string; finish?: string; time?: { completed?: number } } } }
         const message = e.properties?.info
-        if (e.type === "session.deleted" && message?.id) { receipts.forget(message.id); return }
+        if (e.type === "session.deleted" && message?.id) {
+          receipts.forget(message.id); recentSources.delete(message.id)
+          for (const key of editTokens.keys()) if (key.startsWith(message.id + ":")) editTokens.delete(key)
+          return
+        }
         if (e.type === "message.updated" && message?.role === "assistant" && message.sessionID && message.id) {
           receipts.assistant(message.sessionID, message.id, message.parentID)
         }
         if (e.type === "message.updated" && message?.role === "assistant" && message.finish === "stop" && message.time?.completed && message.sessionID && message.id) {
+          if (autoCapture) {
+            const result = await capture(message.sessionID, message.id)
+            st.log({ ev: "final_capture", session: message.sessionID, message_id: message.id, ...result })
+            // No model wake, corrective publication or mutation of the original reply.
+            if (result.status === "unconfirmed") {
+              try { await input.client.tui.showToast({ body: { title: "BCP capture", message: `Final reply was not retained: ${result.reason}`, variant: "warning", duration: 10000 } }) }
+              catch { /* API-only host: log remains available. */ }
+            }
+            return
+          }
           const observation = receipts.finish(message.sessionID, message.id, message.parentID)
           if (!observation) return
           st.log({ ev: "delivery_observation", session: message.sessionID, message_id: message.id, ...observation })

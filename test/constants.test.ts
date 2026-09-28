@@ -3,10 +3,18 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS } from "../src/constants"
+import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS, AUTO_CAPTURE_INSTRUCTION, AUTO_TASK_DESC_APPEND, AUTO_TOOL_DESCRIPTIONS } from "../src/constants"
 import { defineBoardTools } from "../src/tools"
+import { STORE_DESCRIPTION } from "../src/message-store"
 
 const design = readFileSync(join(import.meta.dir, "..", "DESIGN.md"), "utf8")
+
+test("reference-first descriptions match their versioned contract", () => {
+  const doc = readFileSync(join(import.meta.dir, "..", "docs/public-source-v1.17.md"), "utf8")
+  const blocks = [...doc.matchAll(/```text\n([\s\S]*?)\n```/g)].map(x => x[1])
+  expect(blocks).toEqual([AUTO_CAPTURE_INSTRUCTION, STORE_DESCRIPTION, AUTO_TASK_DESC_APPEND])
+  expect(AUTO_TOOL_DESCRIPTIONS).not.toHaveProperty("board_put")
+})
 
 /** 提取 [startHeader, endHeader) 区间内全部 ```text 围栏块，按文档顺序返回 */
 function sectionTextBlocks(startHeader: string, endHeader: string): string[] {

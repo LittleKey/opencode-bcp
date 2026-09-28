@@ -94,3 +94,17 @@ test("non-adjacent duplicate final events are not reported a second time", () =>
   expect(result(c, "f2")).toBe("known_edits_snapshotted")
   expect(c.finish("s", "f1", "u")).toBeNull()
 })
+
+test("stage sources are bounded to current-input stored records; old replays and callbacks cannot enter", () => {
+  const c = new ReceiptCheck(); c.begin("s", "u")
+  for (let i = 0; i < 6; i++) publish(c, `d${i}`, [])
+  expect(c.sources("s", "u")).toEqual(["d2", "d3", "d4", "d5"])
+  const started = c.capture("s")
+  c.begin("s", "next")
+  c.published("s", started, "stale", [], "stored")
+  publish(c, "old", [], "replay")
+  expect(c.sources("s", "u")).toEqual([])
+  expect(c.sources("s", "next")).toEqual([])
+  publish(c, "fresh", [])
+  expect(c.sources("s", "next")).toEqual(["fresh"])
+})

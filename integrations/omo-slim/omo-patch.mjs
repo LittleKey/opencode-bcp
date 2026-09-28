@@ -9,6 +9,58 @@ export function patchOmo(original) {
     assert.equal(source.split(before).length, 2, 'OMO patch anchor is not unique: ' + before.slice(0, 90));
     source = source.replace(before, after);
   }
+  // A native resume is itself consumption of the previously injected terminal result.
+  // Acknowledge only that exact owned execution via the existing reconciliation path.
+  once('function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {',
+    `function acknowledgeInjectedNativeResume(state, parentSessionID, requested, agent) {
+  const job = state.backgroundJobBoard.resolve(parentSessionID, requested);
+  if (!job || job.parentSessionID !== parentSessionID || job.agent !== agent || !job.terminalUnreconciled || job.state === "running") return;
+  const entry = state.terminalJobsInjectedByParent.get(parentSessionID);
+  for (const [key, execution] of entry?.executions ?? []) {
+    if (execution.taskID !== job.taskID || execution.generation !== job.generation || execution.terminalRevision !== job.terminalRevision) continue;
+    reconcileExecutionBatch(state, parentSessionID, [execution]);
+    const after = state.backgroundJobBoard.get(job.taskID);
+    if (after?.state === "reconciled" && after.generation === execution.generation && after.terminalRevision === execution.terminalRevision) {
+      entry.executions.delete(key);
+      if (!entry.executions.size) state.terminalJobsInjectedByParent.delete(parentSessionID);
+    }
+    return;
+  }
+}
+function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {`);
+  once('const remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??',
+    'if (input.callID) deps.acknowledgeInjectedResume?.(input.sessionID, requested, agentType);\n    const remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??');
+  once('"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      shouldManageSession:',
+    '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      acknowledgeInjectedResume: (parent, requested, agent) => acknowledgeInjectedNativeResume(injectionState, parent, requested, agent),\n      shouldManageSession:');
+  // A native resume is registered when its output arrives. Its observation window must
+  // start at dispatch, not after the already-completed assistant; otherwise the terminal
+  // classifier rejects the new result as pre-run history and loses its input identity.
+  once('lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,\n    releaseLease:',
+    'lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,\n    nativeCallStartedAt: Date.now(),\n    releaseLease:');
+  once('return deps.backgroundJobBoard.registerLaunch({\n      taskID,\n      parentSessionID: pending.parentSessionId,',
+    'return deps.backgroundJobBoard.registerLaunch({\n      taskID,\n      now: pending.nativeCallStartedAt,\n      parentSessionID: pending.parentSessionId,');
+  once('await deps.terminalGate.reconcile(record, {\n        kind: "output",',
+    'const nativeSignal = {\n        kind: "output",');
+  once('callIDConfirmed: exactCallConfirmed\n        }\n      });\n      const current = deps.backgroundJobBoard.get(status.taskID);',
+    `callIDConfirmed: exactCallConfirmed
+        }
+      };
+      let reconciliation = await deps.terminalGate.reconcile(record, nativeSignal);
+      // Re-observe a superseded activity token through the SAME gate, never bypass it.
+      // Bound retries; a changed generation, cancellation or unresolved signal stays fenced.
+       for (let attempt = 0; ["stale", "deferred"].includes(reconciliation?.kind) && attempt < 2; attempt++) {
+         if (reconciliation.retryAfter) await raceEvidenceDeadline(reconciliation.retryAfter, 2000);
+         const observed = deps.backgroundJobBoard.get(record.taskID);
+        if (!exactCallConfirmed || observed?.generation !== record.generation || observed.state !== "running" || observed.cancellationRequested) break;
+        reconciliation = await deps.terminalGate.reconcile(observed, nativeSignal);
+      }
+       const current = deps.backgroundJobBoard.get(status.taskID);`);
+  // Expose the existing single-flight read's settlement to the native caller. Await the
+  // actual dependency, not a sleep/poll or additional model turn; never bypass the gate.
+  once('value.pendingRuntimeContrast.token = token;\n      return deferred(token, diagnostic);',
+    'value.pendingRuntimeContrast.token = token;\n      return { ...deferred(token, diagnostic), retryAfter: readSettled };');
+  once('return deferred(token, diagnostic);\n  }\n  async function read(key, token, operation)',
+    'return { ...deferred(token, diagnostic), retryAfter: readSettled };\n  }\n  async function read(key, token, operation)');
   once('return { verdict: "completed", text: evidence.text };',
     'return { verdict: "completed", text: evidence.text, bcpOrigin: evidence.bcpOrigin };');
   once('return text.length > 0 ? { kind: "ready", text } : { kind: "textless" };',
@@ -24,8 +76,9 @@ export function patchOmo(original) {
     'resultSummary: input.resultSummary ?? existing.resultSummary,\n      bcpOrigin: input.bcpOrigin ?? existing.bcpOrigin,\n      lastStatusError:');
   // Foreground task: after OMO validates native call ownership and reconciles its terminal generation.
   once('const updated = current?.generation === record.generation ? current : undefined;\n      log("[task-session-manager] foreground task status registered",',
-    `const updated = current?.generation === record.generation ? current : undefined;
-      if (updated) {
+     `const updated = current?.generation === record.generation ? current : undefined;
+       log("[bcp-native-delivery] terminal observation", { taskID: record.taskID, generation: record.generation, verdict: reconciliation?.kind, diagnostic: updated?.lastStatusError });
+       if (updated) {
         const metadata = await deliveryMetadata(deps.directory, updated);
         const latest = deps.backgroundJobBoard.get(updated.taskID);
         if (latest?.generation === updated.generation && latest.terminalRevision === updated.terminalRevision && latest.activityRevision === updated.activityRevision) {

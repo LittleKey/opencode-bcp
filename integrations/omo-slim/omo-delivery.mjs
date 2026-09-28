@@ -1,4 +1,4 @@
-// Bounded, read-only host bridge. Errors never trigger model requests or change task state.
+// Bounded host bridge; BCP may retain a verified final reply. Never wakes a model or changes task state.
 const BRIDGE = Symbol.for('opencode.bcp.delivery.v1');
 export async function deliveryMetadata(directory, record) {
   const request = {callerSessionID: record.parentSessionID, taskID: record.taskID,

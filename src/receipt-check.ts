@@ -1,6 +1,6 @@
 // Bounded observations, not an acceptance gate or an OMO task-generation tracker.
 type Publication = { observedAt: number; retainedAt?: number; paths: Set<string> }
-type State = { input: string; writes: number; paths: Map<string, number>; unknownPath: boolean; publications: Map<string, Publication>; messages: Set<string>; finals: Set<string> }
+type State = { input: string; writes: number; paths: Map<string, number>; unknownPath: boolean; publications: Map<string, Publication>; sources: Set<string>; messages: Set<string>; finals: Set<string> }
 type Capture = { state: State; revision: number } | undefined
 type Status = "missing_handoff" | "manual_version_check" | "known_edits_snapshotted" | "publication_observed" | "unconfirmed"
 
@@ -8,15 +8,15 @@ export class ReceiptCheck {
   private sessions = new Map<string, State>()
   begin(id: string, input: string) {
     if (this.sessions.get(id)?.input === input) return
-    this.sessions.set(id, { input, writes: 0, paths: new Map(), unknownPath: false, publications: new Map(), messages: new Set(), finals: new Set() })
+    this.sessions.set(id, { input, writes: 0, paths: new Map(), unknownPath: false, publications: new Map(), sources: new Set(), messages: new Set(), finals: new Set() })
   }
   assistant(id: string, messageId: string, parentId?: string) {
     const state = this.sessions.get(id)
     if (state && state.input === parentId) state.messages.add(messageId)
   }
-  changed(id: string, paths: string[]) {
+  changed(id: string, paths: string[], started?: Capture) {
     const state = this.sessions.get(id)
-    if (!state) return
+    if (!state || (started && started.state !== state)) return
     state.writes++
     if (!paths.length) state.unknownPath = true
     for (const path of paths) state.paths.set(path, state.writes)
@@ -25,6 +25,20 @@ export class ReceiptCheck {
     const state = this.sessions.get(id)
     if (messageId !== undefined && !state?.messages.has(messageId)) return undefined
     return state && { state, revision: state.writes }
+  }
+  edits(id: string, input: string) {
+    const state = this.sessions.get(id)
+    return state?.input === input ? { revision: state.writes, paths: [...state.paths.keys()], unknownPath: state.unknownPath } : undefined
+  }
+  sources(id: string, input: string) {
+    const state = this.sessions.get(id)
+    return state?.input === input ? [...new Set([...state.publications].filter(([, value]) => value.retainedAt !== undefined).map(([key]) => key).concat([...state.sources]))].slice(-4) : []
+  }
+  sourced(id: string, input: string, record: string) {
+    const state = this.sessions.get(id)
+    if (!state || state.input !== input) return
+    state.sources.add(record)
+    if (state.sources.size > 4) state.sources.delete(state.sources.values().next().value!)
   }
   published(id: string, capture: Capture, record: string, paths: string[], status: "stored" | "replay") {
     const state = this.sessions.get(id)

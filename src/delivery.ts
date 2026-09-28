@@ -5,7 +5,7 @@ import { parseBbId } from "./ids"
 import { inspectArtifacts } from "./artifacts"
 
 export const DELIVERY_BRIDGE = Symbol.for("opencode.bcp.delivery.v1")
-export type HostMessage = { info: { id: string; sessionID: string; role: string; parentID?: string }; parts?: { type: string; text?: string }[] }
+export type HostMessage = { info: { id: string; sessionID: string; role: string; parentID?: string; agent?: string; finish?: string; time?: { created?: number; completed?: number }; error?: unknown; summary?: boolean; tools?: Record<string, boolean> }; parts?: { id?: string; type: string; text?: string; synthetic?: boolean; ignored?: boolean; time?: { start?: number; end?: number }; callID?: string; tool?: string; state?: { status?: string; time?: { start?: number; end?: number } } }[] }
 export type DeliveryRequest = {
   callerSessionID: string; taskID: string; generation?: number; terminalRevision?: number
   state: string; inputMessageID?: string; terminalMessageID?: string
@@ -14,6 +14,7 @@ export type DeliveryHost = {
   scopeFor: (sessionID: string) => Promise<Scope | null>
   parentFor: (sessionID: string) => Promise<string | null>
   message: (sessionID: string, messageID: string) => Promise<HostMessage | null>
+  capture?: (sessionID: string, messageID: string) => Promise<{ status: string; id?: string; reason?: string }>
 }
 export function deliveryUnknown(request: DeliveryRequest, reason: string) {
   return { schema_version: 1, execution: { task_id: request.taskID, generation: request.generation ?? null,
@@ -35,7 +36,9 @@ export async function inspectDelivery(request: DeliveryRequest, host: DeliveryHo
       !input || input.info.id !== request.inputMessageID || input.info.sessionID !== request.taskID || input.info.role !== "user") return unknown("message_identity_unavailable")
   // IDs in author text are candidates, never an assertion of delivery or acceptance.
   const text = (terminal.parts ?? []).filter(p => p.type === "text").map(p => p.text ?? "").join("\n")
-  const ids = [...new Set(text.match(/bb:\/\/[0-9a-f-]+\/[0-9a-f-]+\/e\d+/gi) ?? [])]
+  let capture = await host.capture?.(request.taskID, request.terminalMessageID)
+  if (capture?.id && refPolicy(auth, parseBbId(capture.id)) !== "ok") capture = { status: "unconfirmed", reason: "capture_not_accessible" }
+  const ids = [...new Set([...(capture?.id ? [capture.id] : []), ...(text.match(/bb:\/\/[0-9a-f-]+\/[0-9a-f-]+\/e\d+/gi) ?? [])])]
   const candidates: unknown[] = []
   const messages = new Map<string, Promise<HostMessage | null>>()
   for (const id of ids.slice(0, 8)) {
@@ -78,5 +81,5 @@ export async function inspectDelivery(request: DeliveryRequest, host: DeliveryHo
   }
   return { ...unknown("candidate_references_only"), association: "host_message_identity",
     execution: { ...unknown("").execution, input_message_id: request.inputMessageID, terminal_message_id: request.terminalMessageID },
-    candidates, truncated: ids.length > 8 }
+    candidates, truncated: ids.length > 8, ...(capture ? { capture } : {}) }
 }

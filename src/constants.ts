@@ -36,6 +36,17 @@ export const TASK_DESC_APPEND =
     "File-edit limits are not publication bans; publication restrictions still win.\n" +
     "Include required bb:// IDs verbatim in task.prompt."
 
+/** v1.13 auto-capture hosts use these instead of the manual-publication contract above. */
+export const AUTO_CAPTURE_INSTRUCTION =
+  "Final-answer format: unless publication is prohibited, append a separate line containing <!-- bcp:store --> to EVERY final reply. Keep this invisible protocol line even when the user asks for only a short answer. Do not put it in code or quotes. The host saves the original reply without another publication call. If publication is prohibited, omit it; <!-- bcp:no-store --> in input or reply always prevents capture. This format applies to final answers, not titles or internal summaries."
+export const AUTO_TOOL_DESCRIPTIONS = {
+  board_get: TOOL_DESCRIPTIONS.board_get,
+  board_index: TOOL_DESCRIPTIONS.board_index,
+  board_aggregate: TOOL_DESCRIPTIONS.board_aggregate,
+}
+export const AUTO_TASK_DESC_APPEND =
+  "References over retelling: rely on user-readable public messages from your session or another authorized agent. Reuse an existing record; otherwise board_store action=list finds real message IDs, then action=store retains the original. Omit session_id for your own session; task metadata supplies child session/message IDs. Never invent IDs or store an unwritten report: first state conclusions, evidence and limits publicly, then retain the completed source before dependent dispatch. Ordinary final replies use automatic retention. Pass objective, allowed scope, full source IDs/versions, only new instructions and acceptance questions; require board_get of originals, not your retelling. Read under board_get's same-version rule. Preservation is not acceptance; publication restrictions still apply."
+
 /** §10.2 模板② 聚合压力提醒（v1.4.7 T0 补缺逐字常量，v1.6.0 保留；278B/LF，≤512B，无板数据） */
 export const PRESSURE_REMINDER_TEMPLATE =
   "BCP: This stream's catalog has grown past its pressure threshold.\n" +

@@ -8,7 +8,7 @@ import type { Message } from "@opencode-ai/sdk"
 import { BlackboardPlugin } from "../src/plugin"
 import { openScopeForRoot, Scope, type StreamMeta, AGG_TRIGGER_VISIBLE, AGG_TRIGGER_SUM_DESC_BYTES } from "../src/storage"
 import { aggregateCandidates } from "../src/aggregate"
-import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND } from "../src/constants"
+import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, AUTO_TASK_DESC_APPEND } from "../src/constants"
 
 // v1.6.0 信号退役：旧入口词法标记（bb:// + 规范句整行）作为回归夹具文本（oracle §14.4 :750-751）
 const LEGACY_NORMATIVE_LINE = "If there are reusable findings, publish them and return their board IDs."
@@ -90,7 +90,7 @@ const byteLen = (s: string) => new TextEncoder().encode(s).length
 describe("plugin", () => {
   test("native writes warn only at completed stop; publication clears the observation", async () => {
     const dataDir = tmpDataDir()
-    const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir })
+    const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir, autoCapture: false })
     const sessionID = "ses_receipt"
     const source = join(dataDir, "artifact.txt"); writeFileSync(source, "after")
     await plugin["chat.message"]!({ sessionID, agent: "build", messageID: "u" }, { message: {} as never, parts: [] })
@@ -122,7 +122,7 @@ describe("plugin", () => {
 
   test("admitted inputs, patch paths and replay classification preserve conservative observations", async () => {
     const dataDir = tmpDataDir(), sessionID = "ses_receipt_inputs"
-    const plugin = await BlackboardPlugin({ ...forgeInput(dataDir), directory: dataDir }, { dataDir })
+    const plugin = await BlackboardPlugin({ ...forgeInput(dataDir), directory: dataDir }, { dataDir, autoCapture: false })
     const a = join(dataDir, "A.txt"), b = join(dataDir, "B.txt")
     writeFileSync(a, "a"); writeFileSync(b, "b")
     const admit = (id: string) => plugin["chat.message"]!({ sessionID, agent: "build", messageID: id }, { message: {} as never, parts: [] })
@@ -201,7 +201,7 @@ describe("plugin", () => {
   test("plug-3: unresolved parent rejects tools and silences transform", async () => {
     const dataDir = tmpDataDir()
     const sessionId = "ses_p3"
-    const plugin = await BlackboardPlugin(forgeInput(dataDir, { failSession: true }), { dataDir })
+    const plugin = await BlackboardPlugin(forgeInput(dataDir, { failSession: true }), { dataDir, autoCapture: false })
     const m = userMsg(sessionId, "msg_1", "hi")
     await plugin["experimental.chat.messages.transform"]!({}, { messages: [m] as never })
     expect(m.parts.length).toBe(1)
@@ -269,7 +269,7 @@ describe("plugin", () => {
     const scope = openScopeForRoot({ rootSessionId: sessionId, dataDir })
     const streamId = scope.resolveSession(sessionId).streamId
     const before = scope.readMeta(streamId).budget
-    const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir })
+    const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir, autoCapture: false })
     const out = await plugin.tool!.board_put.execute(
       { description: "d", content: "c", idempotency_key: "k1" },
       forgeCtx(sessionId),
@@ -768,13 +768,17 @@ describe("plugin", () => {
     const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir })
     const taskOut = { description: "Delegate subtasks to agents." }
     await plugin["tool.definition"]!({ toolID: "task" }, taskOut as never)
-    expect(taskOut.description).toBe(`Delegate subtasks to agents.\n\n${TASK_DESC_APPEND}`)
+    expect(taskOut.description).toBe(`Delegate subtasks to agents.\n\n${AUTO_TASK_DESC_APPEND}`)
     const spacedOut = { description: "Delegate.\n" }
     await plugin["tool.definition"]!({ toolID: "task" }, spacedOut as never)
-    expect(spacedOut.description).toBe(`Delegate.\n${TASK_DESC_APPEND}`) // 已有尾空白不重复加分隔
+    expect(spacedOut.description).toBe(`Delegate.\n${AUTO_TASK_DESC_APPEND}`) // 已有尾空白不重复加分隔
     const otherOut = { description: "Untouched." }
     await plugin["tool.definition"]!({ toolID: "board_put" }, otherOut as never)
     expect(otherOut.description).toBe("Untouched.")
+    const manual = await BlackboardPlugin(forgeInput(dataDir), { dataDir, autoCapture: false })
+    const manualOut = { description: "Delegate." }
+    await manual["tool.definition"]!({ toolID: "task" }, manualOut as never)
+    expect(manualOut.description).toBe(`Delegate.\n\n${TASK_DESC_APPEND}`)
   })
 
   // plug-10 (G5，Task C G7 迁移) 全链 R1/P12 回归：chat.message/transform/board.put 生产路径。
@@ -782,7 +786,7 @@ describe("plugin", () => {
   test("plug-10: identity loss and recovery across full chain", async () => {
     const dataDir = tmpDataDir()
     const sessionId = "ses_p10"
-    const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir })
+    const plugin = await BlackboardPlugin(forgeInput(dataDir), { dataDir, autoCapture: false })
     // ① admitted → transform 关联验证推进 → 两处 round_known=true
     await plugin["chat.message"]!(
       { sessionID: sessionId, agent: "build", messageID: "msg_1" },

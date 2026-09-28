@@ -27,6 +27,7 @@ import {
   type PutInput,
   type RecordKind,
   type Writer,
+  type CaptureOrigin,
 } from "./schema"
 import { entryFileName, formatBbId, parseBbId, parseEntryFileName } from "./ids"
 import { isIsolatedAgent, isPinned } from "./permissions"
@@ -92,6 +93,7 @@ export type PutArgs = {
   supersedes?: string[]
   publicationFor?: string
   idempotencyKey?: string
+  origin?: CaptureOrigin
 }
 
 export type PutResult =
@@ -178,9 +180,9 @@ function withFileLock<T>(lockPath: string, fn: () => T): T {
 
 // ---- 文件原子性 ----
 
-function atomicWrite(path: string, data: Uint8Array | string): void {
+export function atomicWrite(path: string, data: Uint8Array | string, mode?: number): void {
   const tmp = join(dirname(path), `.tmp-${randomUUID()}`)
-  writeFileSync(tmp, data)
+  writeFileSync(tmp, data, mode === undefined ? undefined : { mode })
   renameSync(tmp, path)
 }
 
@@ -401,6 +403,7 @@ export class Scope {
         ...(args.related !== undefined ? { related: args.related } : {}),
         ...(args.supersedes !== undefined ? { supersedes: args.supersedes } : {}),
         ...(args.publicationFor !== undefined ? { publication_for: args.publicationFor } : {}),
+        ...(args.origin !== undefined ? { origin: args.origin } : {}),
       }
       const tlv = encodeImmutablePayload(input)
       const sha = recordHash(tlv)
@@ -439,6 +442,7 @@ export class Scope {
         ...(args.related !== undefined ? { related: args.related } : {}),
         ...(args.supersedes !== undefined ? { supersedes: args.supersedes } : {}),
         ...(args.publicationFor !== undefined ? { publication_for: args.publicationFor } : {}),
+        ...(args.origin !== undefined ? { origin: args.origin } : {}),
       }
       const entryBytes = buildRecordBytes(record)
       const entryB64 = bytesToB64(entryBytes)

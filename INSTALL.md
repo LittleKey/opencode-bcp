@@ -6,7 +6,7 @@ BCP 以单个 TypeScript 插件文件装入 opencode，无运行时依赖安装�
 
 - [bun](https://bun.sh)（安装脚本用它构建产物）
 - opencode，二选一：
-  - **opencode 1.x**：安装 v1 产物（默认，生产验证完整）
+  - **opencode 1.x**：安装 v1 产物（默认；实际覆盖与限制见各版本验收）
   - **opencode 2.0.16+**：安装 v2 产物（`--v2`；适配层已实现、41 项 adapter 测试通过，**真实 v2 宿主端到端验收尚未执行**，尝鲜性质）
 
 ## 安装
@@ -61,9 +61,39 @@ opencode run "Reply OK"
 rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 ```
 
-日志出现 `decision` 事件即插件已接线。同时确认会话内可见四个工具：`board_put`、`board_get`、`board_index`、`board_aggregate`。
+日志出现 `decision` 事件即插件已接线。默认 v1 应可见 `board_store`、`board_get`、`board_index`、`board_aggregate`，没有 `board_put`。v1 手动模式仍提供 `board_put`；v2 保持旧版四工具。
 
-## v1.11.0 本地工件与交付观测
+## v1.17.0 公开正文与消息发现
+
+保存前必须已有用户可读的公开正文。自己的会话省略 `session_id`；不知道真实消息 ID 时先调用 `board_store action=list`。`ses_main`、未定消息 ID 或其他占位符不是有效来源，失败反馈会给出查询指引，不能用隐藏推理或工具参数补造报告。普通最终答复按协议自动留存；有中间交接时，先公开结论、依据和限制，再保存已完成阶段并传引用。
+
+工具和 Task 的常驻说明由插件统一提供。已验证的主角色策略片段见 [公开来源策略](integrations/omo-slim/public-source-policy.md)，安装脚本不会替换用户角色配置。公开来源契约见 [v1.17 说明](docs/public-source-v1.17.md)，真实协作及只读场景的结果和限制见 [v1.17 验收](harness/acceptance/v1.17.0.md)。
+
+## v1.16.0 原消息留存与引用派发
+
+默认 v1 用 `board_store` 统一留存最终答复和已稳定的公开阶段正文。已有记录直接复用；否则在本会话或其他有权限的 agent 会话中发现原消息、留存后传完整记录引用。Task 描述包含操作说明，接收者仍须读取并核对原文、版本和限制。阶段正文必须完成，且同条消息内所有工具调用都已结束；流式正文、未结束工具和隐藏推理不能作为阶段来源。
+
+发布授权以 `board_store` 为准，同时保留已有针对 `board_put` 的显式拒绝、询问和输入工具禁令，避免旧的禁发布角色因移除工具而获得权限。需要旧自由正文接口时，显式插件选项 `autoCapture: false` 保留 v1 手动模式。契约见 [v1.16 说明](docs/reference-first-v1.16.md)。
+
+独立新进程的实际工具目录、自然阶段留存与派发、跨作者历史阶段快照见 [v1.16 验收](harness/acceptance/v1.16.0.md)。这证明测试进程加载了新版本，不表示已有 UI 会话会热加载。
+
+## v1.15.0 既有答复补存
+
+v1 安装新增 `board_store`。已知来源会话和消息 ID 时使用 `action=store`；未知消息 ID 时使用 `action=list` 发现。调用者可以不是作者，但双方发布权限和来源可见性都必须通过。原作者正文和编辑版本由宿主取得，调用者不提交正文、作者或 `source_refs`。详情见 [补存契约](docs/message-store-v1.15.md)。
+
+独立测试进程验证了跨作者补存、重启后的旧版本快照、普通自动留存和子角色发现消息，见 [v1.15 验收](harness/acceptance/v1.15.0.md)。这些验证不依赖现有 UI 会话重启；现有进程不会热加载，退出并重启 OpenCode 后才能在该进程使用新工具。
+
+已授权原生编辑的证据按作者会话和输入持久保存，正文标记与补存共用这些快照。该本地证据缓存计入 scope 配额，不以最终正文是否带正向标记为采集条件；已知禁止输入和权限限制会阻止采集。安装前没有观察过的编辑不能凭当前文件补成历史证据。工具描述统一注册，不需向各角色重复添加补存提示。手动 v1 模式也提供该工具，v2 暂不提供。
+
+## v1.14.0 自动留存与自然交接
+
+默认 v1 安装在最终正文顶层独占行含 `<!-- bcp:store -->` 且授权通过时自动留存，推荐放在末尾；代码和引用中的标记不授权。缺少标记不保存；角色仍只生成一次结果。采用下方 OMO 适配时，交付元数据包含 `capture` 状态和自动记录引用。独立根会话的记录可通过 `board_index` 查找，宿主不会让模型续写一个尚未生成的 ID。
+
+请同步删除角色 prompt 中“结束前必须调用 `board_put` / 返回作者新生成 ID”的旧句，保留结果、依据、限制、确切版本和接收者读取原文的要求。同一准入输入中已观察的原生编辑与显式 `file://` 引用可经作者既有文件权限留存快照；自然语言禁止发布要求须由上游或作者传递 `<!-- bcp:no-store -->` 或省略正向标记。权限为 deny/ask 或未知时不自动授权。详细边界见 [docs/final-capture-v1.14.md](docs/final-capture-v1.14.md)。
+
+如需手动模式，可在单一显式插件注册中传入 `autoCapture: false`；不要同时保留同一插件的自动发现副本。v2 继续手动发布。自动模式日志为 `final_capture`，应核对 stored/replay/skipped/unconfirmed 及 reason，而不是把插件已加载当成功。安装与 prompt 调整后均须重启 OpenCode。
+
+## v1.11.0 本地工件与交付观测（手动模式）
 
 安装方式不变。v1 宿主可在 `source_refs` 提交获准发布的本地绝对路径，BCP 通过调用者文件权限保留快照并计算 SHA-256。接收方检查 `board_get.artifact_check`，其中 `verified_bytes_only` 仅证明文件字节。每次最多 8 个文件、每文件 4 MiB，快照计入 scope 配额；当前 v2 没有文件授权接口，此类请求会明确拒绝。
 
@@ -71,7 +101,7 @@ v1 的 `delivery_observation` 日志关联本进程已准入输入，按编辑�
 
 ## v1.12.0 OMO 交付元数据
 
-单独安装 BCP 保持上述四工具与观测行为。宿主关联需要同时加载 OMO 适配；本次安装使用 `~/.config/opencode/local-plugins/` 中锁定 OMO 2.2.25 的可重建补丁，配置入口为 `file:///home/littlekey/.config/opencode/local-plugins/dist/omo.js`。适配自有源码已纳入 [integrations/omo-slim](integrations/omo-slim/README.md)。本地构建、依赖锁及回退说明见部署目录的 README.md；上游升级须重新核对补丁锚点和源文件哈希。
+单独安装 BCP 提供当前模式的工具和留存行为；默认 v1 的四工具已用 `board_store` 替代 `board_put`。OMO 结果引用关联需要同时加载 OMO 适配；本次安装使用 `~/.config/opencode/local-plugins/` 中锁定 OMO 2.2.25 的可重建补丁，配置入口为 `file:///home/littlekey/.config/opencode/local-plugins/dist/omo.js`。适配自有源码已纳入 [integrations/omo-slim](integrations/omo-slim/README.md)。本地构建、依赖锁及回退说明见部署目录的 README.md；上游升级须重新核对补丁锚点和源文件哈希。
 
 退出并重启 OpenCode 后生效。新宿主应在前台返回、`task_result`、后台完成通知与恢复结果中提供独立 `<bcp_delivery_metadata>`。原生后台通知的元数据只附于模型上下文，不回写通知原文。没有 BCP、身份不明或检查失败时返回未确认，不能把空候选理解为全局没有记录。接口见 [docs/delivery-integration-v1.12.md](docs/delivery-integration-v1.12.md)，验收见 [harness/acceptance/v1.12.0.md](harness/acceptance/v1.12.0.md)。
 
@@ -150,6 +180,8 @@ rm <project>/.opencode/plugin/blackboard.ts      # 项目级（v2 同理，plugi
 ```
 
 ## 故障排查
+
+当前自动模式按 [v1.14 契约](docs/final-capture-v1.14.md)接受顶层独占行授权标记，并绑定本轮已观察的原生编辑。验证可独立启动新的 `opencode serve` 进程并检查驻留配置，无需依赖现有 UI 会话重启；旧进程不会因此热加载新代码。主角色 Task 权限中的 `councillor*` 拒绝规则只用于主角色，不能应用为 Council 的全局权限。原生续接须同时安装当前 OMO 补丁；其修复和最终运行指纹见 [v1.14 验收](harness/acceptance/v1.14.0.md)。
 
 - **宿主不加载插件**：安装后必须重启 opencode；确认文件位于上表路径。
 - **行为异常、疑似两个版本同时在跑**：跨配置根混装所致。保留一个 major，重装：先删除所有 `blackboard*.ts` 插件文件，再用单一模式重装一次。

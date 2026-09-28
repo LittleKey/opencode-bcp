@@ -13,6 +13,13 @@ export type FileAccess = {
 }
 export type Artifact = { index: number; path: string; bytes: Buffer; sha256: string }
 export type ArtifactBinding = { path: string; snapshot: string; sha256: string; bytes: number }
+export async function authorizeArtifactPath(path: string, ctx: FileAccess) {
+  if (!ctx.ask || !ctx.directory) throw new Error("artifact_permission_unavailable: host cannot authorize local snapshots")
+  const rel = relative(ctx.directory, path)
+  if (rel === ".." || rel.startsWith("../") || isAbsolute(rel))
+    await ctx.ask({ permission: "external_directory", patterns: [dirname(path) + "/*"], always: [], metadata: { path } })
+  await ctx.ask({ permission: "read", patterns: [path], always: [], metadata: { path, purpose: "board artifact snapshot" } })
+}
 export function artifactSourceError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   const code = (error as { code?: string } | null)?.code
@@ -56,17 +63,9 @@ export async function prepareArtifacts(refs: string[] | undefined, ctx: FileAcce
     const local = localRef(ref)
     if (!local) continue
     if (out.length >= 8) throw new Error("artifact_count_exceeded: maximum 8 local references")
-    if (!ctx.ask || !ctx.directory) throw new Error("artifact_permission_unavailable: host cannot authorize local snapshots")
-    const authorize = async (path: string) => {
-      const rel = relative(ctx.directory!, path)
-      if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) {
-        await ctx.ask!({ permission: "external_directory", patterns: [dirname(path) + "/*"], always: [], metadata: { path } })
-      }
-      await ctx.ask!({ permission: "read", patterns: [path], always: [], metadata: { path, purpose: "board artifact snapshot" } })
-    }
-    await authorize(local.path)
+    await authorizeArtifactPath(local.path, ctx)
     const path = realpathSync(local.path)
-    if (path !== local.path) await authorize(path)
+    if (path !== local.path) await authorizeArtifactPath(path, ctx)
     const bytes = readBounded(path)
     const sha256 = hash(bytes)
     if (local.expected && local.expected !== sha256) throw new Error("artifact_hash_mismatch: " + local.path)
@@ -96,7 +95,7 @@ export function retainArtifacts(scope: Scope, streamId: string, refs: string[] |
   return { sourceRefs, bindings }
 }
 
-export function inspectArtifacts(scope: Scope, streamId: string, refs: string[] | undefined) {
+export function inspectArtifacts(scope: Scope, streamId: string, refs: string[] | undefined): { ref: string; status: string; sha256?: string; bytes?: number }[] {
   return (refs ?? []).flatMap(ref => {
     let local: ReturnType<typeof localRef>
     try { local = localRef(ref) } catch { return [{ ref, status: "invalid" }] }
