@@ -63,6 +63,10 @@ rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 
 日志出现 `decision` 事件即插件已接线。默认 v1 应可见 `board_store`、`board_get`、`board_index`、`board_aggregate`，没有 `board_put`。v1 手动模式仍提供 `board_put`；v2 保持旧版四工具。
 
+## v1.18.0 正文检索
+
+安装后新进程的 `board_index` 应包含 `query` 和 `range` 参数。`query` 默认搜索当前 scope 内已授权流的公开正文及工件路径；没有 query 时维持旧单流目录。该实现不依赖模型摘要服务或新增依赖，也不修改旧记录。扫描和词法检索限制见 [契约](docs/content-search-v1.18.md)，实际命中、时延及空历史读者验证见 [v1.18 验收](harness/acceptance/v1.18.0.md)。运行中的进程不会热加载，独立新进程可用于验证而不要求用户先重启当前会话。
+
 ## v1.17.0 公开正文与消息发现
 
 保存前必须已有用户可读的公开正文。自己的会话省略 `session_id`；不知道真实消息 ID 时先调用 `board_store action=list`。`ses_main`、未定消息 ID 或其他占位符不是有效来源，失败反馈会给出查询指引，不能用隐藏推理或工具参数补造报告。普通最终答复按协议自动留存；有中间交接时，先公开结论、依据和限制，再保存已完成阶段并传引用。

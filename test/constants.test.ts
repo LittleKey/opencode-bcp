@@ -16,6 +16,11 @@ test("reference-first descriptions match their versioned contract", () => {
   expect(AUTO_TOOL_DESCRIPTIONS).not.toHaveProperty("board_put")
 })
 
+test("content search description matches its versioned contract", () => {
+  const doc = readFileSync(join(import.meta.dir, "..", "docs/content-search-v1.18.md"), "utf8")
+  expect([...doc.matchAll(/```text\n([\s\S]*?)\n```/g)].map(x => x[1])).toEqual([AUTO_TOOL_DESCRIPTIONS.board_index])
+})
+
 /** 提取 [startHeader, endHeader) 区间内全部 ```text 围栏块，按文档顺序返回 */
 function sectionTextBlocks(startHeader: string, endHeader: string): string[] {
   const lines = design.split("\n")

@@ -41,7 +41,7 @@ export const AUTO_CAPTURE_INSTRUCTION =
   "Final-answer format: unless publication is prohibited, append a separate line containing <!-- bcp:store --> to EVERY final reply. Keep this invisible protocol line even when the user asks for only a short answer. Do not put it in code or quotes. The host saves the original reply without another publication call. If publication is prohibited, omit it; <!-- bcp:no-store --> in input or reply always prevents capture. This format applies to final answers, not titles or internal summaries."
 export const AUTO_TOOL_DESCRIPTIONS = {
   board_get: TOOL_DESCRIPTIONS.board_get,
-  board_index: TOOL_DESCRIPTIONS.board_index,
+  board_index: "Discover unknown source IDs with query: search published content and artifact paths across authorized streams in this scope. Use a few focused terms; inspect ranked original snippets, then board_get selected records. Descriptions are display labels, not search evidence. range=own or stream narrows search. Without query, list the own-stream catalog; keyword is its legacy description filter. Incomplete coverage or a miss is not proof of absence; report gaps. A stale search cursor requires a fresh query. Avoid speculative searches and full-board dumps.",
   board_aggregate: TOOL_DESCRIPTIONS.board_aggregate,
 }
 export const AUTO_TASK_DESC_APPEND =
