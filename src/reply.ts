@@ -1,4 +1,5 @@
 import type { HostMessage } from "./delivery"
+import { maskPublicationMarkers } from "./markers"
 
 export type StageBoundary = {
   created: number
@@ -13,7 +14,7 @@ export function publicReply(message: HostMessage, stages = false) {
   const content = texts.map(p => p.text ?? "").join("\n")
   const tools = parts.filter(p => p.type === "tool")
   // A protocol marker alone is invisible to the user and is not a public result.
-  if (!content.replace(/<!-- bcp:(?:store|no-store) -->/g, "").trim() ||
+  if (!maskPublicationMarkers(content).trim() ||
       tools.some(p => !["completed", "error"].includes(p.state?.status ?? ""))) return
   if (info.finish === "stop") return { kind: "final" as const, content, completed: info.time.completed }
   if (!stages || info.finish !== "tool-calls" || !info.time.created || !tools.length ||

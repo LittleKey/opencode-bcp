@@ -12,7 +12,7 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 | 宿主 | 状态 |
 |---|---|
-| opencode 1.x（v1 插件 API） | 已部署；正文检索和未知 ID 发现见 [v1.18 验收](harness/acceptance/v1.18.0.md)；公开正文边界及多 agent 交接见 v1.17，历史版本绑定与续接闭环见各版本验收 |
+| opencode 1.x（v1 插件 API） | 已部署；作者标题与跨流目录见 [v1.19 验收](harness/acceptance/v1.19.0.md)，正文检索见 v1.18；公开正文边界、历史版本绑定与续接闭环见各版本验收 |
 | opencode 2.0.16+（v2 插件 API） | 适配层已实现，41 项 adapter 测试通过；**真实 v2 宿主端到端验收尚未执行**，v2 安装属尝鲜性质 |
 
 「独立插件」与「已验证集成」是两种不同的承诺：前者在默认 v1 提供四工具及最终正文留存，后者额外固定 OMO 的终态、通知和引用交付接线。工具可见、安装成功或记录存在均不等于完整行为通过。v2 保持旧版四工具接口，真实加载与行为尚未验收；各版本的测试配置、适用范围和遗漏以对应验收记录为准。OMO 集成与安装边界见 [INSTALL.md](INSTALL.md)。
@@ -21,7 +21,9 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 默认 v1 从原作者的编辑证据和正文中的确切文件引用自动生成 `source_refs`；`board_store` 不接收调用者重写的正文、作者或文件清单。每次最多 8 个文件、每文件 4 MiB，计入 scope 配额。手动模式保留 `board_put` 的本地来源参数。`board_get` 的 `verified_bytes_only` 只证明快照字节，结论和覆盖范围仍需核对。当前 v2 缺少文件授权接口，自动快照请求会被拒绝；其他引用渠道保持可用。
 
-不知道记录 ID 时，使用 `board_index({query: "cancelled 优先"})` 搜索当前 scope 内已授权流的公开正文和工件路径。结果按相关性排序并提供原文片段，再用 `board_get` 核对完整来源。`description` 仅展示，不参与该检索；无需模型生成摘要。无 `query` 的目录浏览和旧 `keyword` 标题过滤保持兼容。扫描预算、分页失效和词法匹配限制见 [v1.18 检索契约](docs/content-search-v1.18.md)。
+不知道记录 ID 时，小 scope 优先使用 `board_index({range: "authorized"})` 浏览跨授权流的紧凑目录，再以 `board_get` 读取原文。自动留存支持 `<!-- bcp:store description="主题、结论与重要限制" -->`，标题与正文同次生成，不增加摘要模型请求；旧标记继续支持。语法、目录覆盖及预算见 [v1.19 详细设计](docs/catalog-discovery-v1.19.md)。
+
+查找具体细节或目录较大时，使用 `board_index({query: "cancelled 优先"})` 搜索公开正文和工件路径，按相关性返回原文片段。description 不参与 query 评分；省略 range 的本人目录与旧 keyword 标题过滤保持兼容。词法检索限制见 [v1.18 契约](docs/content-search-v1.18.md)。
 
 ## 核心模型速览
 
@@ -38,7 +40,7 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 |---|---|
 | `board_store` | v1：发现已完成最终答复或已稳定公开阶段正文，按真实作者原样留存，自动带入可核验的历史编辑版本 |
 | `board_get` | 按 ID 读回确切记录；原文和版本仍在当前上下文中且无变更信号时，可复用已完成的核对 |
-| `board_index` | `query` 检索已授权流正文和路径，返回排序片段；无 query 时浏览单流目录 |
+| `board_index` | 无 query 的 `range="authorized"` 浏览跨流紧凑目录；`query` 搜索正文和路径；省略两者浏览本人目录 |
 | `board_aggregate` | 把多条旧目录项折叠为一条索引摘要：只缩目录，原文恒可 `board_get` |
 
 v1 手动模式（`autoCapture: false`）仍提供 `board_put`；v2 保持包含 `board_put` 的旧版四工具，不提供 `board_store`。

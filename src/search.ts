@@ -7,6 +7,7 @@ import type { Scope } from "./storage"
 import type { BbRecord, RecordKind } from "./schema"
 import { parseEntryFileName, parseBbId, formatBbId } from "./ids"
 import { resolveAuthz, refPolicy } from "./permissions"
+import { maskPublicationMarkers } from "./markers"
 
 export const SEARCH_LIMITS = { records: 5000, bytes: 32 * 1024 * 1024, recordBytes: 512 * 1024 }
 type Token = { term: string; start: number; end: number }
@@ -123,7 +124,7 @@ export function searchRecords(scope: Scope, opts: Options, budget = SEARCH_LIMIT
         } catch { reasons.add("record_unavailable"); fingerprint.update(name + ":unavailable"); continue }
         const tombstoned = meta.tombstoned[rec.id] !== undefined
         if (((opts.view ?? "compact") === "compact" && tombstoned) || (opts.kind && rec.kind !== opts.kind)) continue
-        const searchable = rec.content.replace(/<!-- bcp:(?:store|no-store) -->/g, marker => " ".repeat(marker.length))
+        const searchable = maskPublicationMarkers(rec.content)
         const body = searchTokens(searchable), paths = publishedPaths(rec, scope.dir)
         const counts = new Map<string, number>(); let first = -1, matchedPath: string | undefined
         for (const t of body) if (wanted.has(t.term)) { counts.set(t.term, (counts.get(t.term) ?? 0) + 1); if (first < 0) first = t.start }

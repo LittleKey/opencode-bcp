@@ -10,15 +10,15 @@ import { STORE_DESCRIPTION } from "../src/message-store"
 const design = readFileSync(join(import.meta.dir, "..", "DESIGN.md"), "utf8")
 
 test("reference-first descriptions match their versioned contract", () => {
-  const doc = readFileSync(join(import.meta.dir, "..", "docs/public-source-v1.17.md"), "utf8")
+  const doc = readFileSync(join(import.meta.dir, "..", "docs/catalog-discovery-v1.19.md"), "utf8")
   const blocks = [...doc.matchAll(/```text\n([\s\S]*?)\n```/g)].map(x => x[1])
-  expect(blocks).toEqual([AUTO_CAPTURE_INSTRUCTION, STORE_DESCRIPTION, AUTO_TASK_DESC_APPEND])
+  expect(blocks).toEqual([AUTO_CAPTURE_INSTRUCTION, AUTO_TOOL_DESCRIPTIONS.board_index])
   expect(AUTO_TOOL_DESCRIPTIONS).not.toHaveProperty("board_put")
 })
 
-test("content search description matches its versioned contract", () => {
-  const doc = readFileSync(join(import.meta.dir, "..", "docs/content-search-v1.18.md"), "utf8")
-  expect([...doc.matchAll(/```text\n([\s\S]*?)\n```/g)].map(x => x[1])).toEqual([AUTO_TOOL_DESCRIPTIONS.board_index])
+test("unchanged public-source and task descriptions retain their versioned contract", () => {
+  const doc = readFileSync(join(import.meta.dir, "..", "docs/public-source-v1.17.md"), "utf8")
+  expect([...doc.matchAll(/```text\n([\s\S]*?)\n```/g)].map(x => x[1]).slice(1)).toEqual([STORE_DESCRIPTION, AUTO_TASK_DESC_APPEND])
 })
 
 /** 提取 [startHeader, endHeader) 区间内全部 ```text 围栏块，按文档顺序返回 */

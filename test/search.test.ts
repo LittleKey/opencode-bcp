@@ -146,7 +146,7 @@ test("tool query works without changing legacy directory/keyword behavior or wri
   expect(new Set((await call({ query: "bodyOnlyNeedle" })).search.items.map((x: { id: string }) => x.id))).toEqual(new Set([a, b]))
   expect(await tools.board_index.execute(ctx, { query: "bodyOnlyNeedle", keyword: "legacy" })).toContain("query_keyword_conflict")
   expect((await call({ keyword: "", range: "own" })).stream.items.map((x: { id: string }) => x.id)).toEqual([a])
-  expect(await tools.board_index.execute(ctx, { range: "authorized" })).toContain("query_required_for_authorized_search")
+  expect(new Set((await call({ range: "authorized" })).catalog.items.map((x: { id: string }) => x.id))).toEqual(new Set([a, b]))
   expect(await tools.board_index.execute(ctx, { query: "bodyOnlyNeedle", since_seq: 0 })).toContain("since_seq_requires_single_stream")
   expect((await call({ query: "bodyOnlyNeedle", stream: peer, since_seq: 0 })).search.items[0].id).toBe(b)
   expect(readFileSync(join(scope.dir, "streams", own, "entries", "e000001.json"), "utf8")).toBe(before)

@@ -7,27 +7,12 @@ import { validatePutInput, type RecordKind, type Writer } from "./schema"
 import type { EditEvidence } from "./edit-evidence"
 import { prepareArtifacts, retainArtifacts, type FileAccess } from "./artifacts"
 import { publicReply, replyKey, type StageBoundary } from "./reply"
+import { NO_STORE, STORE, publicationMarker, maskPublicationMarkers } from "./markers"
 
-export const NO_STORE = "<!-- bcp:no-store -->"
-export const STORE = "<!-- bcp:store -->"
+export { NO_STORE, STORE } from "./markers"
 // Only an explicit standalone top-level marker authorizes publication, not prose or code.
 export function captureRequested(content: string): boolean {
-  const lines = content.split(/\r?\n/)
-  let fence: { char: string; length: number } | undefined
-  let htmlCode = false
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!
-    if (/^\s*<(pre|code)(\s|>)/i.test(line)) htmlCode = true
-    if (htmlCode) { if (/<\/(pre|code)>/i.test(line)) htmlCode = false; continue }
-    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
-    if (match) {
-      if (!fence) fence = { char: match[1]![0]!, length: match[1]!.length }
-      else if (match[1]![0] === fence.char && match[1]!.length >= fence.length && !match[2]!.trim()) fence = undefined
-      continue
-    }
-    if (!fence && line === STORE) return true
-  }
-  return false
+  return publicationMarker(content).requested
 }
 export type CaptureResult = { status: "stored" | "replay" | "skipped" | "unconfirmed"; id?: string; reason?: string }
 export type PermissionRule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" }
@@ -96,13 +81,14 @@ export async function captureFinal(session: string, messageID: string, host: Cap
     if (!request && !host.current(session, info.parentID)) return unknown("input_not_current")
     const access = await host.authorize(session, agent, input)
     if (!access) return { status: "skipped", reason: "publication_not_authorized" }
-    const firstLine = content.split(/\r?\n/).find(line => line.trim() && line.trim() !== STORE) ?? "Final reply"
-    const description = request?.description ?? [...`[${agent}] ${firstLine.trim()}`].slice(0, 80).join("")
+    const body = maskPublicationMarkers(content)
+    const firstLine = body.split(/\r?\n/).find(line => line.trim()) ?? "Final reply"
+    const description = request?.description ?? publicationMarker(content).description ?? [...`[${agent}] ${firstLine.trim()}`].slice(0, 80).join("")
     const invalid = validatePutInput({ description, content, ...(request?.kind ? { kind: request.kind } : {}) })
     if (invalid.length) return unknown(invalid.map(e => e.code).join(","))
     // Host-observed edits belong to this input, not arbitrary paths mentioned in prose.
     const edits = host.edits?.(session, info.parentID)
-    const explicit = content.match(/(?:file:\/\/[^\s<>"`（），。；、]+|bb:\/\/[0-9a-f-]+\/[0-9a-f-]+\/e\d+)/gi)?.map(r => r.replace(/[),.;]+$/, "")) ?? []
+    const explicit = body.match(/(?:file:\/\/[^\s<>"`（），。；、]+|bb:\/\/[0-9a-f-]+\/[0-9a-f-]+\/e\d+)/gi)?.map(r => r.replace(/[),.;]+$/, "")) ?? []
     const evidence = await host.evidence?.(session, info.parentID, reply.completed, access, reply.boundary)
     const evidenceErrors = evidence?.errors ?? (request ? ["edit_evidence_unavailable: no historical edit journal"] : [])
     const nativeRefs = evidence || request ? [] : (edits?.paths ?? []).map(p => pathToFileURL(p).href)

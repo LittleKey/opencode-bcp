@@ -63,6 +63,10 @@ rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 
 日志出现 `decision` 事件即插件已接线。默认 v1 应可见 `board_store`、`board_get`、`board_index`、`board_aggregate`，没有 `board_put`。v1 手动模式仍提供 `board_put`；v2 保持旧版四工具。
 
+## v1.19.0 作者标题与授权目录
+
+构建安装后，新进程的自动留存说明应包含可选 description 属性，`board_index` 应允许不带 query 的 `range="authorized"`。旧标记及省略 range 的本人目录继续可用。生产配置不需要额外模型、数据库或角色改动；目录按需读取，只有既有的两段说明被替换。解析与覆盖字段见 [契约](docs/catalog-discovery-v1.19.md)，真实多 agent 作者、受控读者对照和自主选择目录的证据见 [验收](harness/acceptance/v1.19.0.md)。验证使用独立新进程；正在运行的会话不会热加载安装后的插件。
+
 ## v1.18.0 正文检索
 
 安装后新进程的 `board_index` 应包含 `query` 和 `range` 参数。`query` 默认搜索当前 scope 内已授权流的公开正文及工件路径；没有 query 时维持旧单流目录。该实现不依赖模型摘要服务或新增依赖，也不修改旧记录。扫描和词法检索限制见 [契约](docs/content-search-v1.18.md)，实际命中、时延及空历史读者验证见 [v1.18 验收](harness/acceptance/v1.18.0.md)。运行中的进程不会热加载，独立新进程可用于验证而不要求用户先重启当前会话。

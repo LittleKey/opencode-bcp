@@ -10,6 +10,7 @@ import { validatePutInput, KINDS } from "./schema"
 import { parseBbId } from "./ids"
 import { listIndex, decodeCursor, queryHashOf, snapshotCounts } from "./indexing"
 import { searchRecords } from "./search"
+import { authorizedCatalog } from "./catalog"
 import { prepareArtifacts, retainArtifacts, inspectArtifacts, artifactSourceError, type ArtifactBinding, type FileAccess } from "./artifacts"
 
 export type BoardToolContext = { sessionID: string; agent: string; messageID: string } & FileAccess
@@ -46,7 +47,7 @@ const indexArgs = z.object({
   stream: z.string().optional(),
   keyword: z.string().optional().describe("Legacy description-only catalog filter; prefer query for discovery."),
   query: z.string().min(1).max(200).optional().describe("Search published content and artifact paths with focused terms, not descriptions. Defaults to all authorized streams in this scope; then board_get selected originals."),
-  range: z.enum(["own", "authorized"]).optional().describe("Query defaults to authorized. stream selects one stream. Without query, own is accepted; authorized requires query."),
+  range: z.enum(["own", "authorized"]).optional().describe("Without query, authorized browses compact titles across readable streams in this scope; own is the legacy default. Query defaults to authorized. stream narrows either mode."),
   kind: z.enum(KINDS).optional(),
   since_seq: z.number().int().min(0).optional(),
   limit: z.number().int().min(1).max(200).optional().describe("Catalog default 50; query default 10, capped at 50."),
@@ -228,10 +229,17 @@ export function defineBoardTools(deps: {
             query: args.query, range: args.range, stream: args.stream, view: args.view, kind: args.kind,
             sinceSeq: args.since_seq, limit: Math.min(args.limit ?? 10, 50), cursor: args.cursor,
             caller: { sessionId: ctx.sessionID, agent: resolved.agent ?? ctx.agent },
+          }), note: BOARD_INDEX_DECLARATION })
+        } catch (error) { return `rejected: ${error instanceof Error ? error.message : String(error)}` }
+      }
+      if (args.range === "authorized") {
+        try {
+          return JSON.stringify({ scope_id: authz.scopeId, catalog: authorizedCatalog(resolved.scope, {
+            caller: { sessionId: ctx.sessionID, agent: resolved.agent ?? ctx.agent }, stream: args.stream, keyword: args.keyword,
+            kind: args.kind, view: args.view, sinceSeq: args.since_seq, limit: args.limit, cursor: args.cursor,
           }), note: BOARD_INDEX_DECLARATION }, null, 2)
         } catch (error) { return `rejected: ${error instanceof Error ? error.message : String(error)}` }
       }
-      if (args.range === "authorized") return "rejected: query_required_for_authorized_search; omit range to browse the own-stream catalog"
       const target = args.stream ?? authz.ownStreamId
       if (target === null) return "rejected: forbidden_stream"
       if (args.stream !== undefined) {
