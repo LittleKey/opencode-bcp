@@ -120,7 +120,11 @@ test("source registration allows current-input reuse without claiming snapshot f
 })
 test("real adapter removes default put, registers retained decisions before dispatch, and preserves manual put", async () => {
   const f = fixture()
-  const client = { app: { agents: async () => ({ data: [{ name: "orchestrator", permission: [{ permission: "*", pattern: "*", action: "allow" }] }] }) }, session: {
+  const allow = [{ permission: "*", pattern: "*", action: "allow" }]
+  const client = { app: { agents: async () => ({ data: [
+    { name: "orchestrator", permission: allow }, { name: "fixer", permission: allow },
+    { name: "blocked", permission: [...allow, { permission: "board_get", pattern: "*", action: "deny" }] },
+  ] }) }, session: {
     get: async () => ({ data: { id: "s", parentID: null, agent: "orchestrator" } }),
     message: async ({ path }: { path: { messageID: string } }) => ({ data: f.messages.get(path.messageID) }),
     messages: async () => ({ data: [...f.messages.values()] }),
@@ -130,11 +134,17 @@ test("real adapter removes default put, registers retained decisions before disp
   await plugin["chat.message"]!({ sessionID: "s", agent: "orchestrator", messageID: "u" }, { message: f.input.info as never, parts: f.input.parts as never })
   const result = JSON.parse(await plugin.tool!.board_store.execute(f.args, f.ctx as never) as string)
   expect(result.status).toBe("stored")
-  const output = { args: { prompt: "Implement from the governing decision." } }
+  const output = { args: { subagent_type: "fixer", prompt: "Implement from the governing decision." } }
   await plugin["tool.execute.before"]!({ tool: "task", sessionID: "s", callID: "next" }, output)
   expect(output.args.prompt).toContain(result.id)
   expect(output.args.prompt).toContain("<bcp_input_decisions>")
   expect(output.args.prompt).not.toContain(f.stage.parts![0]!.text!)
+  for (const subagent_type of ["blocked", "unknown", "council"]) {
+    const original = "Keep this supplied body when sources cannot be dereferenced."
+    const untrusted = {args: {subagent_type, prompt: original}}
+    await plugin["tool.execute.before"]!({tool:"task",sessionID:"s",callID:subagent_type},untrusted)
+    expect(untrusted.args.prompt).toBe(original)
+  }
   const manual = await BlackboardPlugin({ directory: f.dir, client } as unknown as PluginInput, { dataDir: f.dir, autoCapture: false })
   expect(manual.tool!.board_put).toBeDefined()
 })

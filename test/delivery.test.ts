@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { openScopeForRoot } from "../src/storage"
 import { defineBoardTools } from "../src/tools"
 import { inspectDelivery, type DeliveryRequest, type HostMessage } from "../src/delivery"
+import { createHash } from "node:crypto"
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -83,4 +84,57 @@ test("cross-scope candidates are forbidden and candidate/source limits stay expl
   const cross = ids[0]!.replace(f.scope.scopeId, "00000000-0000-0000-0000-000000000000")
   f.messages.get("final")!.parts = [{ type: "text", text: cross }]
   expect((await inspectDelivery(f.request, f.host)).candidates).toEqual([{ id: cross, readability: "forbidden" }])
+})
+
+async function capturedFixture(content = "Original result and limitations.\n".repeat(400)) {
+  const f = await fixture()
+  const final = f.messages.get("final")!
+  Object.assign(final.info, { agent: "fixer", finish: "stop", time: { completed: 100 } })
+  final.parts = [{ type: "text", text: content }]
+  const hash = createHash("sha256").update(content).digest("hex")
+  const author = f.scope.config.session_index.child!
+  const saved = f.scope.put(author.stream_id, { writer: { agent: "fixer", session_id: "child", message_id: "final" },
+    createdRound: 1, description: "Result; evidence remains limited", content,
+    origin: { kind: "host_final", input_message_id: "input", text_sha256: hash, source_errors: ["test evidence gap"] } })
+  if (saved.status !== "stored") throw Error("fixture capture")
+  return { ...f, content, hash, id: saved.id, final,
+    host: { ...f.host, capture: async () => ({ status: "replay", id: saved.id }), canReadResult: async () => true, currentResult: () => true } }
+}
+
+test("reference proof covers the exact retained final and preserves source errors, not acceptance", async () => {
+  const f = await capturedFixture()
+  const result = await inspectDelivery(f.request, f.host)
+  expect(result.result_reference).toMatchObject({ id: f.id, text_sha256: f.hash,
+    bytes: Buffer.byteLength(f.content), source_errors: ["test evidence gap"], writer: { session_id: "child", message_id: "final" } })
+  expect(result.coverage).toBe("not_evaluated")
+  expect((await inspectDelivery(f.request, { ...f.host })).result_reference).toEqual(result.result_reference)
+  expect(f.scope.getById(f.id)).toMatchObject({ record: { content: f.content } })
+})
+
+test("access capability and exact final coverage are mandatory, not just current-input association", async () => {
+  const f = await capturedFixture()
+  for (const canReadResult of [undefined, async () => false, async () => { throw Error("permission unknown") }])
+    expect((await inspectDelivery(f.request, { ...f.host, canReadResult })).result_reference).toBeUndefined()
+  expect((await inspectDelivery(f.request, { ...f.host, currentResult: () => false })).result_reference).toBeUndefined()
+  let current = true
+  expect((await inspectDelivery(f.request, { ...f.host, currentResult: () => current,
+    canReadResult: async () => { current = false; return true } })).result_reference).toBeUndefined()
+  for (const change of [
+    () => { f.final.parts = [{ type: "text", text: f.content + "changed" }] },
+    () => { f.final.parts = [{ type: "text", text: f.content, synthetic: true }] },
+    () => { f.final.parts = [{ type: "text", text: f.content, ignored: true }] },
+    () => { f.final.parts = [{ type: "text", text: f.content.slice(0, 100) }, { type: "text", text: f.content.slice(100) }] },
+    () => { f.final.parts = [{ type: "text", text: f.content }, { type: "tool", state: { status: "running" } }] },
+  ]) {
+    change()
+    expect((await inspectDelivery(f.request, f.host)).result_reference).toBeUndefined()
+  }
+  f.final.parts = [{ type: "text", text: f.content }]
+  f.final.info.agent = "oracle"
+  expect((await inspectDelivery(f.request, f.host)).result_reference).toBeUndefined()
+  f.final.info.agent = "fixer"
+  f.messages.set("other-final", { ...f.final, info: { ...f.final.info, id: "other-final" } })
+  const currentInputOnly = await inspectDelivery({ ...f.request, terminalMessageID: "other-final" }, f.host)
+  expect(currentInputOnly.candidates).toMatchObject([{ origin: "current_input" }])
+  expect(currentInputOnly.result_reference).toBeUndefined()
 })

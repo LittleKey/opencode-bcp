@@ -9,6 +9,22 @@ export function patchOmo(original) {
     assert.equal(source.split(before).length, 2, 'OMO patch anchor is not unique: ' + before.slice(0, 90));
     source = source.replace(before, after);
   }
+  const councilStart = source.indexOf('1. If the question references an external resource (PR, URL, issue, doc)');
+  const councilEnd = source.indexOf('5. Present the council\'s synthesized report.', councilStart);
+  assert(councilStart >= 0 && councilEnd > councilStart, 'Council procedure anchors missing');
+  source = source.slice(0, councilStart) + `1. Resolve required external material into authorized readable source artifacts first, using the appropriate specialist. Give seats exact source locations and necessary original excerpts, not a rewritten conclusion. Mark unavailable material explicitly.
+2. Dispatch the same question and evidence boundary independently to each configured seat in PARALLEL via \${vocab.tool}():
+\${dispatchList}
+3. Collect the actual ses_* task IDs or standard cou-N aliases and completion states. Respect the task budget; report failed, empty or unfinished seats explicitly. Do not replace a missing opinion or retry just to manufacture agreement.
+4. Call \${vocab.tool}(\${vocab.agentParam}='council', description='Synthesize council report') with the original question and the explicit seat task IDs or aliases. Do not copy or paraphrase their responses and do not claim their model identities yourself. The host will attach bounded, verified original replies and actual provenance; unavailable or oversized evidence remains a visible gap.
+` + source.slice(councilEnd);
+  once('  const agentType = args.subagent_type.trim();\n  let background = args.background === true;',
+    `  const agentType = args.subagent_type.trim();
+   const finalizeCouncil = agentType === "council" && typeof args.prompt === "string"
+     ? await prepareCouncilPrompt(deps.directory, deps.backgroundJobBoard, input.sessionID, args.prompt) : undefined;
+   let background = args.background === true;`);
+  once('  log("[task-session-manager] tool.execute.before task — pending call created", {',
+    '  if (finalizeCouncil) args.prompt = finalizeCouncil();\n  log("[task-session-manager] tool.execute.before task — pending call created", {');
   // A native resume is itself consumption of the previously injected terminal result.
   // Acknowledge only that exact owned execution via the existing reconciliation path.
   once('function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {',
@@ -31,7 +47,7 @@ function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {
   once('const remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??',
     'if (input.callID) deps.acknowledgeInjectedResume?.(input.sessionID, requested, agentType);\n    const remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??');
   once('"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      shouldManageSession:',
-    '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      acknowledgeInjectedResume: (parent, requested, agent) => acknowledgeInjectedNativeResume(injectionState, parent, requested, agent),\n      shouldManageSession:');
+    '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      directory: _ctx.directory,\n      acknowledgeInjectedResume: (parent, requested, agent) => acknowledgeInjectedNativeResume(injectionState, parent, requested, agent),\n      shouldManageSession:');
   // A native resume is registered when its output arrives. Its observation window must
   // start at dispatch, not after the already-completed assistant; otherwise the terminal
   // classifier rejects the new result as pre-run history and loses its input identity.
@@ -83,7 +99,7 @@ function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {
         const latest = deps.backgroundJobBoard.get(updated.taskID);
         if (latest?.generation === updated.generation && latest.terminalRevision === updated.terminalRevision && latest.activityRevision === updated.activityRevision) {
           output.metadata = { ...output.metadata, bcp_delivery: metadata };
-          output.output += deliverySuffix(metadata);
+           output.output = presentDelivery(output.output, metadata) + deliverySuffix(metadata);
         }
       }
       log("[task-session-manager] foreground task status registered",`);
@@ -93,12 +109,12 @@ function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {
           const afterDelivery = board.get(taskID);
           if (afterDelivery?.generation !== current.generation || afterDelivery.terminalRevision !== current.terminalRevision || afterDelivery.activityRevision !== current.activityRevision)
             throw new Error("Task changed while delivery metadata was inspected; retrieve its current result.");
-          return current.resultSummary + deliverySuffix(metadata);
+           return presentDelivery(current.resultSummary, metadata) + deliverySuffix(metadata);
         }
         snapshot = await getRuntimeSessionStatusSnapshot(options.input);`);
   once('return evidence.text;\n      }\n    })\n  };\n}\n// src/tools/task-revive.ts',
     `const metadata = await deliveryMetadata(options.input.directory, { taskID, parentSessionID, state: "completed", bcpOrigin: evidence.bcpOrigin });
-        return evidence.text + deliverySuffix(metadata);
+         return evidence.text + deliverySuffix(metadata);
       }
     })
   };
@@ -108,7 +124,7 @@ function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {
   once('const notifyAgent = selection?.agent ?? "orchestrator";\n      const text = [',
     'const notifyAgent = selection?.agent ?? "orchestrator";\n      const bcpMetadata = await deliveryMetadata(options.input.directory, record);\n      const text = [');
   once('record.resultSummary ?? (state === "completed" ? "Completed." : "Failed."),\n        `</${tag}>`,\n        "</task>"',
-    'record.resultSummary ?? (state === "completed" ? "Completed." : "Failed."),\n        `</${tag}>`,\n        "</task>",\n        deliverySuffix(bcpMetadata)');
+    'presentDelivery(record.resultSummary ?? (state === "completed" ? "Completed." : "Failed."), bcpMetadata),\n        `</${tag}>`,\n        "</task>",\n        deliverySuffix(bcpMetadata)');
   // Native first-run background notifications arrive through the host's synthetic-message lane.
   once('const injectionState = {\n    backgroundJobBoard,', 'const injectionState = {\n    bcpDirectory: _ctx.directory,\n    backgroundJobBoard,');
   once('if (origin?.phase === "processed")\n    return;',
@@ -149,8 +165,8 @@ function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {
   const latest = board?.get(record.taskID);
   if (latest?.generation !== record.generation || latest.terminalRevision !== record.terminalRevision || latest.activityRevision !== record.activityRevision)
     return lines.join("\\n") + deliverySuffix({ ...metadata, association: "unconfirmed", candidates: [], reason: "execution_changed" });
-  return lines.join("\\n") + deliverySuffix(metadata);
+   return presentDelivery(lines.join("\\n"), metadata) + deliverySuffix(metadata);
 }
 function getCurrentReviveJob`);
-  return 'import { deliveryMetadata, deliverySuffix, annotateDeliveryPart } from "../omo-delivery.mjs";\n' + source;
+  return 'import { deliveryMetadata, deliverySuffix, annotateDeliveryPart, presentDelivery } from "../omo-delivery.mjs";\nimport { prepareCouncilPrompt } from "../omo-council.mjs";\n' + source;
 }

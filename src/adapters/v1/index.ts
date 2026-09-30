@@ -20,6 +20,7 @@ import { DELIVERY_BRIDGE, inspectDelivery, type DeliveryRequest, type HostMessag
 import { captureFinal, NO_STORE, permissionAction, publicationAllowed, type CaptureHost, type PermissionRule } from "../../capture"
 import { beginEditObservation, invalidateEditEvidence, observeEdits, editEvidence } from "../../edit-evidence"
 import { messageStore, STORE_DESCRIPTION } from "../../message-store"
+import { COUNCIL_BRIDGE, inspectCouncilSource, type CouncilRequest } from "../../council"
 
 type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不再以空串冒充）
 
@@ -283,6 +284,10 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
   }
   // Agent configuration is immutable for a host instance. Session permission overrides are read afresh.
   let agents: Promise<{ name: string; permission: PermissionRule[] }[]> | undefined
+  const agentProfiles = () => agents ??= input.client.app.agents().then(result => {
+    if (!Array.isArray(result.data)) throw Error("agent_permissions_unavailable")
+    return result.data as unknown as { name: string; permission: PermissionRule[] }[]
+  }).catch(error => { agents = undefined; throw error })
   const captureHost: CaptureHost = {
     resolve: id => lookupScopeContext(id, ""), message: readMessage,
     current: (id, parent) => st.admitted.get(id) === parent,
@@ -294,11 +299,7 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
       catch (error) { return { paths: receipts.edits(id, parent)?.paths ?? [], bindings: [], errors: [String(error)] } }
     },
     authorize: async (id, agent, authorInput) => {
-      agents ??= input.client.app.agents().then(result => {
-        if (!Array.isArray(result.data)) throw Error("agent_permissions_unavailable")
-        return result.data as unknown as { name: string; permission: PermissionRule[] }[]
-      }).catch(error => { agents = undefined; throw error })
-      const [profiles, sessionResult] = await Promise.all([agents, input.client.session.get({ path: { id } })])
+      const [profiles, sessionResult] = await Promise.all([agentProfiles(), input.client.session.get({ path: { id } })])
       const profile = profiles.find(p => p.name === agent)
       const current = sessionResult.data as unknown as { id: string; permission?: PermissionRule[] } | undefined
       if (!profile || !Array.isArray(profile.permission) || current?.id !== id ||
@@ -329,16 +330,40 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     if (result.id && parent && resolved && refPolicy(resolveAuthz(resolved.scope, { sessionId: parent, agent: "" }), parseBbId(result.id)) === "ok") remember(parent, result.id)
     return result
   })
+  const canReadResult = async (session: string) => {
+    const resolved = await lookupScopeContext(session, "")
+    const currentInput = st.admitted.get(session)
+    if (!resolved?.agent || resolved.isolated || !currentInput) return false
+    const authorInput = await readMessage(session, currentInput)
+    if (!authorInput || authorInput.info.role !== "user" || authorInput.info.sessionID !== session ||
+        authorInput.info.id !== currentInput || authorInput.info.tools?.board_get === false || authorInput.info.tools?.["*"] === false) return false
+    const [profiles, sessionResult] = await Promise.all([agentProfiles(), input.client.session.get({ path: { id: session } })])
+    const profile = profiles.find(p => p.name === resolved.agent)
+    const current = sessionResult.data as unknown as { id: string; permission?: PermissionRule[] } | undefined
+    if (!profile || !Array.isArray(profile.permission) || current?.id !== session ||
+        (current.permission !== undefined && !Array.isArray(current.permission))) return false
+    return st.admitted.get(session) === currentInput &&
+      permissionAction([...profile.permission, ...(current.permission ?? [])], "board_get", "*") === "allow"
+  }
   bridges.set(input.directory, async (request: DeliveryRequest) => {
     const result = await inspectDelivery(request, {
     scopeFor: async session => (await lookupScopeContext(session, ""))?.scope ?? null,
     parentFor: async session => (await sessionInfo(session))?.parentID ?? null,
     message: readMessage,
+    canReadResult,
+    currentResult: (session, authorInput) => st.admitted.get(session) === authorInput,
     ...(autoCapture ? { capture } : {}),
     })
     if ("capture" in result && result.capture?.id) remember(request.callerSessionID, result.capture.id)
     return result
   })
+  const councilBridges = ((globalThis as any)[COUNCIL_BRIDGE] ??= new Map()) as Map<string, (request: CouncilRequest) => Promise<unknown>>
+  councilBridges.set(input.directory, request => inspectCouncilSource(request, {
+    parentFor: async session => (await sessionInfo(session))?.parentID ?? null,
+    message: readMessage,
+    current: (session, authorInput) => st.admitted.get(session) === authorInput,
+    isSeat: async agent => agent.startsWith("councillor-") && (await agentProfiles()).some(profile => profile.name === agent),
+  }))
 
   const boardTools = defineBoardTools({
     resolveScope: lookupScopeContext,
@@ -403,15 +428,28 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
         }
       }
       if (!["task", "task_revive", "task_message"].includes(hookInput.tool) || typeof output.args.prompt !== "string") return
+      // Council cannot dereference board records. Its originals use the separate host assembly channel.
+      if (output.args.subagent_type === "council" || String(output.args.subagent_type).startsWith("councillor-")) return
       if (autoCapture) {
         const resolved = await lookupScopeContext(hookInput.sessionID, "")
         if (resolved) {
           const requested = typeof output.args.task_id === "string" ? output.args.task_id : undefined
           const recipient = requested && (await sessionInfo(requested))?.parentID === hookInput.sessionID ? requested : undefined
-          const routed = sourceHandoff(resolved.scope, hookInput.sessionID, output.args.prompt, recentSources.get(hookInput.sessionID) ?? [],
-            receipts.sources(hookInput.sessionID, st.admitted.get(hookInput.sessionID) ?? ""), recipient)
-          output.args.prompt = routed.prompt
-          if (routed.references.length) st.log({ ev: "source_handoff", session: hookInput.sessionID, references: routed.references, removed_bytes: routed.removedBytes })
+          // Do not remove supplied source bodies for a consumer unable to dereference them.
+           let readable = false
+           try {
+             if (recipient) readable = await canReadResult(recipient)
+             else {
+               const profile = (await agentProfiles()).find(p => p.name === output.args.subagent_type)
+               readable = !!profile && Array.isArray(profile.permission) && permissionAction(profile.permission, "board_get", "*") === "allow"
+             }
+           } catch { /* Keep the original body when the receiver's read capability is unknown. */ }
+           if (readable) {
+             const routed = sourceHandoff(resolved.scope, hookInput.sessionID, output.args.prompt, recentSources.get(hookInput.sessionID) ?? [],
+               receipts.sources(hookInput.sessionID, st.admitted.get(hookInput.sessionID) ?? ""), recipient)
+             output.args.prompt = routed.prompt
+             if (routed.references.length) st.log({ ev: "source_handoff", session: hookInput.sessionID, references: routed.references, removed_bytes: routed.removedBytes })
+           }
         }
       }
       if (!malformedSha256(output.args.prompt)) return

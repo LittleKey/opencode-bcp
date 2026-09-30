@@ -3,6 +3,9 @@ import type { Scope } from "./storage"
 import { resolveAuthz, refPolicy } from "./permissions"
 import { parseBbId } from "./ids"
 import { inspectArtifacts } from "./artifacts"
+import { createHash } from "node:crypto"
+import { publicReply } from "./reply"
+import type { Writer } from "./schema"
 
 export const DELIVERY_BRIDGE = Symbol.for("opencode.bcp.delivery.v1")
 export type HostMessage = { info: { id: string; sessionID: string; role: string; parentID?: string; agent?: string; finish?: string; time?: { created?: number; completed?: number }; error?: unknown; summary?: boolean; tools?: Record<string, boolean> }; parts?: { id?: string; type: string; text?: string; synthetic?: boolean; ignored?: boolean; time?: { start?: number; end?: number }; callID?: string; tool?: string; state?: { status?: string; time?: { start?: number; end?: number } } }[] }
@@ -15,8 +18,14 @@ export type DeliveryHost = {
   parentFor: (sessionID: string) => Promise<string | null>
   message: (sessionID: string, messageID: string) => Promise<HostMessage | null>
   capture?: (sessionID: string, messageID: string) => Promise<{ status: string; id?: string; reason?: string }>
+  canReadResult?: (sessionID: string) => Promise<boolean>
+  currentResult?: (sessionID: string, inputMessageID: string) => boolean
 }
-export function deliveryUnknown(request: DeliveryRequest, reason: string) {
+export type ResultReference = { id: string; description: string; text_sha256: string; bytes: number; writer: Writer; input_message_id: string; source_errors: string[] }
+export function deliveryUnknown(request: DeliveryRequest, reason: string): {
+  schema_version: number; execution: { task_id: string; generation: number | null; terminal_revision: number | null; state: string }
+  association: string; reason: string; candidates: unknown[]; coverage: string; applicability: string; result_reference?: ResultReference
+} {
   return { schema_version: 1, execution: { task_id: request.taskID, generation: request.generation ?? null,
     terminal_revision: request.terminalRevision ?? null, state: request.state },
     association: "unconfirmed", reason, candidates: [] as unknown[], coverage: "not_evaluated", applicability: "not_evaluated" }
@@ -40,6 +49,11 @@ export async function inspectDelivery(request: DeliveryRequest, host: DeliveryHo
   if (capture?.id && refPolicy(auth, parseBbId(capture.id)) !== "ok") capture = { status: "unconfirmed", reason: "capture_not_accessible" }
   const ids = [...new Set([...(capture?.id ? [capture.id] : []), ...(text.match(/bb:\/\/[0-9a-f-]+\/[0-9a-f-]+\/e\d+/gi) ?? [])])]
   const candidates: unknown[] = []
+  let resultReference: ResultReference | undefined
+  const reply = publicReply(terminal)
+  // Do not infer exact terminal coverage from current_input or an arbitrary mentioned record.
+  // Multiple text parts have different native renderers; leave those presentations unchanged.
+  const exactSinglePart = terminal.parts?.filter(p => p.type === "text").length === 1 && reply?.kind === "final"
   const messages = new Map<string, Promise<HostMessage | null>>()
   for (const id of ids.slice(0, 8)) {
     let parsed: ReturnType<typeof parseBbId>
@@ -49,6 +63,15 @@ export async function inspectDelivery(request: DeliveryRequest, host: DeliveryHo
     const found = scope.getById(id)
     if (found.status !== "found") { candidates.push({ id, readability: found.status }); continue }
     const record = found.record
+    if (exactSinglePart && host.currentResult?.(request.taskID, request.inputMessageID) && capture?.id === id && ["stored", "replay"].includes(capture.status) &&
+        record.writer.session_id === request.taskID && record.writer.message_id === request.terminalMessageID &&
+        record.writer.agent === terminal.info.agent && record.origin?.kind === "host_final" &&
+        record.origin.input_message_id === request.inputMessageID && record.content === reply.content &&
+        record.origin.text_sha256 === createHash("sha256").update(reply.content).digest("hex")) {
+      resultReference = { id, description: record.description, writer: record.writer,
+        input_message_id: request.inputMessageID, text_sha256: record.origin.text_sha256,
+        bytes: Buffer.byteLength(reply.content), source_errors: record.origin.source_errors ?? [] }
+    }
     let origin = "other_author"
     if (record.writer.session_id === request.taskID) {
       const key = record.writer.message_id
@@ -79,7 +102,11 @@ export async function inspectDelivery(request: DeliveryRequest, host: DeliveryHo
       version_check: sources.length ? "per_source_only" : "no_artifact_reference",
       superseded_by: visibleEdge(nav?.superseded_by), covered_by: visibleEdge(nav?.covered_by) })
   }
+  if (resultReference) {
+    try { if (!await host.canReadResult?.(request.callerSessionID) || !host.currentResult?.(request.taskID, request.inputMessageID)) resultReference = undefined }
+    catch { resultReference = undefined }
+  }
   return { ...unknown("candidate_references_only"), association: "host_message_identity",
     execution: { ...unknown("").execution, input_message_id: request.inputMessageID, terminal_message_id: request.terminalMessageID },
-    candidates, truncated: ids.length > 8, ...(capture ? { capture } : {}) }
+    candidates, truncated: ids.length > 8, ...(capture ? { capture } : {}), ...(resultReference ? { result_reference: resultReference } : {}) }
 }

@@ -63,6 +63,12 @@ rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 
 日志出现 `decision` 事件即插件已接线。默认 v1 应可见 `board_store`、`board_get`、`board_index`、`board_aggregate`，没有 `board_put`。v1 手动模式仍提供 `board_put`；v2 保持旧版四工具。
 
+## v1.20.0 编排集成（引用回执与 Council 宿主取证）
+
+OMO 适配现在由三个自有源码文件组成（`omo-patch.mjs`、`omo-delivery.mjs`、`omo-council.mjs`，见 [integrations/omo-slim](integrations/omo-slim/README.md)）。部署流程随之变化：local-plugins 的 `build.mjs` 在构建时直接从本仓库 `integrations/omo-slim/` 同步这三个文件（`OPENCODE_BCP_SOURCE` 可覆盖源目录），不再存在需要手工同步的副本；更新本仓库后须重新执行 `node build.mjs` 并重启 OpenCode 才会驻留新行为。
+
+启用后的两项行为：Council 问题中显式的 `ses_*` / `cou-N` 来源引用由宿主从已完成议员席位的终结消息装配经核验原文（每席 ≤ 32 KiB、单席位宿主等待 ≤ 2 秒、全部席位读取与并发准入等待完成后统一复查，变动席位整体排除且不带正文；无法解析的显式引用保留为排除条目）；作者超长且字节精确的完整终态原文可呈现为 `<bcp_result_reference>` 检索回执（≥ 8192 字节、身份/字节/原作者/可读性全部满足才替换，否则保留原文；权限与输入复查在检查返回前完成，呈现替换另做版本 CAS；回执不是验收）。契约、失败形态与限制见 [docs/orchestration-v1.20.md](docs/orchestration-v1.20.md)。验证现状：作者侧自动化自检通过（run-4：local-plugins 构建、42 项 `node --test`、`install.sh`；bun test / tsc / diff-check 复用未变文件的 run-2 记录）；首审两项阻塞经独立首轮复审 PASS 关闭（bb://c233777e-dafa-4e6a-b3df-8d8d09578292/84f0cb7d-933f-440f-bfd7-eac18ad82a9c/e000001，仅覆盖原阻塞与受影响边界，不构成语义接受或发布授权）。完整限定验收见 [harness/acceptance/v1.20.0.md](harness/acceptance/v1.20.0.md)（静态一致性断言与实际部署 hash 以该记录为准）。
+
 ## v1.19.0 作者标题与授权目录
 
 构建安装后，新进程的自动留存说明应包含可选 description 属性，`board_index` 应允许不带 query 的 `range="authorized"`。旧标记及省略 range 的本人目录继续可用。生产配置不需要额外模型、数据库或角色改动；目录按需读取，只有既有的两段说明被替换。解析与覆盖字段见 [契约](docs/catalog-discovery-v1.19.md)，真实多 agent 作者、受控读者对照和自主选择目录的证据见 [验收](harness/acceptance/v1.19.0.md)。验证使用独立新进程；正在运行的会话不会热加载安装后的插件。
@@ -195,3 +201,4 @@ rm <project>/.opencode/plugin/blackboard.ts      # 项目级（v2 同理，plugi
 - **行为异常、疑似两个版本同时在跑**：跨配置根混装所致。保留一个 major，重装：先删除所有 `blackboard*.ts` 插件文件，再用单一模式重装一次。
 - **安装脚本拒绝（exit 2）**：按输出列出的路径清理另一 major，或确认后 `--force`。
 - **怀疑数据问题**：运行 `bun test` 与 `bun run typecheck` 核对当前源码；具体通过数和真实宿主覆盖以对应版本的验收记录为准。
+- **Council 返回缺 `<council_host_sources>` 或席位被排除**：确认 local-plugins 已按 v1.20 流程重建并重启宿主；确认被引用任务已完成且其 agent 配置为 `councillor-*` 席位。无法核验的显式 `ses_*` / `cou-N` 引用会以带 reason 的排除条目出现（见 [编排契约](docs/orchestration-v1.20.md)），这是设计行为而非静默失败。

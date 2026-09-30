@@ -12,7 +12,7 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 | 宿主 | 状态 |
 |---|---|
-| opencode 1.x（v1 插件 API） | 已部署；作者标题与跨流目录见 [v1.19 验收](harness/acceptance/v1.19.0.md)，正文检索见 v1.18；公开正文边界、历史版本绑定与续接闭环见各版本验收 |
+| opencode 1.x（v1 插件 API） | 已部署；作者标题与跨流目录见 [v1.19 验收](harness/acceptance/v1.19.0.md)，正文检索见 v1.18；公开正文边界、历史版本绑定与续接闭环见各版本验收。v1.20 编排集成（交付引用回执与 Council 宿主原文取证）契约见 [orchestration-v1.20](docs/orchestration-v1.20.md)，首审两项阻塞经独立首轮复审 PASS 关闭（限原阻塞与受影响边界），完整限定验收见 [v1.20.0 验收](harness/acceptance/v1.20.0.md) |
 | opencode 2.0.16+（v2 插件 API） | 适配层已实现，41 项 adapter 测试通过；**真实 v2 宿主端到端验收尚未执行**，v2 安装属尝鲜性质 |
 
 「独立插件」与「已验证集成」是两种不同的承诺：前者在默认 v1 提供四工具及最终正文留存，后者额外固定 OMO 的终态、通知和引用交付接线。工具可见、安装成功或记录存在均不等于完整行为通过。v2 保持旧版四工具接口，真实加载与行为尚未验收；各版本的测试配置、适用范围和遗漏以对应验收记录为准。OMO 集成与安装边界见 [INSTALL.md](INSTALL.md)。
@@ -24,6 +24,8 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 不知道记录 ID 时，小 scope 优先使用 `board_index({range: "authorized"})` 浏览跨授权流的紧凑目录，再以 `board_get` 读取原文。自动留存支持 `<!-- bcp:store description="主题、结论与重要限制" -->`，标题与正文同次生成，不增加摘要模型请求；旧标记继续支持。语法、目录覆盖及预算见 [v1.19 详细设计](docs/catalog-discovery-v1.19.md)。
 
 查找具体细节或目录较大时，使用 `board_index({query: "cancelled 优先"})` 搜索公开正文和工件路径，按相关性返回原文片段。description 不参与 query 评分；省略 range 的本人目录与旧 keyword 标题过滤保持兼容。词法检索限制见 [v1.18 契约](docs/content-search-v1.18.md)。
+
+委派返回的呈现与 Council 原文取证：作者超长且字节精确的完整终态原文可呈现为 `<bcp_result_reference>` 检索回执（接收者须先 `board_get` 取回原文；回执不是验收），未知、更短或不匹配的输出保留原文；Council 问题中显式的 `ses_*` / `cou-N` 引用由宿主从已完成议员席位的终结消息装配经核验原文（每席 ≤ 32 KiB），变动席位整体排除且不带正文。二者只改变返回呈现与宿主取证，不承担语义验收或评审判定，仅适用于 v1。契约与限制见 [v1.20 编排集成](docs/orchestration-v1.20.md)。
 
 ## 核心模型速览
 
@@ -121,7 +123,7 @@ test/               # 单元、契约及插件接线测试
 scripts/install.sh  # 安装脚本（v1/v2 双模式）
 harness/            # 验收记录与工具
 integrations/omo-slim/ # 锁定 OMO 2.2.25 的适配自有源码
-DESIGN.md           # 设计契约全文（v1.18.0）
+DESIGN.md           # 设计契约全文
 ```
 
 ## License
