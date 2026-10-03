@@ -12,20 +12,20 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 | 宿主 | 状态 |
 |---|---|
-| opencode 1.x（v1 插件 API） | 已部署；作者标题与跨流目录见 [v1.19 验收](harness/acceptance/v1.19.0.md)，正文检索见 v1.18；公开正文边界、历史版本绑定与续接闭环见各版本验收。v1.20 编排集成（交付引用回执与 Council 宿主原文取证）契约见 [orchestration-v1.20](docs/orchestration-v1.20.md)，首审两项阻塞经独立首轮复审 PASS 关闭（限原阻塞与受影响边界），完整限定验收见 [v1.20.0 验收](harness/acceptance/v1.20.0.md) |
-| opencode 2.0.16+（v2 插件 API） | 适配层已实现，41 项 adapter 测试通过；**真实 v2 宿主端到端验收尚未执行**，v2 安装属尝鲜性质 |
+| opencode 1.x（v1 插件 API） | 2.0.0 组合已安装到生产配置，实际宿主 1.18.33；声明最低 1.18.29。独立新进程核对配置、文件模式及认证来源，通过服务端 API 完成一次实际模型冒烟。当前既有 UI 进程未重启，不会热加载。见 [v2.0.0 验收](harness/acceptance/v2.0.0.md) |
+| opencode 2.0.20+（v2 插件 API） | 与 v1 共用同一 dual-entry 构建产物。2.0.20 的作者—评审—返修闭环、HTTP/SSE 隐私和安装回滚验证通过；生产 CLI 未迁移到 v2。双宿主闭环各 27 项检查使用脚本响应，核心 426 项测试通过；不据此宣称自然模型质量。见 [v2.0.0 验收](harness/acceptance/v2.0.0.md) |
 
-「独立插件」与「已验证集成」是两种不同的承诺：前者在默认 v1 提供四工具及最终正文留存，后者额外固定 OMO 的终态、通知和引用交付接线。工具可见、安装成功或记录存在均不等于完整行为通过。v2 保持旧版四工具接口，真实加载与行为尚未验收；各版本的测试配置、适用范围和遗漏以对应验收记录为准。OMO 集成与安装边界见 [INSTALL.md](INSTALL.md)。
+「独立插件」与「已验证集成」是两种不同的承诺：前者在默认 v1/v2 提供四工具及最终正文留存，后者额外固定 OMO 的终态、通知和引用交付接线。工具可见、安装成功或记录存在均不等于完整行为通过。2.0.0 发布复审已通过，实际范围与剩余限制以验收记录为准；独立 CLI `run` 的额外真实模型探针未通过，服务端 API 探针通过。OMO 集成与安装边界见 [INSTALL.md](INSTALL.md)。
 
 设计契约见 [DESIGN.md](DESIGN.md)；当前 [v1.17 公开来源规则](docs/public-source-v1.17.md)要求先有用户可读的公开正文，再按真实消息 ID 留存。隐藏推理、工具参数、尚未写出的报告和纯协议标记都不能充当正文。默认 v1 不再暴露 `board_put`。已有记录直接复用；尚未留存的原消息通过 `board_store` 留存后，只传完整引用和新增要求。宿主保留真实作者与原编辑版本，接收者核对原文。历史验收只适用于其标注版本，既有冻结配置的 82 项检查见 [v1.14 验收](harness/acceptance/v1.14.0.md)。
 
-默认 v1 从原作者的编辑证据和正文中的确切文件引用自动生成 `source_refs`；`board_store` 不接收调用者重写的正文、作者或文件清单。每次最多 8 个文件、每文件 4 MiB，计入 scope 配额。手动模式保留 `board_put` 的本地来源参数。`board_get` 的 `verified_bytes_only` 只证明快照字节，结论和覆盖范围仍需核对。当前 v2 缺少文件授权接口，自动快照请求会被拒绝；其他引用渠道保持可用。
+默认 v1 从原作者的编辑证据和正文中的确切文件引用自动生成 `source_refs`；`board_store` 不接收调用者重写的正文、作者或文件清单。每次最多 8 个文件、每文件 4 MiB，计入 scope 配额。手动模式保留 `board_put` 的本地来源参数。`board_get` 的 `verified_bytes_only` 只证明快照字节，结论和覆盖范围仍需核对。文件证据快照是 v1/v2 共享核能力：仅当作者当轮权限规则明确 allow 相应路径时才留存，deny/ask/未知一律不快照（fail closed）。
 
 不知道记录 ID 时，小 scope 优先使用 `board_index({range: "authorized"})` 浏览跨授权流的紧凑目录，再以 `board_get` 读取原文。自动留存支持 `<!-- bcp:store description="主题、结论与重要限制" -->`，标题与正文同次生成，不增加摘要模型请求；旧标记继续支持。语法、目录覆盖及预算见 [v1.19 详细设计](docs/catalog-discovery-v1.19.md)。
 
 查找具体细节或目录较大时，使用 `board_index({query: "cancelled 优先"})` 搜索公开正文和工件路径，按相关性返回原文片段。description 不参与 query 评分；省略 range 的本人目录与旧 keyword 标题过滤保持兼容。词法检索限制见 [v1.18 契约](docs/content-search-v1.18.md)。
 
-委派返回的呈现与 Council 原文取证：作者超长且字节精确的完整终态原文可呈现为 `<bcp_result_reference>` 检索回执（接收者须先 `board_get` 取回原文；回执不是验收），未知、更短或不匹配的输出保留原文；Council 问题中显式的 `ses_*` / `cou-N` 引用由宿主从已完成议员席位的终结消息装配经核验原文（每席 ≤ 32 KiB），变动席位整体排除且不带正文。二者只改变返回呈现与宿主取证，不承担语义验收或评审判定，仅适用于 v1。契约与限制见 [v1.20 编排集成](docs/orchestration-v1.20.md)。
+委派返回的呈现与 Council 取证：作者超长且字节精确的完整终态原文可呈现为 `<bcp_result_reference>` 检索回执（接收者须先 `board_get` 取回原文；回执不是验收），未知、更短或不匹配的输出保留原文——该交付引用回执契约经共享核在 v1 与 v2 宿主均接入（v2 侧由 OMO 3.0.1 交付 helper 对原生 subagent 包装做严格字节/身份校验后替换）。Council 问题中显式的 `ses_*` / `cou-N` 宿主原文装配是 2.2.25 部署基线的历史行为，仅存在于 v1 历史集成；3.0.1 起 Council 使用上游自身实现，主角色不再组织私人席位，宿主不再做该取证拼接。历史契约与限制见 [v1.20 编排集成](docs/orchestration-v1.20.md)。
 
 ## 核心模型速览
 
@@ -40,12 +40,12 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 | 工具 | 职责 |
 |---|---|
-| `board_store` | v1：发现已完成最终答复或已稳定公开阶段正文，按真实作者原样留存，自动带入可核验的历史编辑版本 |
+| `board_store` | 发现已完成最终答复或已稳定公开阶段正文，按真实作者原样留存，自动带入可核验的历史编辑版本 |
 | `board_get` | 按 ID 读回确切记录；原文和版本仍在当前上下文中且无变更信号时，可复用已完成的核对 |
 | `board_index` | 无 query 的 `range="authorized"` 浏览跨流紧凑目录；`query` 搜索正文和路径；省略两者浏览本人目录 |
 | `board_aggregate` | 把多条旧目录项折叠为一条索引摘要：只缩目录，原文恒可 `board_get` |
 
-v1 手动模式（`autoCapture: false`）仍提供 `board_put`；v2 保持包含 `board_put` 的旧版四工具，不提供 `board_store`。
+v1/v2 默认 auto 模式都不提供 `board_put`（自动留存 + `board_store`）；显式 `autoCapture: false` 的手动模式在两宿主上都额外注册 `board_put` 旧契约（与 `board_store` 并存），兼容既有禁发布角色配置。
 
 ## 记录生命周期示例
 
@@ -59,7 +59,7 @@ v1 手动模式（`autoCapture: false`）仍提供 `board_put`；v2 保持包含
 
 ## 设计哲学
 
-**一次表达，原文交接。** v1 默认由宿主留存最终正文，失败时报告缺口，不触发模型补发或阻断回答。接收者仍核对来源、版本和限制。目录增长保留有预算的聚合压力提醒；手动模式保留旧发布观察。委派输入中格式错误的 SHA-256 声明仍提示版本未核验。
+**一次表达，原文交接。** 默认模式（v1/v2 同口径）由宿主留存最终正文，失败时报告缺口，不触发模型补发或阻断回答。接收者仍核对来源、版本和限制。目录增长保留有预算的聚合压力提醒；手动模式保留旧发布观察。委派输入中格式错误的 SHA-256 声明仍提示版本未核验。
 
 **授权是硬边界。** 跨 scope 读取不区分"存在但无权"与"不存在"，统一 `forbidden`，不泄漏存在性。
 
@@ -67,7 +67,7 @@ v1 手动模式（`autoCapture: false`）仍提供 `board_put`；v2 保持包含
 
 **身份保守。** 无法证明消息边界的轮次归属时保持 unknown：不注入、不推进轮次预算、不生成随机 ID 补齐，并同步落盘保守失效状态。宁可少提醒，不超预算。
 
-**共享核心，分开声明宿主能力。** v1/v2 共用 scope、stream、文件锁和事务。v1.13 通过可选 `origin` 字段保留旧记录兼容，自动留存只在 v1 接入；v2 继续手动发布，不把双构建成功解释为运行能力等同。
+**共享核心，分开声明宿主能力。** v1/v2 共用 scope、stream、文件锁和事务，自动留存、目录/聚合与文件证据快照经共享核在两宿主接入，各自按宿主权限面复核。v1.13 通过可选 `origin` 字段保留旧记录兼容；行为等同仍以各宿主验收记录为准，不把双构建成功解释为运行能力等同。
 
 ## 明确不做的事
 
@@ -87,7 +87,7 @@ v1 手动模式（`autoCapture: false`）仍提供 `board_put`；v2 保持包含
 ```bash
 git clone <本仓库>
 cd opencode-bcp
-bash scripts/install.sh        # v1 宿主（opencode 1.x），全局安装
+bash scripts/install.sh        # 检测 PATH 中的 opencode 并按宿主 major 安装（全局）
 # 重启 opencode 后生效
 ```
 
@@ -118,11 +118,12 @@ src/
   eligibility.ts    # 目录压力资格判定
   constants.ts      # 常量单源
   adapters/v1/      # opencode 1.x 插件入口与 hook 接线
-  adapters/v2/      # opencode 2.x 适配层（真实宿主验收待执行）
+  adapters/v2/      # opencode 2.x 适配层（2.0.20；限定验收见 harness/acceptance/v2.0.0.md）
 test/               # 单元、契约及插件接线测试
-scripts/install.sh  # 安装脚本（v1/v2 双模式）
+scripts/install.sh  # 按宿主检测的事务性安装（单一 canonical 文件 + 安装清单）
+scripts/uninstall.sh # 所有权校验式卸载
 harness/            # 验收记录与工具
-integrations/omo-slim/ # 锁定 OMO 2.2.25 的适配自有源码
+integrations/omo-slim/ # OMO 适配自有源码（2.2.25 部署基线 + 3.0.1 双入口构建）
 DESIGN.md           # 设计契约全文
 ```
 

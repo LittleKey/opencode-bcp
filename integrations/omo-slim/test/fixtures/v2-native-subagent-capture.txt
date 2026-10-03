@@ -1,0 +1,150 @@
+<subagent sessionID="ses_f04e92aabffeoftWYBSMqarQvr" state="completed">
+# Public original: original-1
+
+## Section 000 (original-1)
+Deterministic verification content, block seed 8964ff8dee8b264e9cd35ec98e78252f78674817f07da0fca1237f0075a3e896.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 001 (original-1)
+Deterministic verification content, block seed 4cfb6c4f69ba6864c8e74c086c59bf164e35a6d9bcd50a0c898aedc99bc0d995.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 002 (original-1)
+Deterministic verification content, block seed afe99b0f9f472e6afca70a7da8c161b4574ac36f2468a51e2ccea56776b9dbe8.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 003 (original-1)
+Deterministic verification content, block seed 1987d28b58ada455b7b5831ae1be6f507b7aef4c36f57736d38d7b6af614af9e.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 004 (original-1)
+Deterministic verification content, block seed c0bca4475d37b9b628c79502d492cf4ba99bf10be1eff4699a012de85eeb5320.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 005 (original-1)
+Deterministic verification content, block seed be3a65a23baccad3e7a30afe3823f3cf7008ca93d8b5df84d4b9052c40780688.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 006 (original-1)
+Deterministic verification content, block seed 4b91500c2b099dc83af03bafd6cdeb3fd2ee66ec1ff9e8e3aa877ed8c8b88e61.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 007 (original-1)
+Deterministic verification content, block seed 45e4fb4f9108a672869acf2dd48327e8575fb6c3fabe8c2dcd9854e330850660.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 008 (original-1)
+Deterministic verification content, block seed 76f3fb859e30de1014428aaf74245bce7c52c633600124c07359d05a0189945e.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 009 (original-1)
+Deterministic verification content, block seed 0872917d202b0b17d18bb9bfcec3e7707748ffb2492f27e6229a1c8288b0b840.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 010 (original-1)
+Deterministic verification content, block seed 48e3adbededc8eff203a7eb7d1d9eceadb7f9eb363e983b830cd33b7aae8003a.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 011 (original-1)
+Deterministic verification content, block seed 001e2a1f860aac0a55fb17ed8907c42f448a42e2894b963f59dda7b2399baeaf.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 012 (original-1)
+Deterministic verification content, block seed d2d0a6a8ecf5891346022abe67c977c56ac8c8d3d5f9e3aec139aa85ad04afad.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 013 (original-1)
+Deterministic verification content, block seed a5ad8c4fc189fff2a0b2b5e5d5b2812bf7448649a95bfc58c6a6180132f18b12.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 014 (original-1)
+Deterministic verification content, block seed d948626883c36da00399ba32a1203b36d4f176a06496425e677e9a02734ac5a7.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 015 (original-1)
+Deterministic verification content, block seed aa1cd5f80324246c3fc1e04ca16519f46cdad6e9649c351190756c9c4150e428.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 016 (original-1)
+Deterministic verification content, block seed 6d8fc5bfd5461776af6d167f606c2679eb38db05e89038e3977e1c50f1ff7ed7.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 017 (original-1)
+Deterministic verification content, block seed 29b0427c23cf88e7bff6a5157dbf48ce8123143b1c4f3e75d79b513cbb6d6a62.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 018 (original-1)
+Deterministic verification content, block seed bb0669f6102c701026e2b51bb376e97c65e02edbf3298aea4bd01c990ff86257.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 019 (original-1)
+Deterministic verification content, block seed 7ca7194a13fed29948ae0a06316669929b42c7881ccebb28908b2c588e4f515f.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 020 (original-1)
+Deterministic verification content, block seed 263e5154479985a395c7f6d8fc356aeda9639e314527f494fff480e7ef86ea53.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 021 (original-1)
+Deterministic verification content, block seed 9095dfc6b029a58a103681c7ed43240e23a9155c7f50f9c942108b5991a7e14d.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 022 (original-1)
+Deterministic verification content, block seed bfc12d02d112fc975a9d017486e8909021ba54988dde1c549593579aef3ed216.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 023 (original-1)
+Deterministic verification content, block seed 9a03901b45f71a6fa11366d46144b82f1224d28518e60f26fbe7ca0158aa707c.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 024 (original-1)
+Deterministic verification content, block seed e9dabcc8e9a652425acbc26c98afd252de28a6f4e2a95f092e073146017b76cc.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 025 (original-1)
+Deterministic verification content, block seed b461d17fa660a7e75be0d77a5b6c32a8c86db57e506954d69f4ed59013de9f58.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 026 (original-1)
+Deterministic verification content, block seed d0061aab775acf50f1cf7c58a357e2946527a22f8c30ba5ac0f71b8a32f2cd06.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 027 (original-1)
+Deterministic verification content, block seed 3487d9860e57e5d0dd5edc387379e064fe956611be15d3957ce3c90778383624.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 028 (original-1)
+Deterministic verification content, block seed 1cb3ebd206230eec545f0f274eb10be751bc4feebb339b7d6c3017ee8743b870.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 029 (original-1)
+Deterministic verification content, block seed aa091e711f79049af1cc3a0678ef1cfd148e68b333ec30f623327f09abeb67a6.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 030 (original-1)
+Deterministic verification content, block seed ef2c6b8e0104342001bbbc7d3314c3779ad523144e63213d69e6384886a96f67.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 031 (original-1)
+Deterministic verification content, block seed e9d9edf1fd82a3b161a5522c9bcc225759fe259cd6b5c90869f76b432fbffcd7.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 032 (original-1)
+Deterministic verification content, block seed 54878f1850716ddc9abc5707836fb2cc72810986315ea29d7e6f50535d7118e9.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 033 (original-1)
+Deterministic verification content, block seed bd030dfe35fab7f38dc2eedc86338cfb61adeab2a6daa0eb2193746093943c2d.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+## Section 034 (original-1)
+Deterministic verification content, block seed eb7d065543e73c7c9bf2457521af1868ade736d32f7704b259c585ba61edea61.
+This paragraph exists to push the public original past the 9KiB handoff budget so the compact-BCP assertion is meaningful. It is generated, stable, and not read from any real repository.
+
+
+<!-- bcp:store description="Fixer original reply one" -->
+</subagent>
+
+<bcp_delivery_metadata>
+{"schema_version":1,"execution":{"task_id":"ses_f04e92aabffeoftWYBSMqarQvr","generation":1,"terminal_revision":1,"state":"completed","input_message_id":"msg_0fb16d55a001cTMn7ttKajjVcZ","terminal_message_id":"msg_0fb16d57d00120LldhdLDpLs9x"},"association":"host_message_identity","reason":"candidate_references_only","candidates":[{"id":"bb://14df7673-e5e3-4b2b-aef1-8ff1c2f0b850/bfb52d27-d8e5-454f-b2a3-780ff3712182/e000001","readability":"found","record_hash":"sha256:5cd055a7247c337707f7bab63c80365fca6fdc0bd3731d51dd292b9b4a81a27b","origin":"current_input","writer":{"agent":"fixer","session_id":"ses_f04e92aabffeoftWYBSMqarQvr","message_id":"msg_0fb16d57d00120LldhdLDpLs9x"},"sources":[],"sources_truncated":false,"version_check":"no_artifact_reference","superseded_by":null,"covered_by":null}],"coverage":"not_evaluated","applicability":"not_evaluated","truncated":false,"capture":{"status":"replay","id":"bb://14df7673-e5e3-4b2b-aef1-8ff1c2f0b850/bfb52d27-d8e5-454f-b2a3-780ff3712182/e000001"},"result_reference":{"id":"bb://14df7673-e5e3-4b2b-aef1-8ff1c2f0b850/bfb52d27-d8e5-454f-b2a3-780ff3712182/e000001","description":"Fixer original reply one","writer":{"agent":"fixer","session_id":"ses_f04e92aabffeoftWYBSMqarQvr","message_id":"msg_0fb16d57d00120LldhdLDpLs9x"},"input_message_id":"msg_0fb16d55a001cTMn7ttKajjVcZ","text_sha256":"1ece653087ca1f15c28518918580fcee73f9f1a1a08bb05b0a963cd15ba4292a","bytes":11604,"source_errors":["edit_evidence_unavailable: no historical edit journal"]}}
+</bcp_delivery_metadata>

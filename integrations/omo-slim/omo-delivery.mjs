@@ -23,7 +23,8 @@ export function deliverySuffix(metadata) {
   return '\n\n<bcp_delivery_metadata>\n' + JSON.stringify(metadata).replaceAll('<', '\\u003c') + '\n</bcp_delivery_metadata>';
 }
 export const REFERENCE_MIN_BYTES = 8192;
-// Elide only exact whole bytes, or one exact body in the native task_result wrapper.
+// Elide only exact whole bytes, or one exact body in a native completion wrapper
+// (v1 task_result, v2 session-bound subagent), verified against the record, never inferred from text.
 // A record candidate, title, inferred verdict or partial result is not a replacement proof.
 export function presentDelivery(text, metadata) {
   const ref = metadata?.result_reference, execution = metadata?.execution;
@@ -34,19 +35,33 @@ export function presentDelivery(text, metadata) {
       ref.writer?.message_id !== execution.terminal_message_id || ref.input_message_id !== execution.input_message_id) return text;
   let body = text, start = 0;
   const open = '<task_result>\n', close = '\n</task_result>';
+  // native v2: exactly one open/close bound, pinned to the exact execution task id and completed state
+  const subOpen = /^ses_[A-Za-z0-9_-]+$/.test(execution.task_id ?? '')
+    ? '<subagent sessionID="' + execution.task_id + '" state="completed">\n' : null;
+  const subClose = '\n</subagent>';
   if (Buffer.byteLength(body) !== ref.bytes || createHash('sha256').update(body).digest('hex') !== ref.text_sha256) {
-    start = text.indexOf(open);
-    if (start < 0 || text.indexOf(open, start + open.length) >= 0) return text;
-    start += open.length;
-    const end = text.indexOf(close, start);
-    if (end < 0 || text.indexOf(close, end + close.length) >= 0) return text;
-    const prefix = text.slice(0, start - open.length), suffix = text.slice(end + close.length);
-    const task = /^<task\b[^>]*\bid="([A-Za-z0-9_-]+)"[^>]*>\n/.exec(prefix);
-    const native = /^task_id: (ses_[A-Za-z0-9_-]+) \(for resuming to continue this task if needed\)\n\n$/.exec(prefix);
-    if (!(task?.[1] === execution.task_id && suffix === '\n</task>') &&
-        !(native?.[1] === execution.task_id && suffix === '')) return text;
-    body = text.slice(start, end);
-    if (Buffer.byteLength(body) !== ref.bytes || createHash('sha256').update(body).digest('hex') !== ref.text_sha256) return text;
+    if (subOpen && (text.startsWith(subOpen) || text.endsWith(subClose))) {
+      if (!text.startsWith(subOpen) || !text.endsWith(subClose)) return text;
+      const end = text.indexOf(subClose, subOpen.length);
+      // a close anywhere but the exact tail means repeated, nested or split bounds
+      if (end < 0 || end !== text.length - subClose.length) return text;
+      start = subOpen.length;
+      body = text.slice(start, end);
+      if (Buffer.byteLength(body) !== ref.bytes || createHash('sha256').update(body).digest('hex') !== ref.text_sha256) return text;
+    } else {
+      start = text.indexOf(open);
+      if (start < 0 || text.indexOf(open, start + open.length) >= 0) return text;
+      start += open.length;
+      const end = text.indexOf(close, start);
+      if (end < 0 || text.indexOf(close, end + close.length) >= 0) return text;
+      const prefix = text.slice(0, start - open.length), suffix = text.slice(end + close.length);
+      const task = /^<task\b[^>]*\bid="([A-Za-z0-9_-]+)"[^>]*>\n/.exec(prefix);
+      const native = /^task_id: (ses_[A-Za-z0-9_-]+) \(for resuming to continue this task if needed\)\n\n$/.exec(prefix);
+      if (!(task?.[1] === execution.task_id && suffix === '\n</task>') &&
+          !(native?.[1] === execution.task_id && suffix === '')) return text;
+      body = text.slice(start, end);
+      if (Buffer.byteLength(body) !== ref.bytes || createHash('sha256').update(body).digest('hex') !== ref.text_sha256) return text;
+    }
   }
   const receipt = '<bcp_result_reference>\n' + JSON.stringify({ ...ref,
     required_action: 'Read the original with board_get before depending on its conclusions, versions or limits. This is a retrieval receipt, not acceptance.'

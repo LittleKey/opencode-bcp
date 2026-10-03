@@ -11,3 +11,4 @@ harness/scratch/
 harness/runs/*
 !harness/runs/evidence-*.jsonl
 .opencode/
+.slim/deepwork/

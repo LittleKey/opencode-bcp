@@ -5,13 +5,11 @@ BCP 以单个 TypeScript 插件文件装入 opencode，无运行时依赖安装�
 ## 前置要求
 
 - [bun](https://bun.sh)（安装脚本用它构建产物）
-- opencode，二选一：
-  - **opencode 1.x**：安装 v1 产物（默认；实际覆盖与限制见各版本验收）
-  - **opencode 2.0.16+**：安装 v2 产物（`--v2`；适配层已实现、41 项 adapter 测试通过，**真实 v2 宿主端到端验收尚未执行**，尝鲜性质）
+- opencode 1.x（最低 1.18.29，实际验证 1.18.33）或 opencode 2.0.20+（最低并实际验证 2.0.20）。同一个构建产物同时提供 v1 `server` 与 v2 `setup` 双入口，安装脚本检测宿主 major 后装入同一个文件；2.0.0 已通过发布复审并安装到现有 v1 生产配置，限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。最低版本声明不代表所有中间版本都已验证。
 
 ## 安装
 
-### 默认：v1 全局（opencode 1.x）
+### 默认：全局安装（按宿主检测）
 
 ```bash
 git clone <本仓库>
@@ -19,15 +17,9 @@ cd opencode-bcp
 bash scripts/install.sh
 ```
 
-产物装入 `~/.config/opencode/plugin/blackboard.ts`（v1 宿主自动发现该目录）。重启 opencode 生效。
+脚本构建产物，用 PATH 中的 `opencode` 检测宿主 major（`--host v1|v2|<可执行文件路径>` 可显式指定，`--artifact` 指定产物文件），写入唯一 canonical 文件 `~/.config/opencode/plugin/blackboard.ts`。该文件同时提供 v1 `server` 与 v2 `setup` 入口，两种宿主按各自协议加载同一个文件；显式单文件插件配置路径会被 v2 宿主忽略，因此固定使用目录自动发现。重启 opencode 生效。
 
-### v2 宿主（opencode 2.x）
-
-```bash
-bash scripts/install.sh --v2
-```
-
-产物装入 `~/.config/opencode/plugins/blackboard-v2.ts`（v2 宿主按目录自动发现；显式单文件插件配置路径会被 v2 宿主忽略，因此固定使用自动发现）。
+安装器保存原文件并对可捕获的失败执行进程内回滚（含符号链接拓扑恢复；不承诺断电或 SIGKILL 下的跨文件事务保证），写入安装清单 `~/.config/opencode/bcp-install.json`（schema `opencode-bcp.install/1`，记录版本、宿主、入口形态与产物摘要）。黑板数据目录 `~/.cache/opencode/blackboard` 永不改动。退出码：`0` 已安装或已是最新 · `2` 用法错误、宿主不受支持、冲突或所有权拒绝 · `3` `--project` 目标不是已存在目录 · `1` 未预期失败。
 
 ### 项目级安装
 
@@ -35,21 +27,21 @@ bash scripts/install.sh --v2
 bash scripts/install.sh --project /path/to/project
 ```
 
-产物装入 `<project>/.opencode/plugin/`（v1）或 `<project>/.opencode/plugins/`（v2 配合 `--v2`），仅对该项目生效。
+产物装入 `<project>/.opencode/plugin/blackboard.ts`，仅对该项目生效；目标目录必须已存在，否则 **exit 3**。
 
-### major 互斥语义
+### 单入口与旧文件所有权
 
-v2 宿主会同时扫描 `plugin/` 与 `plugins/` 两个目录。为避免同一宿主混装两个 major：
+同一有效配置栈（全局、祖先与项目范围）只能有一个 BCP 入口，写入前统一检查：
 
-- 同目录内装一个 major 会先移除另一 major 的既有插件文件（仅限本插件的两个规范文件名，不动你的其他插件）。
-- `--project` 模式下，安装前会检测目标目录全部祖先及全局配置根中另一 major 的存在；发现即**拒绝并 exit 2**，列出冲突路径，不做任何改动。
-- 确认要跨根混装时可用 `--force` 强制继续（会逐路径打印 WARNING），不推荐。
-- `--project` 目标不是已存在的目录时 **exit 3**。
+- 安装根之外发现本插件管理名文件（冲突）→ 拒绝并 **exit 2**，列出路径，不做任何改动。
+- 安装根内被用户修改过的管理文件（与清单摘要不符）→ 拒绝，不覆盖。
+- 旧版入口文件名（`plugin/blackboard.ts`、`plugin/blackboard.js`、`plugins/blackboard-v2.ts`）：匹配已知历史发布摘要时自动迁移；否则只有显式 `--adopt <file>=<sha256>` 给出其真实摘要才被采用——文件名与注释不是所有权证据。
+- 完整个人组合（dotfiles runtime 流程管理）使用自己的管理清单，见 [2.0.0 升级说明](docs/upgrade-v2.0.md)；从独立安装入口迁移时必须明确备份并交接旧入口，不能混用两套文件所有权。
 
 ### 跳过构建（开发迭代）
 
 ```bash
-BB_INSTALL_SKIP_BUILD=1 bash scripts/install.sh
+BB_INSTALL_SKIP_BUILD=1 bash scripts/install.sh   # 等价 --skip-build
 ```
 
 ## 验证
@@ -61,9 +53,11 @@ opencode run "Reply OK"
 rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 ```
 
-日志出现 `decision` 事件即插件已接线。默认 v1 应可见 `board_store`、`board_get`、`board_index`、`board_aggregate`，没有 `board_put`。v1 手动模式仍提供 `board_put`；v2 保持旧版四工具。
+日志出现 `decision` 事件即插件已接线。默认 auto 模式（v1/v2 同口径）可见 `board_store`、`board_get`、`board_index`、`board_aggregate`，没有 `board_put`。显式 `autoCapture: false` 的手动模式在两宿主上都额外注册 `board_put`（与 `board_store` 并存）。
 
 ## v1.20.0 编排集成（引用回执与 Council 宿主取证）
+
+（历史部署基线：本节描述 2.2.25 时代的 local-plugins 集成流程。当前 3.0.1 双宿主完整个人组合由 dotfiles runtime 流程管理，已安装到 v1 生产配置；原 UI 尚未重启。见 [docs/upgrade-v2.0.md](docs/upgrade-v2.0.md)。）
 
 OMO 适配现在由三个自有源码文件组成（`omo-patch.mjs`、`omo-delivery.mjs`、`omo-council.mjs`，见 [integrations/omo-slim](integrations/omo-slim/README.md)）。部署流程随之变化：local-plugins 的 `build.mjs` 在构建时直接从本仓库 `integrations/omo-slim/` 同步这三个文件（`OPENCODE_BCP_SOURCE` 可覆盖源目录），不再存在需要手工同步的副本；更新本仓库后须重新执行 `node build.mjs` 并重启 OpenCode 才会驻留新行为。
 
@@ -97,7 +91,7 @@ v1 安装新增 `board_store`。已知来源会话和消息 ID 时使用 `action
 
 独立测试进程验证了跨作者补存、重启后的旧版本快照、普通自动留存和子角色发现消息，见 [v1.15 验收](harness/acceptance/v1.15.0.md)。这些验证不依赖现有 UI 会话重启；现有进程不会热加载，退出并重启 OpenCode 后才能在该进程使用新工具。
 
-已授权原生编辑的证据按作者会话和输入持久保存，正文标记与补存共用这些快照。该本地证据缓存计入 scope 配额，不以最终正文是否带正向标记为采集条件；已知禁止输入和权限限制会阻止采集。安装前没有观察过的编辑不能凭当前文件补成历史证据。工具描述统一注册，不需向各角色重复添加补存提示。手动 v1 模式也提供该工具，v2 暂不提供。
+已授权原生编辑的证据按作者会话和输入持久保存，正文标记与补存共用这些快照。该本地证据缓存计入 scope 配额，不以最终正文是否带正向标记为采集条件；已知禁止输入和权限限制会阻止采集。安装前没有观察过的编辑不能凭当前文件补成历史证据。工具描述统一注册，不需向各角色重复添加补存提示。手动模式（`autoCapture: false`）在 v1/v2 上都提供该工具。
 
 ## v1.14.0 自动留存与自然交接
 
@@ -105,11 +99,11 @@ v1 安装新增 `board_store`。已知来源会话和消息 ID 时使用 `action
 
 请同步删除角色 prompt 中“结束前必须调用 `board_put` / 返回作者新生成 ID”的旧句，保留结果、依据、限制、确切版本和接收者读取原文的要求。同一准入输入中已观察的原生编辑与显式 `file://` 引用可经作者既有文件权限留存快照；自然语言禁止发布要求须由上游或作者传递 `<!-- bcp:no-store -->` 或省略正向标记。权限为 deny/ask 或未知时不自动授权。详细边界见 [docs/final-capture-v1.14.md](docs/final-capture-v1.14.md)。
 
-如需手动模式，可在单一显式插件注册中传入 `autoCapture: false`；不要同时保留同一插件的自动发现副本。v2 继续手动发布。自动模式日志为 `final_capture`，应核对 stored/replay/skipped/unconfirmed 及 reason，而不是把插件已加载当成功。安装与 prompt 调整后均须重启 OpenCode。
+如需手动模式，可在单一显式插件注册中传入 `autoCapture: false`；不要同时保留同一插件的自动发现副本。v2 与 v1 同口径：默认 auto，`autoCapture: false` 回退手动契约。自动模式日志为 `final_capture`，应核对 stored/replay/skipped/unconfirmed 及 reason，而不是把插件已加载当成功。安装与 prompt 调整后均须重启 OpenCode。
 
 ## v1.11.0 本地工件与交付观测（手动模式）
 
-安装方式不变。v1 宿主可在 `source_refs` 提交获准发布的本地绝对路径，BCP 通过调用者文件权限保留快照并计算 SHA-256。接收方检查 `board_get.artifact_check`，其中 `verified_bytes_only` 仅证明文件字节。每次最多 8 个文件、每文件 4 MiB，快照计入 scope 配额；当前 v2 没有文件授权接口，此类请求会明确拒绝。
+安装方式不变。v1 宿主可在 `source_refs` 提交获准发布的本地绝对路径，BCP 通过调用者文件权限保留快照并计算 SHA-256。接收方检查 `board_get.artifact_check`，其中 `verified_bytes_only` 仅证明文件字节。每次最多 8 个文件、每文件 4 MiB，快照计入 scope 配额；v2 经共享核同口径处理此类请求：仅当权限规则明确 allow 时保留快照，否则明确拒绝。
 
 v1 的 `delivery_observation` 日志关联本进程已准入输入，按编辑路径和发布修订区分已观察快照、普通发布与未确认状态；其中 `missing_handoff` / `manual_version_check` 另记 `delivery_gap` 并在可用时通知。无关路径或幂等重放不能提供新版本证明，所有状态都不是语义验收。只读复用、身份未关联、未知写入、重启前历史等仍需接收者核验；不补写作者记录、不自动续聊、不阻断最终回答。新版实验见 [harness/acceptance/v1.11.0.md](harness/acceptance/v1.11.0.md)。重新启动 OpenCode 后生效。
 
@@ -142,7 +136,7 @@ v1.9.1 撤回 v1.9.0 候选的查询豁免，仅保留有条件的同版本来�
 
 ### 承诺边界
 
-- **独立插件承诺**（接口与接线）：插件提供四工具 `board_put` / `board_get` / `board_index` / `board_aggregate` 及其决策规则描述，并附带安装接线检查（`decision` 日志事件 + 会话内四工具可见）。**接线检查 ≠ 描述分发或行为验证**（DESIGN.md §11.8 覆盖合同：不能以「插件注册过工具」代替实际分发证明）；实际描述分发须另以加载 / 请求证据验证（H_loaded 类方法，见「可复现步骤」）。v2 为**实验性质**——适配层已实现，但真实 v2 宿主加载与行为验收尚未执行（与上方安装注记及 README 状态表一致），不承诺任意宿主行为实效。
+- **独立插件承诺**（接口与接线）：插件提供四工具 `board_put` / `board_get` / `board_index` / `board_aggregate` 及其决策规则描述，并附带安装接线检查（`decision` 日志事件 + 会话内四工具可见）。**接线检查 ≠ 描述分发或行为验证**（DESIGN.md §11.8 覆盖合同：不能以「插件注册过工具」代替实际分发证明）；实际描述分发须另以加载 / 请求证据验证（H_loaded 类方法，见「可复现步骤」）。v2 在本 2026-09-26 快照时点为**实验性质**（真实 v2 宿主加载与行为验收当时尚未执行）；该状态已变化——当前 2.0.0 限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。本快照不替代当前工具接口，也不承诺任意宿主行为实效。
 - **已验证集成承诺**（仅限本快照配置）：omo-slim + fixer_append 桥接下，fixer 角色的终结交付（T）行为全绿——v3 电池 5/5：交付 + 末行完整 `bb://` ID + blocked / no-change 显式交付。**不保证**：版本锚定维度（v3 电池 M1 未申报版本渠道缺口，results.md:501——补齐电池为 F1 版本夹具电池，DESIGN.md §14.4 待执行验收）；其他宿主 / 模型 / 角色配置下的同等行为。
 
 ### 可复现步骤
@@ -183,22 +177,21 @@ EOF
 
 ## 卸载
 
-删除对应插件文件后重启 opencode：
+使用所有权校验式卸载脚本，不要手工删除后置之不理：
 
 ```bash
-rm ~/.config/opencode/plugin/blackboard.ts       # v1 全局
-# 或
-rm ~/.config/opencode/plugins/blackboard-v2.ts   # v2 全局
-# 或
-rm <project>/.opencode/plugin/blackboard.ts      # 项目级（v2 同理，plugins/ 目录）
+bash scripts/uninstall.sh                          # 全局
+bash scripts/uninstall.sh --project /path/to/project
 ```
+
+脚本按安装清单核对 SHA-256 后删除 canonical 文件与清单本身；无清单时按已知历史发布摘要清理旧版入口（`plugin/blackboard.ts`、`plugin/blackboard.js`、`plugins/blackboard-v2.ts`）；无法证明所有权的文件一律拒绝（exit 2），核实归属后可用 `--adopt <file>=<sha256>` 显式授权删除。安装根之外的 BCP 文件只报告不删除；`~/.cache/opencode/blackboard` 数据永不删除。卸载后重启 opencode 生效。
 
 ## 故障排查
 
 当前自动模式按 [v1.14 契约](docs/final-capture-v1.14.md)接受顶层独占行授权标记，并绑定本轮已观察的原生编辑。验证可独立启动新的 `opencode serve` 进程并检查驻留配置，无需依赖现有 UI 会话重启；旧进程不会因此热加载新代码。主角色 Task 权限中的 `councillor*` 拒绝规则只用于主角色，不能应用为 Council 的全局权限。原生续接须同时安装当前 OMO 补丁；其修复和最终运行指纹见 [v1.14 验收](harness/acceptance/v1.14.0.md)。
 
-- **宿主不加载插件**：安装后必须重启 opencode；确认文件位于上表路径。
-- **行为异常、疑似两个版本同时在跑**：跨配置根混装所致。保留一个 major，重装：先删除所有 `blackboard*.ts` 插件文件，再用单一模式重装一次。
-- **安装脚本拒绝（exit 2）**：按输出列出的路径清理另一 major，或确认后 `--force`。
+- **宿主不加载插件**：安装后必须重启 opencode；确认文件位于安装节所列路径。
+- **行为异常、疑似两个版本同时在跑**：跨配置根混装或旧入口残留所致。用 `scripts/uninstall.sh`（必要时加 `--adopt`）清理旧文件后重新安装一次；同一配置栈只能有一个 BCP 入口。
+- **安装脚本拒绝（exit 2）**：按输出列出的路径清理或恢复对应文件（旧版入口核实摘要后可用 `--adopt`）；安装根之外的冲突需先在相应配置根卸载。当前安装器没有 `--force`。
 - **怀疑数据问题**：运行 `bun test` 与 `bun run typecheck` 核对当前源码；具体通过数和真实宿主覆盖以对应版本的验收记录为准。
 - **Council 返回缺 `<council_host_sources>` 或席位被排除**：确认 local-plugins 已按 v1.20 流程重建并重启宿主；确认被引用任务已完成且其 agent 配置为 `councillor-*` 席位。无法核验的显式 `ses_*` / `cou-N` 引用会以带 reason 的排除条目出现（见 [编排契约](docs/orchestration-v1.20.md)），这是设计行为而非静默失败。

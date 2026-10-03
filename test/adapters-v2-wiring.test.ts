@@ -6,6 +6,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync }
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { BlackboardV2Plugin } from "../src/adapters/v2/index"
+import { DELIVERY_BRIDGE } from "../src/delivery"
+import { COUNCIL_BRIDGE } from "../src/council"
 import { openScopeById } from "../src/storage"
 import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND } from "../src/constants"
 
@@ -18,8 +20,9 @@ const u = (id: string, text = "input"): Msg => ({ id, role: "user", content: [{ 
 const a = (id: string): Msg => ({ id, role: "assistant", content: [{ type: "text", text: "working" }, { type: "tool-call", id: `call-${id}`, name: "tool", input: {} }] })
 const t = (anchor = "a1"): Msg => ({ role: "tool", content: [{ type: "tool-result", id: `call-${anchor}`, name: "tool", result: { type: "text", value: "ok" } }] })
 
-async function makeHost(sessions: Record<string, { id: string; parentID?: string | null; agent?: string }>) {
-  const dataDir = mkdtempSync(join(tmpdir(), "bb-v2-wiring-"))
+async function makeHost(sessions: Record<string, { id: string; parentID?: string | null; agent?: string }>, dirOverride?: string) {
+  // dirOverride：同项目目录多次 setup（reload/替换语义测试用）；此时 close 不删目录。
+  const dataDir = dirOverride ?? mkdtempSync(join(tmpdir(), "bb-v2-wiring-"))
   const hostEvents: Array<{ type: string; data?: unknown }> = []
   const eventWaiters: Array<(r: { value: unknown; done: boolean }) => void> = []
   const emit = (type: string, data?: unknown): void => {
@@ -36,7 +39,7 @@ async function makeHost(sessions: Record<string, { id: string; parentID?: string
   const hooks: Record<string, (input: never) => Promise<void> | void> = {}
   let transformCb: ((editor: never) => Promise<void> | void) | null = null
   const ctx = {
-    options: { dataDir },
+    options: { dataDir, autoCapture: false }, // 身份/注入事务契约按手动模式固定（auto 见 test/v2-*.test.ts）
     tool: {
       transform: async (cb: (editor: never) => Promise<void> | void) => {
         transformCb = cb
@@ -52,14 +55,23 @@ async function makeHost(sessions: Record<string, { id: string; parentID?: string
         }
         await cb(editor as never)
       },
+      // 2.0.20 ctx 面：工具拦截域（本文件的手动模式用例不触发，仅注册）。
+      hook: async (name: string, cb: (input: never) => Promise<void> | void) => {
+        hooks[`tool:${name}`] = cb
+        return { dispose: async () => {} }
+      },
     },
     session: {
       get: async (input: { sessionID: string }) => sessions[input.sessionID] ?? null,
+      // 2.0.20 ctx 面补充：context 装配视图（wire 消息原文兜底）。
+      context: async () => [],
       hook: async (name: string, cb: (input: never) => Promise<void> | void) => {
         hooks[name] = cb
         return { dispose: async () => {} }
       },
     },
+    agent: { list: () => [] },
+    location: { directory: dataDir },
     event: {
       // 可控事件泵：测试用 emit() 投递 created/forked，settle() 等后台消费循环排空。
       subscribe: (_opts?: unknown) => {
@@ -109,10 +121,10 @@ async function makeHost(sessions: Record<string, { id: string; parentID?: string
     try {
       cleanup?.()
     } finally {
-      rmSync(dataDir, { recursive: true, force: true })
+      if (!dirOverride) rmSync(dataDir, { recursive: true, force: true })
     }
   }
-  return { dataDir, added, subagent, transformCb, emit, settle, prompt, context, tool, meta, sessionIndex, scopeOf, close }
+  return { dataDir, cleanup, added, subagent, transformCb, emit, settle, prompt, context, tool, meta, sessionIndex, scopeOf, close }
 }
 
 const hosts: Array<{ close: () => void }> = []
@@ -455,5 +467,115 @@ describe("v2 adapter 接线（subagent 幂等标记，回归不改动）", () =>
     await (h.transformCb as unknown as (e: unknown) => Promise<void> | void)(editor)
     await (h.transformCb as unknown as (e: unknown) => Promise<void> | void)(editor)
     expect(h.subagent.description.split(TASK_DESC_APPEND).length - 1).toBe(1)
+  })
+})
+
+// ---- 共享桥契约（回归修复：v2 曾以 get-only 单目录对象整体覆盖 globalThis[Bridge]，
+// 导致 v1 生产方 bridges.set 抛 TypeError——owner 冻结证据 31 例失败根因）----
+const globals = globalThis as Record<PropertyKey, unknown>
+const bridgeMap = (symbol: PropertyKey): Map<string, (request: never) => Promise<unknown>> => globals[symbol] as Map<string, (request: never) => Promise<unknown>>
+// 桥注册表是进程级共享态：备份/恢复包裹，测试彼此隔离也不污染其他文件。
+async function withBridgeGlobals(seed: { delivery?: unknown; council?: unknown }, run: () => Promise<void>): Promise<void> {
+  const saved = { delivery: globals[DELIVERY_BRIDGE], council: globals[COUNCIL_BRIDGE] }
+  globals[DELIVERY_BRIDGE] = seed.delivery
+  globals[COUNCIL_BRIDGE] = seed.council
+  try {
+    await run()
+  } finally {
+    globals[DELIVERY_BRIDGE] = saved.delivery
+    globals[COUNCIL_BRIDGE] = saved.council
+  }
+}
+
+describe("v2 adapter 接线（共享桥 Map 契约）", () => {
+  test("多项目：两实例注册同一共享 Map、键互不覆盖；各目录 handler 按 v1 schema 应答", async () => {
+    await withBridgeGlobals({ delivery: undefined, council: undefined }, async () => {
+      const h1 = track(await makeHost({ ses_mp1: { id: "ses_mp1", parentID: null } }))
+      const h2 = track(await makeHost({ ses_mp2: { id: "ses_mp2", parentID: null } }))
+      const delivery = bridgeMap(DELIVERY_BRIDGE)
+      expect(delivery).toBeInstanceOf(Map)
+      expect(delivery.size).toBe(2)
+      expect(delivery.has(h1.dataDir)).toBe(true)
+      expect(delivery.has(h2.dataDir)).toBe(true)
+      // 交付 handler：未知会话 → 与 v1 inspectDelivery 同形的 unconfirmed 信封。
+      const r1 = (await delivery.get(h1.dataDir)!({ callerSessionID: "nope", taskID: "t1", state: "completed" } as never)) as Record<string, unknown>
+      expect(r1.schema_version).toBe(1)
+      expect(r1.association).toBe("unconfirmed")
+      expect(r1.reason).toBe("caller_unavailable")
+      expect(r1.candidates).toEqual([])
+      // h2 注册后 h1 的注册仍在（多项目共存，不被单目录对象覆盖）。
+      expect(delivery.has(h1.dataDir)).toBe(true)
+      // Council handler：同 Map 契约、同项目键数；非法请求 → unavailable。
+      const council = bridgeMap(COUNCIL_BRIDGE)
+      expect(council).toBeInstanceOf(Map)
+      expect(council.size).toBe(2)
+      const cr = (await council.get(h2.dataDir)!({ callerSessionID: "x", taskID: "" } as never)) as Record<string, unknown>
+      expect(cr.status).toBe("unavailable")
+      expect(cr.reason).toBe("invalid_request")
+    })
+  })
+
+  test("混部 v1/v2：v1 已建 Map 原地复用（同实例），v1 注册保留，v1 生产方 set 路径不再 TypeError", async () => {
+    await withBridgeGlobals({ delivery: undefined, council: new Map() }, async () => {
+      // v1 生产方契约（src/adapters/v1/index.ts:279-280,348）：共享 Symbol 上的 Map.set(directory, handler)。
+      const v1Map = new Map<string, (request: unknown) => Promise<unknown>>()
+      const v1Handler = async () => ({ from: "v1" })
+      v1Map.set("/proj/v1", v1Handler)
+      globals[DELIVERY_BRIDGE] = v1Map
+      const h = track(await makeHost({ ses_mx: { id: "ses_mx", parentID: null } }))
+      expect(globals[DELIVERY_BRIDGE]).toBe(v1Map) // 复用实例，不覆盖
+      expect(v1Map.get("/proj/v1")).toBe(v1Handler) // 其他项目注册保留
+      // v1 生产方 bridges.set 路径照常（31×TypeError 的直接回归断言）。
+      const v1b = async () => ({ from: "v1b" })
+      expect(() => v1Map.set("/proj/v1b", v1b)).not.toThrow()
+      expect(v1Map.get("/proj/v1b")).toBe(v1b)
+      expect(v1Map.size).toBe(3) // v1 两项 + v2 一项
+      expect(typeof v1Map.get(h.dataDir)).toBe("function") // v2 注册在自身项目键
+    })
+  })
+
+  test("reload 替换清理：旧实例清理不移除新实例的同键注册；新实例清理才移除", async () => {
+    await withBridgeGlobals({ delivery: undefined, council: undefined }, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "bb-v2-wiring-"))
+      try {
+        const h1 = await makeHost({ ses_rc: { id: "ses_rc", parentID: null } }, dir)
+        const delivery = bridgeMap(DELIVERY_BRIDGE)
+        const council = bridgeMap(COUNCIL_BRIDGE)
+        const handler1 = delivery.get(dir)
+        const seat1 = council.get(dir)
+        expect(handler1).toBeInstanceOf(Function)
+        expect(seat1).toBeInstanceOf(Function)
+        const h2 = await makeHost({ ses_rc: { id: "ses_rc", parentID: null } }, dir) // 同项目重载
+        const handler2 = delivery.get(dir)
+        expect(handler2).toBeInstanceOf(Function)
+        expect(handler2).not.toBe(handler1) // 新实例已替换该键
+        await h1.cleanup?.() // 迟到的旧实例清理
+        expect(delivery.get(dir)).toBe(handler2) // 新注册保留（不得被旧实例拔除）
+        expect(council.get(dir)).not.toBe(seat1) // council 同键亦为新实例注册
+        await h2.cleanup?.()
+        expect(delivery.has(dir)).toBe(false) // 所属实例清理才移除
+        expect(council.has(dir)).toBe(false)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  })
+
+  test("非 Map 外来注册表：不覆盖、不注册（fail closed），冲突留痕于结构化日志；缺失侧正常新建", async () => {
+    await withBridgeGlobals({ delivery: { get: (directory: string) => (directory === "/foreign" ? async () => ({}) : undefined) }, council: undefined }, async () => {
+      const foreign = globals[DELIVERY_BRIDGE]
+      const h = track(await makeHost({ ses_fc: { id: "ses_fc", parentID: null } }))
+      expect(globals[DELIVERY_BRIDGE]).toBe(foreign) // 外来值未被覆盖
+      expect(foreign).not.toBeInstanceOf(Map) // 前提：注册表确实是非 Map 外来形状
+      const lines = existsSync(join(h.dataDir, "log/blackboard.log"))
+        ? (readFileSync(join(h.dataDir, "log/blackboard.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>))
+        : []
+      expect(lines.some((l) => l.ev === "bridge_registry_conflict" && l.reason === "non_map_registry" && l.bridge === "Symbol(opencode.bcp.delivery.v1)")).toBe(true)
+      // council 侧缺失 → 新建 Map 并正常注册；cleanup 幂等不抛。
+      expect(bridgeMap(COUNCIL_BRIDGE)).toBeInstanceOf(Map)
+      expect(bridgeMap(COUNCIL_BRIDGE).has(h.dataDir)).toBe(true)
+      await h.cleanup?.()
+      expect(bridgeMap(COUNCIL_BRIDGE).has(h.dataDir)).toBe(false)
+    })
   })
 })

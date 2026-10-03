@@ -1,3 +1,7 @@
-// v1 shim：实现已迁至 src/adapters/v1/index.ts（DESIGN §16.2 双 adapter 布局）。
-// 保留原模块路径，既有测试与 dist 构建入口零改动。
-export { BlackboardPlugin, default } from "./adapters/v1"
+// BCP 2.0.0 façade: default is the official same-package dual entry
+// (server=v1, setup=v2). Named exports keep the historical per-major module
+// paths importable for direct consumers and tests.
+export { BlackboardPlugin, default as BlackboardV1Default } from "./adapters/v1"
+export { BlackboardV2Plugin, default as BlackboardV2Default } from "./adapters/v2"
+export { PLUGIN_ID } from "./dual"
+export { default } from "./dual"

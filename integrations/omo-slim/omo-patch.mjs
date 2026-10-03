@@ -1,9 +1,61 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 
-// Narrow changes to pinned OMO 2.2.25. Preserve leases, lifecycle, raw author text and gate decisions.
-export function patchOmo(original) {
-  assert.equal(createHash('sha256').update(original).digest('hex'), '1a8a7a69db029f1c0fea19c4c8ded674281a8e674bedf72b4c8380e0b6de6e1f');
+// Version-bounded OMO adapters. Every supported upstream version/entry is pinned by
+// its exact SHA-256; unknown content fails the build instead of patching fuzzily.
+export const OMO_TARGETS = {
+  '2.2.25': {
+    entries: {
+      index: '1a8a7a69db029f1c0fea19c4c8ded674281a8e674bedf72b4c8380e0b6de6e1f',
+    },
+  },
+  '3.0.1': {
+    entries: {
+      // v1 plugin entry (externals: @opencode-ai/*, zod).
+      index: '442740caaf18e89deb327ea7313d27462cc313e47f1a7e86aa73d32f4c9a80b1',
+      // v2 entry (self-contained bun bundle; zod and the plugin SDK bundled inside).
+      server: 'd0db4526a00e257dd5bbf7924a465cc095eec3fa39d5fca85ec8db9e973a989f',
+    },
+  },
+};
+
+export function omoTargetFor(digest) {
+  for (const [version, target] of Object.entries(OMO_TARGETS)) {
+    for (const [entry, expected] of Object.entries(target.entries)) {
+      if (digest === expected) return {version, entry};
+    }
+  }
+  return undefined;
+}
+
+// Helper-module specifiers prepended by each patch flavor. The builder rewrites
+// these to the real relative location of the built output. 3.0.1 follows upstream
+// Council (2026-10-01 scope reduction): it prepends only the generic delivery
+// helper; the council helper is prepended on the 2.2.25 rollback path only.
+export const helperImportsFor = version =>
+  version === '2.2.25' ? ['../omo-delivery.mjs', '../omo-council.mjs'] : ['../omo-delivery.mjs'];
+
+const DELIVERY_IMPORT =
+  'import { deliveryMetadata, deliverySuffix, annotateDeliveryPart, presentDelivery } from "../omo-delivery.mjs";\n';
+const COUNCIL_IMPORT = 'import { prepareCouncilPrompt } from "../omo-council.mjs";\n';
+
+// 2.2.25 rollback path only: replaces the upstream council agenda to reproduce the
+// deployed legacy integration byte-for-byte. 3.0.1 never uses this (upstream Council).
+const COUNCIL_PROCEDURE = `1. Resolve required external material into authorized readable source artifacts first, using the appropriate specialist. Give seats exact source locations and necessary original excerpts, not a rewritten conclusion. Mark unavailable material explicitly.
+2. Dispatch the same question and evidence boundary independently to each configured seat in PARALLEL via \${vocab.tool}():
+\${dispatchList}
+3. Collect the actual ses_* task IDs or standard cou-N aliases and completion states. Respect the task budget; report failed, empty or unfinished seats explicitly. Do not replace a missing opinion or retry just to manufacture agreement.
+4. Call \${vocab.tool}(\${vocab.agentParam}='council', description='Synthesize council report') with the original question and the explicit seat task IDs or aliases. Do not copy or paraphrase their responses and do not claim their model identities yourself. The host will attach bounded, verified original replies and actual provenance; unavailable or oversized evidence remains a visible gap.
+`;
+
+// ---------------------------------------------------------------------------
+// OMO 2.2.25 (legacy deployment; kept reproducible for rollback).
+// This path also carries the private Council procedure splice and the
+// finalizeCouncil wiring — required to reproduce the deployed dist/omo.js
+// byte-for-byte. New 3.0.1 builds deliberately omit both (upstream Council).
+// ---------------------------------------------------------------------------
+function patchOmo2_2_25(original) {
+  assert.equal(createHash('sha256').update(original).digest('hex'), OMO_TARGETS['2.2.25'].entries.index);
   let source = original;
   function once(before, after) {
     assert.equal(source.split(before).length, 2, 'OMO patch anchor is not unique: ' + before.slice(0, 90));
@@ -12,12 +64,7 @@ export function patchOmo(original) {
   const councilStart = source.indexOf('1. If the question references an external resource (PR, URL, issue, doc)');
   const councilEnd = source.indexOf('5. Present the council\'s synthesized report.', councilStart);
   assert(councilStart >= 0 && councilEnd > councilStart, 'Council procedure anchors missing');
-  source = source.slice(0, councilStart) + `1. Resolve required external material into authorized readable source artifacts first, using the appropriate specialist. Give seats exact source locations and necessary original excerpts, not a rewritten conclusion. Mark unavailable material explicitly.
-2. Dispatch the same question and evidence boundary independently to each configured seat in PARALLEL via \${vocab.tool}():
-\${dispatchList}
-3. Collect the actual ses_* task IDs or standard cou-N aliases and completion states. Respect the task budget; report failed, empty or unfinished seats explicitly. Do not replace a missing opinion or retry just to manufacture agreement.
-4. Call \${vocab.tool}(\${vocab.agentParam}='council', description='Synthesize council report') with the original question and the explicit seat task IDs or aliases. Do not copy or paraphrase their responses and do not claim their model identities yourself. The host will attach bounded, verified original replies and actual provenance; unavailable or oversized evidence remains a visible gap.
-` + source.slice(councilEnd);
+  source = source.slice(0, councilStart) + COUNCIL_PROCEDURE + source.slice(councilEnd);
   once('  const agentType = args.subagent_type.trim();\n  let background = args.background === true;',
     `  const agentType = args.subagent_type.trim();
    const finalizeCouncil = agentType === "council" && typeof args.prompt === "string"
@@ -168,5 +215,441 @@ function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {
    return presentDelivery(lines.join("\\n"), metadata) + deliverySuffix(metadata);
 }
 function getCurrentReviveJob`);
-  return 'import { deliveryMetadata, deliverySuffix, annotateDeliveryPart, presentDelivery } from "../omo-delivery.mjs";\nimport { prepareCouncilPrompt } from "../omo-council.mjs";\n' + source;
+  return DELIVERY_IMPORT + COUNCIL_IMPORT + source;
+}
+
+// ---------------------------------------------------------------------------
+// OMO 3.0.1 (dual entry: `index` for v1 hosts, `server` for v2 hosts).
+// The v2 bundle renames shadowed locals (input→input2, record→record2/record3,
+// output→output2); anchors and replacements are variant-aware where needed.
+// Patch semantics are identical to the 2.2.25 set except where noted.
+// Council stays upstream byte-identical on 3.0.1: no COUNCIL_PROCEDURE swap and
+// no finalizeCouncil/prepareCouncilPrompt wiring (2026-10-01 scope reduction).
+// ---------------------------------------------------------------------------
+const V = (index, server) => (server === undefined ? index : {index, server});
+const pick = (value, entry) => (typeof value === 'string' ? value : value[entry]);
+
+export const PATCHES_3_0_1 = [
+  {
+    id: 'ack-injected-resume-def',
+    purpose: 'A native resume consumes the previously injected terminal result; acknowledge exactly that owned execution (taskID+generation+terminalRevision) via the existing reconciliation path.',
+    anchor: 'function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {',
+    replacement: `function acknowledgeInjectedNativeResume(state, parentSessionID, requested, agent) {
+  const job = state.backgroundJobBoard.resolve(parentSessionID, requested);
+  if (!job || job.parentSessionID !== parentSessionID || job.agent !== agent || !job.terminalUnreconciled || job.state === "running") return;
+  const entry = state.terminalJobsInjectedByParent.get(parentSessionID);
+  for (const [key, execution] of entry?.executions ?? []) {
+    if (execution.taskID !== job.taskID || execution.generation !== job.generation || execution.terminalRevision !== job.terminalRevision) continue;
+    reconcileExecutionBatch(state, parentSessionID, [execution]);
+    const after = state.backgroundJobBoard.get(job.taskID);
+    if (after?.state === "reconciled" && after.generation === execution.generation && after.terminalRevision === execution.terminalRevision) {
+      entry.executions.delete(key);
+      if (!entry.executions.size) state.terminalJobsInjectedByParent.delete(parentSessionID);
+    }
+    return;
+  }
+}
+function reconcileConsumedTerminalJobs(state, parentSessionID, promptShapeKey) {`,
+  },
+  {
+    id: 'ack-injected-resume-call',
+    purpose: 'Run the injected-resume acknowledgment before reusable lookup on every explicit task(task_id=…) call.',
+    anchor: V(
+      'const remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??',
+      'const remembered = deps.backgroundJobBoard.resolveReusable(input2.sessionID, requested, agentType) ??'),
+    replacement: V(
+      'if (input.callID) deps.acknowledgeInjectedResume?.(input.sessionID, requested, agentType);\n    const remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??',
+      'if (input2.callID) deps.acknowledgeInjectedResume?.(input2.sessionID, requested, agentType);\n    const remembered = deps.backgroundJobBoard.resolveReusable(input2.sessionID, requested, agentType) ??'),
+  },
+  {
+    id: 'hook-deps-wiring',
+    purpose: 'Pass the plugin directory and the injected-resume acknowledgment into the task-session-manager hook.',
+    anchor: V(
+      '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      shouldManageSession:',
+      '"tool.execute.before": (input2, output2) => handleToolExecuteBefore(input2, output2, {\n      shouldManageSession:'),
+    replacement: V(
+      '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      directory: _ctx.directory,\n      acknowledgeInjectedResume: (parent, requested, agent) => acknowledgeInjectedNativeResume(injectionState, parent, requested, agent),\n      shouldManageSession:',
+      '"tool.execute.before": (input2, output2) => handleToolExecuteBefore(input2, output2, {\n      directory: _ctx.directory,\n      acknowledgeInjectedResume: (parent, requested, agent) => acknowledgeInjectedNativeResume(injectionState, parent, requested, agent),\n      shouldManageSession:'),
+  },
+  {
+    id: 'native-dispatch-now',
+    purpose: 'Record the dispatch time of a native foreground task call; its terminal observation window must start at dispatch, not after the already-completed assistant.',
+    anchor: 'lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,\n    releaseLease:',
+    replacement: 'lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,\n    nativeCallStartedAt: Date.now(),\n    releaseLease:',
+  },
+  {
+    id: 'register-launch-now',
+    purpose: 'Register the native launch with the dispatch-time clock so the terminal classifier attributes the new result to this run.',
+    anchor: 'return deps.backgroundJobBoard.registerLaunch({\n      taskID,\n      parentSessionID: pending.parentSessionId,',
+    replacement: 'return deps.backgroundJobBoard.registerLaunch({\n      taskID,\n      now: pending.nativeCallStartedAt,\n      parentSessionID: pending.parentSessionId,',
+  },
+  {
+    id: 'native-terminal-reconcile',
+    purpose: 'Re-observe a superseded activity token through the SAME terminal gate with bounded retries (≤2); changed generation, cancellation or an unresolved signal stays fenced.',
+    anchor: V(
+      'await deps.terminalGate.reconcile(record, {\n        kind: "output",',
+      'await deps.terminalGate.reconcile(record2, {\n        kind: "output",'),
+    replacement: V('const nativeSignal = {\n        kind: "output",', 'const nativeSignal = {\n        kind: "output",'),
+  },
+  {
+    id: 'native-terminal-reconcile-loop',
+    purpose: 'Run the bounded stale/deferred reconciliation loop against the native output signal, awaiting the exposed evidence-read settlement.',
+    anchor: 'callIDConfirmed: exactCallConfirmed\n        }\n      });\n      const current = deps.backgroundJobBoard.get(status.taskID);',
+    replacement: V(
+      `callIDConfirmed: exactCallConfirmed
+        }
+      };
+      let reconciliation = await deps.terminalGate.reconcile(record, nativeSignal);
+       for (let attempt = 0; ["stale", "deferred"].includes(reconciliation?.kind) && attempt < 2; attempt++) {
+         if (reconciliation.retryAfter) await raceEvidenceDeadline(reconciliation.retryAfter, 2000);
+         const observed = deps.backgroundJobBoard.get(record.taskID);
+        if (!exactCallConfirmed || observed?.generation !== record.generation || observed.state !== "running" || observed.cancellationRequested) break;
+        reconciliation = await deps.terminalGate.reconcile(observed, nativeSignal);
+      }
+       const current = deps.backgroundJobBoard.get(status.taskID);`,
+      `callIDConfirmed: exactCallConfirmed
+        }
+      };
+      let reconciliation = await deps.terminalGate.reconcile(record2, nativeSignal);
+       for (let attempt = 0; ["stale", "deferred"].includes(reconciliation?.kind) && attempt < 2; attempt++) {
+         if (reconciliation.retryAfter) await raceEvidenceDeadline(reconciliation.retryAfter, 2000);
+         const observed = deps.backgroundJobBoard.get(record2.taskID);
+        if (!exactCallConfirmed || observed?.generation !== record2.generation || observed.state !== "running" || observed.cancellationRequested) break;
+        reconciliation = await deps.terminalGate.reconcile(observed, nativeSignal);
+      }
+       const current = deps.backgroundJobBoard.get(status.taskID);`),
+  },
+  {
+    id: 'read-settlement-contrast',
+    purpose: 'Expose the existing single-flight evidence read settlement (readSettled) on the deferred contrast result so the native caller awaits the real dependency instead of polling.',
+    anchor: 'value.pendingRuntimeContrast.token = token;\n      return deferred(token, diagnostic2);',
+    replacement: 'value.pendingRuntimeContrast.token = token;\n      return { ...deferred(token, diagnostic2), retryAfter: readSettled };',
+  },
+  {
+    id: 'read-settlement-blocked',
+    purpose: 'Expose the single-flight read settlement on the deferred result returned after an open read, keyed by the same readSettled promise.',
+    anchor: 'return deferred(token, diagnostic2);\n  }\n  async function read(key, token, operation)',
+    replacement: 'return { ...deferred(token, diagnostic2), retryAfter: readSettled };\n  }\n  async function read(key, token, operation)',
+  },
+  {
+    id: 'verdict-origin',
+    purpose: 'Carry the terminal classifier’s input/terminal message identity (bcpOrigin) through the completed verdict.',
+    anchor: 'return { verdict: "completed", text: evidence.text };',
+    replacement: 'return { verdict: "completed", text: evidence.text, bcpOrigin: evidence.bcpOrigin };',
+  },
+  {
+    id: 'classifier-origin',
+    purpose: 'Record inputMessageID/terminalMessageID from the terminal assistant message so later receipts can be verified against host identity.',
+    anchor: 'return text.length > 0 ? { kind: "ready", text } : { kind: "textless" };',
+    replacement: 'return text.length > 0 ? { kind: "ready", text, bcpOrigin: { inputMessageID: last.info.parentID, terminalMessageID: last.info.id } } : { kind: "textless" };',
+  },
+  {
+    id: 'shim-user-text-and-parentid',
+    purpose: 'v2 host transcripts carry the run input as a flat text field on the user message and no parentID on assistant messages; map the user text into transcript parts and preserve a host-provided parentID. Without this, the terminal classifier binds bcpOrigin.inputMessageID=undefined and the delivery bridge refuses with no_terminal_identity (real dual-host evidence: ctx.session.context returns user {id,time,type,text}, assistant {content[],finish,time.completed}, synthetic {type:"idle"}).',
+    anchor: `function toV1Message(m) {
+  const role = m.role ?? m.type;
+  return {
+    info: {
+      id: m.id,
+      role: role === "idle" ? "system" : role,
+      ...isRecord3(m.time) ? { time: m.time } : {},
+      ...m.finish !== undefined ? { finish: m.finish } : {},
+      ...m.error !== undefined ? { error: m.error } : {}
+    },
+    parts: Array.isArray(m.content) ? m.content.map((p) => ({ ...p })) : []
+  };
+}`,
+    replacement: `function toV1Message(m) {
+  const role = m.role ?? m.type;
+  return {
+    info: {
+      id: m.id,
+      role: role === "idle" ? "system" : role,
+      ...typeof m.parentID === "string" && m.parentID ? { parentID: m.parentID } : {},
+      ...isRecord3(m.time) ? { time: m.time } : {},
+      ...m.finish !== undefined ? { finish: m.finish } : {},
+      ...m.error !== undefined ? { error: m.error } : {}
+    },
+    parts: Array.isArray(m.content) ? m.content.map((p) => ({ ...p })) : typeof m.text === "string" && m.text ? [{ type: "text", text: m.text }] : []
+  };
+}
+// v2 transcripts carry no parentID on assistant messages, so rebuild the input
+// link from the real ordered transcript: each assistant binds to the nearest
+// preceding REAL user message; synthetic lanes (idle→system) never become an
+// input identity; a host-provided parentID wins; with no real source the field
+// stays undefined and downstream attribution fails closed.
+function toV1Transcript(messages2) {
+  const mapped = [];
+  let inputID;
+  for (const entry of messages2) {
+    const message = toV1Message(entry);
+    if (message.info.role === "user")
+      inputID = message.info.id;
+    else if (message.info.role === "assistant" && message.info.parentID === undefined && typeof inputID === "string")
+      message.info.parentID = inputID;
+    mapped.push(message);
+  }
+  return mapped;
+}`,
+  },
+  {
+    id: 'shim-context-transcript-identity',
+    purpose: 'Bind each transcript message to its real run input through the ordered host context — the exact path fetchChildTranscript reads on real v2 hosts (client.session.messages is always shim-provided there, so a client.message.list fallback can never run).',
+    anchor: `          return {
+            data: (await s.context?.({ sessionID: sessionIDOf(args) }) ?? []).map(toV1Message)
+          };`,
+    replacement: `          return {
+            data: toV1Transcript((await s.context?.({ sessionID: sessionIDOf(args) })) ?? [])
+          };`,
+  },
+  {
+    id: 'shim-paged-transcript-identity',
+    purpose: 'Apply the same input binding to the paginated transcript path after the desc page is rebuilt ascending.',
+    anchor: `            return { data: items.slice().reverse().map(toV1Message) };`,
+    replacement: `            return { data: toV1Transcript(items.slice().reverse()) };`,
+  },
+  {
+    id: 'commit-signature',
+    purpose: 'Thread bcpOrigin through the terminal-gate commit.',
+    anchor: 'function commit(token, state, text, lease, attribution = "event") {',
+    replacement: 'function commit(token, state, text, lease, attribution = "event", bcpOrigin) {',
+  },
+  {
+    id: 'commit-store-origin',
+    purpose: 'Store bcpOrigin on the board record at commit time.',
+    anchor: 'resultSummary: text,\n      cancellationLease: lease,',
+    replacement: 'resultSummary: text,\n      bcpOrigin,\n      cancellationLease: lease,',
+  },
+  {
+    id: 'commit-transcript-origin',
+    purpose: 'Commit transcript-attributed evidence with its message identity.',
+    anchor: 'return commit(token, evidence.verdict, evidence.text, undefined, "transcript");',
+    replacement: 'return commit(token, evidence.verdict, evidence.text, undefined, "transcript", evidence.bcpOrigin);',
+  },
+  {
+    id: 'clear-origin-reconciled',
+    purpose: 'Drop stale bcpOrigin when a reconciled record is cleared.',
+    anchor: 'resultSummary: undefined,\n        lastStatusError: undefined,',
+    replacement: 'resultSummary: undefined,\n        bcpOrigin: undefined,\n        lastStatusError: undefined,',
+  },
+  {
+    id: 'clear-origin-failed',
+    purpose: 'Drop stale bcpOrigin when a failed record is cleared.',
+    anchor: 'resultSummary: undefined,\n      lastStatusError:',
+    replacement: 'resultSummary: undefined,\n      bcpOrigin: undefined,\n      lastStatusError:',
+  },
+  {
+    id: 'update-origin-merge',
+    purpose: 'Merge bcpOrigin on record updates so identity survives activity revisions.',
+    anchor: V(
+      'resultSummary: input.resultSummary ?? existing.resultSummary,\n      lastStatusError:',
+      'resultSummary: input2.resultSummary ?? existing.resultSummary,\n      lastStatusError:'),
+    replacement: V(
+      'resultSummary: input.resultSummary ?? existing.resultSummary,\n      bcpOrigin: input.bcpOrigin ?? existing.bcpOrigin,\n      lastStatusError:',
+      'resultSummary: input2.resultSummary ?? existing.resultSummary,\n      bcpOrigin: input2.bcpOrigin ?? existing.bcpOrigin,\n      lastStatusError:'),
+  },
+  {
+    id: 'foreground-delivery',
+    purpose: 'After OMO validates native call ownership and reconciles the terminal generation, attach verified delivery metadata and the reference receipt with a generation/terminal/activity CAS.',
+    anchor: V(
+      'const updated = current?.generation === record.generation ? current : undefined;\n      log("[task-session-manager] foreground task status registered",',
+      'const updated = current?.generation === record2.generation ? current : undefined;\n      log("[task-session-manager] foreground task status registered",'),
+    replacement: V(
+      `const updated = current?.generation === record.generation ? current : undefined;
+       log("[bcp-native-delivery] terminal observation", { taskID: record.taskID, generation: record.generation, verdict: reconciliation?.kind, diagnostic: updated?.lastStatusError });
+       if (updated) {
+        const metadata = await deliveryMetadata(deps.directory, updated);
+        const latest = deps.backgroundJobBoard.get(updated.taskID);
+        if (latest?.generation === updated.generation && latest.terminalRevision === updated.terminalRevision && latest.activityRevision === updated.activityRevision) {
+          output.metadata = { ...output.metadata, bcp_delivery: metadata };
+           output.output = presentDelivery(output.output, metadata) + deliverySuffix(metadata);
+        }
+      }
+      log("[task-session-manager] foreground task status registered",`,
+      `const updated = current?.generation === record2.generation ? current : undefined;
+       log("[bcp-native-delivery] terminal observation", { taskID: record2.taskID, generation: record2.generation, verdict: reconciliation?.kind, diagnostic: updated?.lastStatusError });
+       if (updated) {
+        const metadata = await deliveryMetadata(deps.directory, updated);
+        const latest = deps.backgroundJobBoard.get(updated.taskID);
+        if (latest?.generation === updated.generation && latest.terminalRevision === updated.terminalRevision && latest.activityRevision === updated.activityRevision) {
+          output2.metadata = { ...output2.metadata, bcp_delivery: metadata };
+           output2.output = presentDelivery(output2.output, metadata) + deliverySuffix(metadata);
+        }
+      }
+      log("[task-session-manager] foreground task status registered",`),
+  },
+  {
+    id: 'task-result-delivery',
+    purpose: 'Read-only result retrieval returns the verified receipt after existing ownership/terminal guards, with a fresh CAS after metadata inspection.',
+    anchor: 'return current.resultSummary;\n        }\n        snapshot = await getRuntimeSessionStatusSnapshot(options2.input);',
+    replacement: `const metadata = await deliveryMetadata(options2.input.directory, current);
+          const afterDelivery = board.get(taskID);
+          if (afterDelivery?.generation !== current.generation || afterDelivery.terminalRevision !== current.terminalRevision || afterDelivery.activityRevision !== current.activityRevision)
+            throw new Error("Task changed while delivery metadata was inspected; retrieve its current result.");
+           return presentDelivery(current.resultSummary, metadata) + deliverySuffix(metadata);
+        }
+        snapshot = await getRuntimeSessionStatusSnapshot(options2.input);`,
+  },
+  {
+    id: 'task-result-evidence-delivery',
+    purpose: 'Transcript-evidence fallback of task_result keeps the author text and appends the delivery metadata suffix.',
+    anchor: 'return evidence.text;\n      }\n    })\n  };\n}\n// src/tools/task-revive.ts',
+    replacement: `const metadata = await deliveryMetadata(options2.input.directory, { taskID, parentSessionID, state: "completed", bcpOrigin: evidence.bcpOrigin });
+         return evidence.text + deliverySuffix(metadata);
+      }
+    })
+  };
+}
+// src/tools/task-revive.ts`,
+  },
+  {
+    id: 'notify-delivery-metadata',
+    purpose: 'Background terminal notifications carry verified delivery metadata; the existing lease check still runs after this await.',
+    anchor: 'const notifyAgent = selection?.agent ?? "orchestrator";\n      const text = [',
+    replacement: V(
+      'const notifyAgent = selection?.agent ?? "orchestrator";\n      const bcpMetadata = await deliveryMetadata(options2.input.directory, record);\n      const text = [',
+      'const notifyAgent = selection?.agent ?? "orchestrator";\n      const bcpMetadata = await deliveryMetadata(options2.input.directory, record2);\n      const text = ['),
+  },
+  {
+    id: 'notify-delivery-body',
+    purpose: 'Present the receipt in place of the author body and append the metadata suffix outside the task_result wrapper.',
+    anchor: V(
+      'record.resultSummary ?? (state === "completed" ? "Completed." : "Failed."),\n        `</${tag}>`,\n        "</task>"',
+      'record2.resultSummary ?? (state === "completed" ? "Completed." : "Failed."),\n        `</${tag}>`,\n        "</task>"'),
+    replacement: V(
+      'presentDelivery(record.resultSummary ?? (state === "completed" ? "Completed." : "Failed."), bcpMetadata),\n        `</${tag}>`,\n        "</task>",\n        deliverySuffix(bcpMetadata)',
+      'presentDelivery(record2.resultSummary ?? (state === "completed" ? "Completed." : "Failed."), bcpMetadata),\n        `</${tag}>`,\n        "</task>",\n        deliverySuffix(bcpMetadata)'),
+  },
+  {
+    id: 'injection-state-directory',
+    purpose: 'Give the synthetic injection lane the plugin directory for delivery annotation.',
+    anchor: 'const injectionState = {\n    backgroundJobBoard,',
+    replacement: 'const injectionState = {\n    bcpDirectory: _ctx.directory,\n    backgroundJobBoard,',
+  },
+  {
+    id: 'synthetic-processed-annotate',
+    purpose: 'Annotate already-processed injected completions with delivery metadata behind the generation/observation-epoch/deletion fences.',
+    anchor: 'if (origin?.phase === "processed")\n    return;',
+    replacement: `if (origin?.phase === "processed") {
+    if (existing && origin.generationAtObservation === existing.generation && (deletionEpoch === undefined || origin.lifecycleEpochAtObservation >= deletionEpoch))
+      await annotateDeliveryPart(state.bcpDirectory, part, existing, message.info?.sessionID, () => {
+        const latest = state.backgroundJobBoard.get(existing.taskID);
+        return latest?.generation === existing.generation && latest.terminalRevision === existing.terminalRevision && latest.activityRevision === existing.activityRevision;
+      });
+    return;
+  }`,
+  },
+  {
+    id: 'synthetic-remembered-annotate',
+    purpose: 'Annotate remembered injected completions with delivery metadata behind the same fences.',
+    anchor: 'if (hasRememberedInjectedCompletion(state, status.taskID, occurrenceId, provenanceKind, existing?.generation)) {\n    return;\n  }',
+    replacement: `if (hasRememberedInjectedCompletion(state, status.taskID, occurrenceId, provenanceKind, existing?.generation)) {
+    const fence = state.injectedCompletionFences?.get(injectedCompletionKey(status.taskID, occurrenceId, provenanceKind));
+    if (existing && fence?.generation === existing.generation && (deletionEpoch === undefined || fence.lifecycleEpoch >= deletionEpoch))
+      await annotateDeliveryPart(state.bcpDirectory, part, existing, message.info?.sessionID, () => {
+        const latest = state.backgroundJobBoard.get(existing.taskID);
+        return latest?.generation === existing.generation && latest.terminalRevision === existing.terminalRevision && latest.activityRevision === existing.activityRevision;
+      });
+    return;
+  }`,
+  },
+  {
+    id: 'synthetic-updated-annotate',
+    purpose: 'Annotate freshly reconciled injected completions with delivery metadata and a current-record fence.',
+    anchor: 'const updated = result.kind === "stale" ? undefined : result.record;\n  if (!updated)\n    return;\n  if (updated.terminalUnreconciled',
+    replacement: `const updated = result.kind === "stale" ? undefined : result.record;
+  if (!updated)
+    return;
+  await annotateDeliveryPart(state.bcpDirectory, part, updated, message.info?.sessionID, () => {
+    const latest = state.backgroundJobBoard.get(updated.taskID);
+    return latest?.generation === updated.generation && latest.terminalRevision === updated.terminalRevision && latest.activityRevision === updated.activityRevision;
+  });
+  if (updated.terminalUnreconciled`,
+  },
+  {
+    id: 'revive-unknown-delivery',
+    purpose: 'Revive admission-unknown output is annotated with delivery metadata for inspection.',
+    anchor: 'return renderReviveOutput(idParam, current, true);',
+    replacement: 'return renderReviveOutput(idParam, current, true, options2.input.directory, options2.backgroundJobBoard);',
+  },
+  {
+    id: 'revive-latest-delivery',
+    purpose: 'Revive terminal output is annotated with delivery metadata for inspection.',
+    anchor: 'return renderReviveOutput(idParam, latest);',
+    replacement: 'return renderReviveOutput(idParam, latest, false, options2.input.directory, options2.backgroundJobBoard);',
+  },
+  {
+    id: 'revive-render-signature',
+    purpose: 'renderReviveOutput accepts the plugin directory and board for verified inspection.',
+    anchor: V(
+      'function renderReviveOutput(idParam, record, admissionUnknown = false) {',
+      'function renderReviveOutput(idParam, record3, admissionUnknown = false) {'),
+    replacement: V(
+      'async function renderReviveOutput(idParam, record, admissionUnknown = false, directory, board) {',
+      'async function renderReviveOutput(idParam, record3, admissionUnknown = false, directory, board) {'),
+  },
+  {
+    id: 'revive-render-delivery',
+    purpose: 'Revive output carries the verified receipt; a changed execution degrades to an explicit execution_changed suffix instead of stale text.',
+    anchor: 'return lines.join(`\n`);\n}\nfunction getCurrentReviveJob',
+    replacement: V(
+      `const metadata = await deliveryMetadata(directory, admissionUnknown ? { ...record, bcpOrigin: undefined } : record);
+  const latest = board?.get(record.taskID);
+  if (latest?.generation !== record.generation || latest.terminalRevision !== record.terminalRevision || latest.activityRevision !== record.activityRevision)
+    return lines.join("\\n") + deliverySuffix({ ...metadata, association: "unconfirmed", candidates: [], reason: "execution_changed" });
+   return presentDelivery(lines.join("\\n"), metadata) + deliverySuffix(metadata);
+}
+function getCurrentReviveJob`,
+      `const metadata = await deliveryMetadata(directory, admissionUnknown ? { ...record3, bcpOrigin: undefined } : record3);
+  const latest = board?.get(record3.taskID);
+  if (latest?.generation !== record3.generation || latest.terminalRevision !== record3.terminalRevision || latest.activityRevision !== record3.activityRevision)
+    return lines.join("\\n") + deliverySuffix({ ...metadata, association: "unconfirmed", candidates: [], reason: "execution_changed" });
+   return presentDelivery(lines.join("\\n"), metadata) + deliverySuffix(metadata);
+}
+function getCurrentReviveJob`),
+  },
+];
+
+export function describeOmoPatches(version) {
+  if (version === '3.0.1') return PATCHES_3_0_1.map(({id, purpose}) => ({id, purpose}));
+  if (version === '2.2.25') return [{id: 'legacy-2.2.25', purpose: 'Full 2.2.25 patch set (rollback-compatible legacy path).'}];
+  throw new Error('Unsupported OMO version: ' + version);
+}
+
+function patchOmo3_0_1(original, entry) {
+  const expected = OMO_TARGETS['3.0.1'].entries[entry];
+  assert.equal(createHash('sha256').update(original).digest('hex'), expected, 'OMO 3.0.1 ' + entry + ' upstream digest mismatch');
+  let source = original;
+  function once(before, after) {
+    assert.equal(source.split(before).length, 2, 'OMO patch anchor is not unique: ' + before.slice(0, 90));
+    source = source.replace(before, after);
+  }
+  // Upstream Council procedure text (steps 1–5) is intentionally left untouched:
+  // 3.0.1 keeps upstream Council byte-identical, no private agenda is spliced in.
+  for (const patch of PATCHES_3_0_1) {
+    once(pick(patch.anchor, entry), pick(patch.replacement, entry));
+  }
+  return DELIVERY_IMPORT + source;
+}
+
+/**
+ * Patch any supported OMO upstream source. Auto-detects version+entry from the
+ * exact SHA-256; pass {version, entry} to assert a specific target. Unknown
+ * content always throws — never patch fuzzily.
+ */
+export function patchOmo(original, options = {}) {
+  const digest = createHash('sha256').update(original).digest('hex');
+  const detected = omoTargetFor(digest);
+  if (!detected) {
+    throw new Error('Unsupported oh-my-opencode-slim source (sha256 ' + digest + '); supported: ' +
+      Object.entries(OMO_TARGETS).map(([v, t]) => v + '(' + Object.keys(t.entries).join('/') + ')').join(', '));
+  }
+  if (options.version && options.version !== detected.version) {
+    throw new Error('OMO source is ' + detected.version + ' but ' + options.version + ' was requested');
+  }
+  if (options.entry && options.entry !== detected.entry) {
+    throw new Error('OMO ' + detected.version + ' source is the ' + detected.entry + ' entry but ' + options.entry + ' was requested');
+  }
+  if (detected.version === '2.2.25') return patchOmo2_2_25(original);
+  return patchOmo3_0_1(original, detected.entry);
 }
