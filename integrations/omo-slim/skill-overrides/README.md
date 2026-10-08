@@ -36,7 +36,7 @@ stock. Deltas below deliberately avoid contradicting that embedded behavior.
   exposure described above.
 - `codemap`, `deepwork`, `oh-my-opencode-slim` — **patched copies** (stock
   bytes + the patch file beside this README with the same name).
-- every other skill in the pinned personal source — **copied verbatim**.
+- every other skill in the pinned personal source — **copied verbatim**, including reference files, nested scripts and each file's Unix permission bits. The build manifest records both content hashes and modes; the runtime stage/activation manifests preserve the generated modes.
 - `loop-engineering` (packaged by stock but not registered in-process) —
   excluded everywhere.
 
@@ -79,6 +79,24 @@ Intentionally **not** preserved: the "verified against plugin version 2.2.25"
 pins (facts re-verified against 3.0.1) and the stale "Installed skill prompt
 payload" skill-table row (stock's "shadows the bundled in-process skill"
 wording describes the verified v2 shadow mechanism, not v1 registration).
+
+## Personal skill migration
+
+The personal `executing-plans` and `writing-plans` trees travel through the
+same generator. Keep the entire directories: `executing-plans/scripts/`
+contains executable sibling-dependent helpers, and `references/` contains
+the review template. Installing only `SKILL.md` is incomplete.
+
+The committed `dotfiles/opencode/runtime/generated/skills/` tree is a
+self-contained installation input. It may also be used as `--personal-dir`
+when rebuilding on a new machine; use a **different** `--out-dir`, inspect
+the output, then update the profile pins. The generator replaces its output
+directory and must never be pointed at its own input. Existing inherited and
+patched names in the personal source remain excluded in favor of the pinned
+artifact and patch definitions.
+
+For the optional cross-repository consistency test, set
+`OPROFILE_RUNTIME_DIR` to the target `dotfiles/opencode/runtime` directory.
 
 ## Version bumps
 

@@ -5,14 +5,14 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import { buildSkills, applyPatches, BuildRefusal, STOCK_INHERITED_SKILLS, PATCHED_SKILLS, STOCK_UNREGISTERED_SKILLS, EXCLUDED_PERSONAL_SKILLS } from "../build-skills.mjs";
-import { STOCK_INHERITED_SKILLS as RUNTIME_STOCK_INHERITED_SKILLS } from "../../../.slim/deepwork/upstream-defaults-20261006/dotfiles/opencode/runtime/lib/stage.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // integrations/omo-slim/test
 const MODULE_DIR = dirname(HERE); // integrations/omo-slim
@@ -45,11 +45,17 @@ function fakePersonal(dir) {
   return dir;
 }
 
-test("canonical inheritance sets agree between generator and runtime stage guard", () => {
-  assert.deepEqual([...STOCK_INHERITED_SKILLS].sort(), [...RUNTIME_STOCK_INHERITED_SKILLS].sort());
+test("canonical inheritance sets cover exactly the excluded personal names", () => {
   assert.deepEqual(new Set([...STOCK_INHERITED_SKILLS, ...PATCHED_SKILLS, ...STOCK_UNREGISTERED_SKILLS]), new Set(EXCLUDED_PERSONAL_SKILLS));
   assert.equal(STOCK_INHERITED_SKILLS.length, 5);
   assert.equal(PATCHED_SKILLS.length, 3);
+});
+
+test("canonical inheritance sets agree with the companion runtime stage guard", {
+  skip: process.env.OPROFILE_RUNTIME_DIR ? false : "set OPROFILE_RUNTIME_DIR to the companion dotfiles opencode/runtime checkout",
+}, async () => {
+  const { STOCK_INHERITED_SKILLS: runtimeSkills } = await import(pathToFileURL(join(process.env.OPROFILE_RUNTIME_DIR, "lib/stage.mjs")).href);
+  assert.deepEqual([...STOCK_INHERITED_SKILLS].sort(), [...runtimeSkills].sort());
 });
 
 test("applyPatches: exactly-once anchors apply; zero and multiple matches refuse", () => {
@@ -64,6 +70,32 @@ test("applyPatches: exactly-once anchors apply; zero and multiple matches refuse
 if (!HAS_STOCK) {
   test("real stock package present for anchor regression coverage", { skip: "pinned stock 3.0.1 cache not available on this machine" }, () => {});
 } else {
+  test("build: companion scripts preserve executable and restricted modes across relocation and rebuild", () => {
+    const personal = fakePersonal(join(S, "personal-modes"));
+    const scripts = join(personal, "handoff", "scripts");
+    mkdirSync(scripts);
+    writeFileSync(join(scripts, "helper"), "#!/bin/sh\nprintf 'companion-ok\\n'\n");
+    chmodSync(join(scripts, "helper"), 0o755);
+    chmodSync(join(personal, "handoff", "notes.md"), 0o600);
+    const out = join(S, "out-modes");
+    const oldMask = process.umask(0o077);
+    let built;
+    try { built = buildSkills({ packageDir: STOCK_PKG, personalDir: personal, outDir: out }); }
+    finally { process.umask(oldMask); }
+    const moved = join(S, "relocated-modes");
+    cpSync(out, moved, { recursive: true });
+    const rebuilt = buildSkills({ packageDir: STOCK_PKG, personalDir: join(moved, "skills"), outDir: join(S, "rebuilt-modes") });
+    for (const root of [built.skillsDir, join(moved, "skills"), rebuilt.skillsDir]) {
+      const script = join(root, "handoff", "scripts", "helper");
+      assert.equal(statSync(script).mode & 0o777, 0o755);
+      assert.equal(statSync(join(root, "handoff", "notes.md")).mode & 0o777, 0o600);
+      assert.equal(execFileSync(script, [], { encoding: "utf8" }), "companion-ok\n");
+    }
+    assert.equal(built.manifest.personal.modes["handoff/scripts/helper"], "0755");
+    assert.equal(built.manifest.output.modes["skills/handoff/scripts/helper"], "0755");
+    assert.equal(built.manifest.output.modes["skills/handoff/notes.md"], "0600");
+  });
+
   test("build: inherited skills excluded, patched + personal present, required resources travel", () => {
     const personal = fakePersonal(join(S, "personal-a"));
     const { skillsDir, manifest } = buildSkills({ packageDir: STOCK_PKG, personalDir: personal, outDir: join(S, "out-a") });

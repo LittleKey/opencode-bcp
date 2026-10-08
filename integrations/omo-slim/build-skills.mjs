@@ -24,7 +24,7 @@
 // behavior (e.g. the deepwork hook's bundled activation prompt) stays stock.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -201,6 +201,7 @@ export function buildSkills(opts) {
 
   // personal source: every top-level skill kept verbatim, each with SKILL.md
   const personalFiles = {};
+  const personalModes = {};
   const personalSkills = [];
   const skippedPersonal = [];
   if (!existsSync(personalDir)) report.push(`personal skills dir missing: ${personalDir}`);
@@ -220,6 +221,7 @@ export function buildSkills(opts) {
       personalSkills.push(entry.name);
       for (const rel of rels) {
         personalFiles[`${entry.name}/${rel}`] = sha256Bytes(readFileSync(join(dirAbs, ...rel.split("/"))));
+        personalModes[`${entry.name}/${rel}`] = (statSync(join(dirAbs, ...rel.split("/"))).mode & 0o777).toString(8).padStart(4, "0");
       }
     }
   }
@@ -270,6 +272,7 @@ export function buildSkills(opts) {
   mkdirSync(skillsDir, { recursive: true });
 
   const generated = {};
+  const generatedModes = {};
   // Pass 2: write — full stock skill directories (companions travel: README,
   // codemap.md, scripts/) plus the pre-computed patched SKILL.md.
   for (const skill of PATCHED_SKILLS) {
@@ -288,6 +291,9 @@ export function buildSkills(opts) {
         writeFileSync(destAbs, bytes);
         generated[`skills/${skill}/${rel}`] = sha256Bytes(bytes);
       }
+      const mode = statSync(join(stockDir, ...rel.split("/"))).mode & 0o777;
+      chmodSync(destAbs, mode);
+      generatedModes[`skills/${skill}/${rel}`] = mode.toString(8).padStart(4, "0");
     }
   }
 
@@ -298,7 +304,11 @@ export function buildSkills(opts) {
       mkdirSync(dirname(destAbs), { recursive: true });
       const bytes = readFileSync(join(srcDir, ...rel.split("/")));
       writeFileSync(destAbs, bytes);
+      // writeFileSync's default mode would silently strip executable bits
+      // from script companions. Explicit chmod also defeats a restrictive umask.
+      chmodSync(destAbs, parseInt(personalModes[`${skill}/${rel}`], 8));
       generated[`skills/${skill}/${rel}`] = sha256Bytes(bytes);
+      generatedModes[`skills/${skill}/${rel}`] = personalModes[`${skill}/${rel}`];
     }
   }
 
@@ -323,8 +333,9 @@ export function buildSkills(opts) {
     inherited: [...STOCK_INHERITED_SKILLS].sort(),
     unregistered: [...STOCK_UNREGISTERED_SKILLS],
     patched: patches,
-    personal: { dir: personalDir, skills: personalSkills, skipped: skippedPersonal, files: personalFiles },
-    output: { skillsDir, files: Object.fromEntries(Object.entries(generated).sort(([a], [b]) => (a < b ? -1 : 1))) },
+    personal: { dir: personalDir, skills: personalSkills, skipped: skippedPersonal, files: personalFiles, modes: personalModes },
+    output: { skillsDir, files: Object.fromEntries(Object.entries(generated).sort(([a], [b]) => (a < b ? -1 : 1))),
+      modes: Object.fromEntries(Object.entries(generatedModes).sort(([a], [b]) => (a < b ? -1 : 1))) },
   };
   const manifestPath = join(outDir, "build-manifest.json");
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
