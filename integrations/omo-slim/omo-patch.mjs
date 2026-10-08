@@ -229,6 +229,13 @@ function getCurrentReviveJob`);
 const V = (index, server) => (server === undefined ? index : {index, server});
 const pick = (value, entry) => (typeof value === 'string' ? value : value[entry]);
 
+// Server-only patches need a defined anchor for BOTH entries (the frozen build
+// suite asserts uniqueness/substitution for every patch on every entry). The
+// alias guard anchors self-replace on the index entry: the v1 host applies user
+// config agents before plugin capture, so v1 keeps upstream alias behavior
+// byte-identical while the v2 capture-before-config snapshot stays guarded.
+const OMO_ALIAS_GUARD_INDEX_NOOP = 'var AGENT_ALIASES = {\n  explore: "explorer",\n  "frontend-ui-ux-engineer": "designer"\n};';
+
 export const PATCHES_3_0_1 = [
   {
     id: 'ack-injected-resume-def',
@@ -587,6 +594,118 @@ function toV1Transcript(messages2) {
     replacement: V(
       'async function renderReviveOutput(idParam, record, admissionUnknown = false, directory, board) {',
       'async function renderReviveOutput(idParam, record3, admissionUnknown = false, directory, board) {'),
+  },
+  {
+    // Phase1 defaults restoration, alias fallback correction (server/v2 entry
+    // only — the index entries below are intentional no-ops). The v2 adapter
+    // captures the host draft BEFORE user config agents exist, so the legacy
+    // AGENT_ALIASES reverse lookup in buildResolvedAgentRegistry always finds
+    // the builtin `explore` snapshot and pastes it over the OMO explorer
+    // regardless of any configuration — proven config-immune in
+    // compatibility-remediation/results/REPORT.md. Explicit user config keeps
+    // winning: canonical name and normalized displayName lookups are untouched,
+    // and the distinct alias-name user config path (overrideFor) is untouched.
+    // The v1 host applies user config agents before plugin capture, so its
+    // alias path can serve real user config — v1 keeps upstream behavior
+    // unchanged (self-anchoring no-op), verified by the v1 equality test.
+    // Upstream 3.0.2 dropped exactly these legacy-alias fallbacks; mirror it.
+    id: 'alias-host-entry-guard',
+    purpose: 'Registry stops pasting the builtin-snapshot host entry found via the legacy AGENT_ALIASES reverse lookup over OMO role defaults (prompt, model, variant, description); canonical and displayName user config still win. Server entry only; index keeps upstream behavior (no-op anchor).',
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP, `    const legacyAlias = Object.keys(AGENT_ALIASES).find((key) => AGENT_ALIASES[key] === name);\n    const hostEntry = hostEntries[name] ?? hostEntries[displayName] ?? (legacyAlias ? hostEntries[legacyAlias] : undefined);`),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP, `    const hostEntry = hostEntries[name] ?? hostEntries[displayName];`),
+  },
+  {
+    id: 'alias-permission-guard',
+    purpose: 'Host permission rules stop flowing in through the same builtin-snapshot legacy-alias reverse lookup, so OMO role permission boundaries (explorer write denial) are not overridden by the pre-config builtin explore rules. Server entry only; index keeps upstream behavior (no-op anchor).',
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP, `    const legacyAlias = Object.keys(AGENT_ALIASES).find((key) => AGENT_ALIASES[key] === name);\n    const visibleNativeRules = definition.displayName ? Object.entries(nativeRules).find(([agentName]) => normalizeAgentName(agentName).toLowerCase() === normalizeAgentName(definition.displayName).toLowerCase())?.[1] : undefined;\n    const hostRuleSet = nativeRules[name] ?? visibleNativeRules ?? (legacyAlias ? nativeRules[legacyAlias] : undefined) ?? [];`),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP, `    const visibleNativeRules = definition.displayName ? Object.entries(nativeRules).find(([agentName]) => normalizeAgentName(agentName).toLowerCase() === normalizeAgentName(definition.displayName).toLowerCase())?.[1] : undefined;\n    const hostRuleSet = nativeRules[name] ?? visibleNativeRules ?? [];`),
+  },
+  {
+    id: 'alias-visible-identity-decl-guard',
+    purpose: 'getSdkAgentProjection drops the unused legacy-alias declaration for the visible alias identity; the distinct displayName (aliasHost) merge the upstream kept stays untouched. Server entry only; index keeps upstream behavior (no-op anchor).',
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP, `      const legacyAlias = Object.keys(AGENT_ALIASES).find((key) => AGENT_ALIASES[key] === definition.name);\n      const canonicalConfig = finalAgentConfig[definition.name];`),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP, `      const canonicalConfig = finalAgentConfig[definition.name];`),
+  },
+  {
+    id: 'alias-visible-rules-guard',
+    purpose: 'Visible alias-identity projection stops pasting builtin-snapshot permission rules found via the legacy-alias reverse lookup over the OMO role rules. Server entry only; index keeps upstream behavior (no-op anchor).',
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP, `      const visibleRules = nativeRules[display] ?? nativeRules[definition.name] ?? (legacyAlias ? nativeRules[legacyAlias] : undefined) ?? [];`),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP, `      const visibleRules = nativeRules[display] ?? nativeRules[definition.name] ?? [];`),
+  },
+  {
+    // Gate1 blocker1 correction (server/v2 entry only — the index entry below
+    // is an intentional no-op). Proven host behavior (v2.0.20 source): the
+    // config-agent effect applies explicit user config agent.system/agent.mode
+    // per-field onto the SAME registry entries this projection rewrites, and
+    // both transforms re-run on every agent.reload() with the host config
+    // effect registered BEFORE this plugin. The upstream projection below
+    // unconditionally overwrites mode (=v1.mode ?? classified fallback) and
+    // system (=v1.prompt), so a custom role whose body/mode live ONLY in the
+    // native opencode.json (absent from the one-shot pre-config
+    // captureAgentDraft snapshot, therefore also absent from the hostEntries
+    // merge) is clobbered back to the generic specialist body and the
+    // classified subagent mode on the reload after config lands — served
+    // matrix subagent/142B instead of the pinned all/3275B.
+    //
+    // After this setup instance's first projection write, retain nonempty
+    // system/mode fields from the live registry. No second copy of those
+    // fields is cached: deletion/empty values return to the instance's
+    // projection. A setup-local Set enforces first-write safety without
+    // sharing role state between projects. The FIRST write for a name uses
+    // the projection (a host-seeded default cannot be mistaken for a pin).
+    // Merely stopping a config effect is not a deletion of its registry data.
+    // Model, variant,
+    // temperature, permission, description and hidden semantics are untouched.
+    // v1 hosts apply user config agents before plugin code reads them, so the
+    // index entry keeps upstream behavior byte-identical (self-anchoring
+    // no-op), verified by the v1 equality test.
+    id: 'native-explicit-pin-retain',
+    purpose: 'Retain live nonempty native system/mode after the setup instance first writes its projection, without caching field values; cleared fields fall back to that projection. OMO model/variant/permissions and v1 bytes remain unchanged. Server entry only.',
+    anchor: V(
+      OMO_ALIAS_GUARD_INDEX_NOOP,
+      `function applyAgentToDraft(draft, name, v1, compiledPermissions) {
+  const model = parseModelRef(v1.model);
+  draft.update(name, (agent) => {
+    agent.id = name;
+    agent.name = name;
+    agent.mode = v1.mode ?? (name === "orchestrator" ? "primary" : "subagent");
+    agent.hidden = v1.hidden === true;
+    if (typeof v1.description === "string")
+      agent.description = v1.description;
+    if (typeof v1.prompt === "string")
+      agent.system = v1.prompt;`),
+    replacement: V(
+      OMO_ALIAS_GUARD_INDEX_NOOP,
+      `function applyAgentToDraft(draft, name, v1, compiledPermissions, nativeAgentWrites) {
+  const model = parseModelRef(v1.model);
+  draft.update(name, (agent) => {
+    const projectedSystem = typeof v1.prompt === "string" ? v1.prompt : undefined;
+    const projectedMode = v1.mode ?? (name === "orchestrator" ? "primary" : "subagent");
+    const written = nativeAgentWrites.has(name);
+    const nativeSystem = written && typeof agent.system === "string" && agent.system.length > 0 ? agent.system : undefined;
+    const nativeMode = written && typeof agent.mode === "string" && agent.mode.length > 0 ? agent.mode : undefined;
+    agent.id = name;
+    agent.name = name;
+    agent.mode = nativeMode ?? projectedMode;
+    agent.hidden = v1.hidden === true;
+    if (typeof v1.description === "string")
+      agent.description = v1.description;
+    const explicitSystem = nativeSystem ?? projectedSystem;
+    if (explicitSystem !== undefined)
+      agent.system = explicitSystem;
+    nativeAgentWrites.add(name);`),
+  },
+  {
+    id: 'native-pin-instance-state',
+    purpose: 'Own first-write tracking inside each v2 setup instance; no module-global pin cache or cross-project state.',
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP, '      let resolvedAgents;\n      let finalizedRegistry;'),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP, '      const nativeAgentWrites = new Set();\n      let resolvedAgents;\n      let finalizedRegistry;'),
+  },
+  {
+    id: 'native-pin-instance-call',
+    purpose: 'Pass the setup-local first-write set to each registry projection write.',
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP, '          applyAgentToDraft(draft, name, cfg, registry4.nativePolicies[name]?.rules);'),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP, '          applyAgentToDraft(draft, name, cfg, registry4.nativePolicies[name]?.rules, nativeAgentWrites);'),
   },
   {
     id: 'revive-render-delivery',

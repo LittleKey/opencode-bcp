@@ -1,0 +1,24 @@
+{
+  "target": "skills/oh-my-opencode-slim/SKILL.md",
+  "note": "oh-my-opencode-slim: config fact corrections, all verified against the 3.0.1 implementation (dist loader code). Upstream docs understate project-local config/prompt support and claim built-in agents reject inline prompts; the implementation supports both.",
+  "ops": [
+    {
+      "id": "project-local-config-and-prompts",
+      "note": "Config table: document the project-local config file and the two project-local prompt directories.",
+      "find": "| `<project>/.opencode/oh-my-opencode-slim.json` | Project-local plugin overrides checked before user config |",
+      "replace": "| `<project>/.opencode/oh-my-opencode-slim.jsonc` / `.json` | Project-local plugin config; merged over the user config on conflict (within the same directory, `.jsonc` wins over `.json`) |\n| `<project>/.opencode/oh-my-opencode-slim/{preset}/{agent}.md` | Project-local, preset-specific prompt override, checked first |\n| `<project>/.opencode/oh-my-opencode-slim/{agent}.md` / `{agent}_append.md` | Project-local prompt override / append tuning, checked before the user prompt directory |"
+    },
+    {
+      "id": "prompt-lookup-order",
+      "note": "Lookup order: 4-level project-first order; base and append resolve independently through it.",
+      "find": "Prompt override lookup order:\n\n1. If a `preset` is active, check\n   `~/.config/opencode/oh-my-opencode-slim/{preset}/` first.\n2. Fall back to `~/.config/opencode/oh-my-opencode-slim/`.\n3. If both `{agent}.md` and `{agent}_append.md` exist, the replacement prompt is\n   loaded first and the append file is added after it.\n4. If no prompt files exist, the built-in prompt from the plugin package is used.",
+      "replace": "Prompt override lookup order, first existing file wins per file name:\n\n1. If a `preset` is active, `<project>/.opencode/oh-my-opencode-slim/{preset}/` is checked first.\n2. Then `<project>/.opencode/oh-my-opencode-slim/`.\n3. Then `~/.config/opencode/oh-my-opencode-slim/{preset}/` (preset first).\n4. Then `~/.config/opencode/oh-my-opencode-slim/`.\n\n`{agent}.md` and `{agent}_append.md` are each resolved independently through that order, so the base prompt and the append file may come from different directories. The append file content is added after the effective base prompt, whichever source provided it. Custom agents under `agents.<name>` use the same lookup with their agent name."
+    },
+    {
+      "id": "inline-prompt-schema-boundary",
+      "note": "Built-in agents accept inline prompt/orchestratorPrompt; inline wins over an override file with a logged warning, append still applies; orchestratorPrompt rejected on orchestrator; custom agents without model/inheritModelFrom skipped with a warning.",
+      "find": "Important schema boundary:\n\n- Built-in agents (`orchestrator`, `oracle`, `librarian`, `explorer`,\n  `designer`, `fixer`, `observer`, `council`) can set models, variants, skills,\n  MCPs, options, and display names in config.\n- Built-in agent `prompt` and `orchestratorPrompt` fields are **not** supported\n  in `oh-my-opencode-slim.json[c]`; use markdown prompt override files instead.\n- Unknown keys under top-level `agents` are custom agents. Custom agents may use\n  `prompt` and `orchestratorPrompt` directly in config.",
+      "replace": "Important schema boundary:\n\n- Built-in agents (`orchestrator`, `oracle`, `librarian`, `explorer`,\n  `designer`, `fixer`, `observer`, `council`) can set models, variants, skills,\n  MCPs, options, and display names in config.\n- Built-in agents also accept inline `prompt` and `orchestratorPrompt` fields\n  directly in `oh-my-opencode-slim.json[c]`. An inline `prompt` takes\n  precedence over a `{agent}.md` prompt override file; if both are set the\n  plugin logs a warning and uses the inline prompt. An `{agent}_append.md`\n  file is still appended after the inline prompt.\n- `orchestratorPrompt` on an agent adds delegation guidance for that agent to\n  the Orchestrator. It is rejected on the `orchestrator` agent itself.\n- Unknown keys under top-level `agents` are custom agents. Custom agents may\n  use `prompt` and `orchestratorPrompt` directly in config and are also\n  subject to the same markdown override lookup with their agent name; a custom\n  agent without `model` (or `inheritModelFrom`) is skipped with a warning."
+    }
+  ]
+}

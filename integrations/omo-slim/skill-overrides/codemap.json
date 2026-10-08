@@ -1,0 +1,12 @@
+{
+  "target": "skills/codemap/SKILL.md",
+  "note": "codemap: treat codemap.md as a navigation index, not mandatory pre-reading (BCP token-efficiency policy). Stock 3.0.1 keeps its relative scripts/codemap.mjs command paths and the corrected codemap.md fact wording; only this paragraph is local policy.",
+  "ops": [
+    {
+      "id": "repository-map-navigation",
+      "note": "Replace the 'read the full map before any task' instruction with task-scoped navigation.",
+      "find": "A full codemap is available at `codemap.md` in the project root.\n\nBefore working on any task, read `codemap.md` to understand:\n- Project architecture and entry points\n- Directory responsibilities and design patterns\n- Data flow and integration points between modules\n\nFor deep work on a specific folder, also read that folder's `codemap.md`.",
+      "replace": "A hierarchical codemap is available at `codemap.md` in the project root. It is\na navigation index, not mandatory pre-reading: read only the parts relevant to\nthe current task. Use the root map's directory table to locate the modules the\ntask touches, then read those folders' `codemap.md` files. Do not read the\nfull map for every task."
+    }
+  ]
+}

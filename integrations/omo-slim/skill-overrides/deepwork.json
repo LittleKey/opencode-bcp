@@ -1,0 +1,30 @@
+{
+  "target": "skills/deepwork/SKILL.md",
+  "note": "deepwork: BCP state/commit policy over stock 3.0.1. The stock session-pinned progress file contract (.slim/deepwork/<session-id>.md, enforced by the plugin hook's activation prompt) is kept verbatim; the old global free-named variant was dropped because it contradicts that hook.",
+  "ops": [
+    {
+      "id": "todo-live-status",
+      "note": "Todo is the live status; .slim/deepwork/ holds durable snapshots, not a second synchronized checklist.",
+      "find": "- create and maintain your session's progress file under `.slim/deepwork/`;",
+      "replace": "- keep live execution status in the Todo; when a durable handoff is useful, save a decision/evidence snapshot under `.slim/deepwork/`, not a second continuously synchronized checklist;"
+    },
+    {
+      "id": "snapshot-handoff-boundaries",
+      "note": "Original-source handoffs: refresh at handoff/recovery boundaries, reference original sources, keep snapshot age visible.",
+      "find": "Update this file after major decisions, accepted research, reviews, phase\ncompletions, validation results, and scope changes. Record accepted findings and\nreference local files by path rather than copying their contents.",
+      "replace": "Refresh this snapshot at meaningful handoff or recovery boundaries. Record\naccepted findings and original references rather than duplicating the Todo or\nsource bodies. A snapshot's age must be visible; consult the live execution\nstate before resuming work."
+    },
+    {
+      "id": "oracle-gates-from-risk",
+      "note": "Schedule Oracle reviews from goal and risk instead of one mechanical gate per phase; still-valid prior evidence replaces a fresh gate for unchanged ground. The stock 1 + 2 review budget is kept explicit.",
+      "find": "- before dispatch, draft a phased implementation/delegation plan: a small number\n  of coherent phases from the work's dependencies and natural delivery\n  boundaries; do not split work merely to reduce an Oracle review's scope;\n- make an `@oracle` review mandatory after each phase; record the phase order,\n  specialist ownership, gate order, and one-line gate rationale in the deepwork\n  file; share a compact version with the user;",
+      "replace": "- before dispatch, choose a small number of coherent implementation phases from\n  the work's dependencies and natural delivery boundaries; do not split work\n  merely to reduce an Oracle review's scope;\n- schedule `@oracle` reviews from the work's goal and risk, not one mechanical\n  gate per phase; where accepted research or a prior review's evidence is still\n  valid for a phase, reference it instead of scheduling a fresh gate for\n  unchanged ground. Each scheduled gate keeps the 1 + 2 review budget below.\n  Record the phase order, specialist ownership, gate order, and one-line gate\n  rationale in the deepwork file; share a compact version with the user;"
+    },
+    {
+      "id": "user-authorized-commits",
+      "note": "Commits happen only with explicit user authorization; no automatic per-phase commit gate.",
+      "find": "- create a focused commit when the phase is an independently valid delivery\n  boundary before starting the next phase;",
+      "replace": "- when the user requests checkpoints or integration, propose a focused commit\n  at an independently valid delivery boundary and create it only with explicit\n  authorization. Otherwise continue verified work without adding a commit\n  approval gate; deepwork never commits on its own initiative;"
+    }
+  ]
+}
