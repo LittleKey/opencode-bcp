@@ -1,0 +1,38 @@
+// Diagnostic only: retain the version mismatch; do not change the acceptance gate.
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {lstatSync,readFileSync,readlinkSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+const root=import.meta.dirname,live='/home/littlekey/.config/opencode',pid=338521,port=36821;
+const json=p=>JSON.parse(readFileSync(p)),sha=b=>createHash('sha256').update(b).digest('hex');
+const spec=json(join(root,'production/CANDIDATE.json')),prior=json(join(root,'production/HOST-BEFORE-RESTART.json'));
+const env=Object.fromEntries(readFileSync(`/proc/${pid}/environ`,'utf8').split('\0').filter(x=>x.includes('=')).map(x=>{const i=x.indexOf('=');return[x.slice(0,i),x.slice(i+1)];}));
+assert.ok(env.OPENCODE_SERVER_PASSWORD);
+const headers={Authorization:'Basic '+Buffer.from(`${env.OPENCODE_SERVER_USERNAME??'opencode'}:${env.OPENCODE_SERVER_PASSWORD}`).toString('base64')};
+const request=async path=>{const response=await fetch(`http://127.0.0.1:${port}${path}`,{headers,signal:AbortSignal.timeout(30000)});assert.ok(response.ok,`HTTP ${response.status}: ${path}`);return response.json();};
+const checks={};const check=(name,fn)=>{try{fn();checks[name]={passed:true};}catch(e){checks[name]={passed:false,error:e.message};}};
+const health=await request('/global/health'),query='?directory='+encodeURIComponent('/home/littlekey/github/document-writer');
+const processStartTicks=readFileSync(`/proc/${pid}/stat`,'utf8').split(') ')[1].split(' ')[19],bootId=readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim();
+check('host-health',()=>assert.equal(health.healthy,true));
+check('host-version',()=>assert.equal(health.version,spec.hostVersion));
+check('new-process',()=>{assert.ok(prior.bootId!==bootId||prior.pid!==pid||prior.processStartTicks!==processStartTicks);if(prior.bootId===bootId)assert.ok(BigInt(processStartTicks)>BigInt(prior.processStartTicks));});
+const {controller,baseline}=await import('./upgrade.mjs');
+check('installed-tree-authority-backups',()=>controller(live,join(root,'production/transaction'),baseline).installed());
+check('omo-entry',()=>assert.equal(sha(readFileSync(join(live,'plugins/omoPluginV1/index/dist/index.js'))),spec.entrySha256));
+const omoVersion=json(join(live,'plugins/omoPluginV1/index/package.json')).version;
+check('omo-version',()=>assert.equal(omoVersion,spec.omoVersion));
+check('private-config-mode',()=>assert.equal(lstatSync(join(live,'opencode.json')).mode&0o777,0o600));
+const expected=json(join(root,'proof/expected-v1.json')).agentConfigs;
+expected['lark-operator'].prompt=readFileSync(join(spec.candidate,'agents/lark-operator.md'),'utf8').split('---',3)[2].trim();
+const agents=await request('/agent'+query),skills=await request('/skill'+query);
+for(const name of ['orchestrator','designer','explorer','librarian','oracle','fixer','observer','document-writer','lark-operator'])check('role/'+name,()=>{
+ const a=agents.find(a=>a.name===name),e=expected[name];assert.ok(a);assert.equal(a.prompt,e.prompt,'prompt differs');
+ if(e.model)assert.equal(`${a.model?.providerID}/${a.model?.modelID}`,e.model);assert.equal(a.variant??null,e.variant??null);assert.equal(a.mode,name==='lark-operator'?'all':e.mode??'subagent');
+});
+for(const name of ['explorer','oracle','librarian','observer'])check('readonly/'+name,()=>{for(const permission of ['write','edit','apply_patch','ast_grep_replace']){const rules=agents.find(a=>a.name===name).permission.filter(r=>r.permission===permission);assert.ok(rules.some(r=>r.pattern==='*'&&r.action==='deny')&&!rules.some(r=>r.action==='allow'),permission);}});
+for(const name of ['clonedeps','deepwork','executing-plans','writing-plans'])check('skill/'+name,()=>{const text=readFileSync(join(live,'skills',name,'SKILL.md'),'utf8'),body=text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/,'').trim(),s=skills.find(s=>s.name===name);assert.ok(s&&typeof s.content==='string'&&(s.content.trim()===body||s.content===text),'skill content differs');});
+check('executable-helpers',()=>{for(const name of ['plan-workspace','review-package','task-brief','task-done','task-start'])assert.equal(lstatSync(join(live,'skills/executing-plans/scripts',name)).mode&0o777,0o755);});
+const failures=Object.entries(checks).filter(([,r])=>!r.passed).map(([name])=>name);
+const result={at:new Date().toISOString(),purpose:'Read-only diagnostic of the unplanned host version; not upgrade acceptance',passed:failures.length===0,checks,failures,pid,port,processStartTicks,bootId,executable:readlinkSync(`/proc/${pid}/exe`),health,expectedHostVersion:spec.hostVersion,omoVersion,manifestSha256:spec.manifestSha256,modelRequests:0,limits:['Registry/configuration and installed-tree checks only; no tool invocation, real model or compression recovery test.','OpenCode 1.18.35 has not received approval or the isolated behavior matrix used for 1.18.33.']};
+const out=join(root,`production/HOST-DIAGNOSTIC-${result.at.replace(/[:.]/g,'-')}.json`);writeFileSync(out,JSON.stringify(result,null,2)+'\n',{flag:'wx',mode:0o600});
+console.log(JSON.stringify({hostVersion:health.version,expectedHostVersion:spec.hostVersion,omoVersion,checks:Object.keys(checks).length,failures,report:out},null,2));
