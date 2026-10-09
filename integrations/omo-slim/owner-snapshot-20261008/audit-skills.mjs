@@ -1,0 +1,11 @@
+import {createHash} from 'node:crypto';
+import {readFileSync, readdirSync, writeFileSync} from 'node:fs';
+import {join,relative} from 'node:path';
+const root=import.meta.dirname;
+const sha=b=>createHash('sha256').update(b).digest('hex');
+const inventory=(dir,base=dir)=>Object.fromEntries(readdirSync(dir,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name)).flatMap(e=>e.isDirectory()?Object.entries(inventory(join(dir,e.name),base)):e.isFile()?[[relative(base,join(dir,e.name)),sha(readFileSync(join(dir,e.name)))]]:[]));
+const old=inventory('/home/littlekey/.cache/opencode/packages/oh-my-opencode-slim@3.0.1/node_modules/oh-my-opencode-slim/src/skills');
+const current=inventory(join(root,'upstream/node_modules/oh-my-opencode-slim/src/skills'));
+const changes=Object.keys({...old,...current}).filter(k=>old[k]!==current[k]).map(path=>({path,old:old[path],current:current[path]}));
+writeFileSync(join(root,'proof/SKILL-UPSTREAM.json'),JSON.stringify({old,current,changes},null,2)+'\n',{flag:'wx',mode:0o600});
+console.log(JSON.stringify({current,changes},null,2));

@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {readFileSync,writeFileSync,mkdirSync,chmodSync,statSync} from 'node:fs';
+import {join,dirname} from 'node:path';
+import {buildSkills} from '../../worktrees/omo-3.0.3-upgrade/integrations/omo-slim/build-skills.mjs';
+const root=import.meta.dirname,worktree='/home/littlekey/github/dotfiles/.slim/worktrees/phase1-upstream-defaults',runtime=join(worktree,'opencode/runtime');
+const hash=b=>createHash('sha256').update(b).digest('hex'),json=p=>JSON.parse(readFileSync(p));
+const gitFile=p=>execFileSync('git',['show',`09f0d4a:${p}`],{cwd:worktree,maxBuffer:4*1024*1024});
+const old=JSON.parse(gitFile('opencode/runtime/generated/build-manifest.json'));
+const pinned=json(join(runtime,'profile.json')).inputs.skillsDir.files;
+const baseline=json(join(root,'proof/LIVE-MANAGED-BASELINE.json'));
+const personalDir=join(root,'personal-source');
+for(const [rel,expected] of Object.entries(old.personal.files)) {
+  const bytes=gitFile(`opencode/runtime/generated/skills/${rel}`), mode=old.personal.modes[rel];
+  assert.equal(hash(bytes),expected,rel); assert.equal(expected,pinned[rel],rel);
+  const live=join('/home/littlekey/.config/opencode/skills',rel);
+  assert.equal(hash(readFileSync(live)),expected,rel);
+  assert.equal(baseline.files[`skills/${rel}`].sha256,expected,rel);
+  assert.equal((statSync(live).mode&0o777).toString(8).padStart(4,'0'),mode,rel);
+  const dest=join(personalDir,rel); mkdirSync(dirname(dest),{recursive:true});
+  writeFileSync(dest,bytes,{flag:'wx'}); chmodSync(dest,parseInt(mode,8));
+}
+const options={packageDir:join(root,'upstream/node_modules/oh-my-opencode-slim'),personalDir};
+const preview=buildSkills({...options,outDir:join(root,'skills-preview')});
+const before=old.output.files,after=preview.manifest.output.files;
+assert.deepEqual(Object.keys(after).sort(),Object.keys(before).sort(),'no skill added or removed');
+const changed=Object.keys(after).filter(p=>before[p]!==after[p]);
+assert.deepEqual(changed,['skills/deepwork/SKILL.md'],'only the approved upstream deepwork upgrade changes generated skill bytes');
+assert.deepEqual(preview.manifest.output.modes,old.output.modes,'all generated modes retained');
+const result=buildSkills({...options,outDir:join(runtime,'generated')});
+const report={at:new Date().toISOString(),sourceCommit:'09f0d4a',personalDir,personalSkills:old.personal.skills,personalFiles:old.personal.files,personalModes:old.personal.modes,changed,output:result.manifest.output,limits:['The raw opencode/skills tree is not the full deployed personal source: it lacks grilling and has an older to-spec. An initial raw-source build exposed this discrepancy; it was not staged. Regenerated from the committed generated tree, verified byte/mode-identical to the initial production baseline.','No production files changed.']};
+writeFileSync(join(root,'proof/SKILL-GENERATION.json'),JSON.stringify(report,null,2)+'\n',{flag:'wx',mode:0o600});
+console.log(JSON.stringify({personal:old.personal.skills.length,files:Object.keys(after).length,changed,deepworkSha256:after['skills/deepwork/SKILL.md']},null,2));

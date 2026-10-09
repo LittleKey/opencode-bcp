@@ -19,6 +19,8 @@ const MODULE_DIR = dirname(HERE); // integrations/omo-slim
 const OVERRIDES = join(MODULE_DIR, "skill-overrides");
 const STOCK_PKG = "/home/littlekey/.cache/opencode/packages/oh-my-opencode-slim@3.0.1/node_modules/oh-my-opencode-slim";
 const HAS_STOCK = existsSync(join(STOCK_PKG, "package.json"));
+const STOCK_303 = process.env.OMO_303_PACKAGE ?? "/home/littlekey/.cache/opencode/packages/oh-my-opencode-slim@3.0.3/node_modules/oh-my-opencode-slim";
+const HAS_STOCK_303 = existsSync(join(STOCK_303, "package.json"));
 
 let S;
 
@@ -65,6 +67,40 @@ test("applyPatches: exactly-once anchors apply; zero and multiple matches refuse
   assert.match(applied[0].findSha256, /^[0-9a-f]{64}$/);
   assert.throws(() => applyPatches("no anchor here", [{ id: "op1", find: "alpha", replace: "A" }], "t"), (e) => e instanceof BuildRefusal && /anchor not found/.test(e.message));
   assert.throws(() => applyPatches("x x x", [{ id: "op1", find: "x", replace: "y" }], "t"), (e) => e instanceof BuildRefusal && /matches 3 times/.test(e.message));
+});
+
+test("3.0.3 skills use audited new deepwork bytes and keep compatible router, local state and commit policies", {skip: HAS_STOCK_303 ? false : "set OMO_303_PACKAGE to the pinned 3.0.3 package"}, () => {
+  const {skillsDir, manifest} = buildSkills({packageDir: STOCK_303, personalDir: fakePersonal(join(S, "personal-303")), outDir: join(S, "out-303")});
+  assert.equal(manifest.stockPackage.version, "3.0.3");
+  assert.equal(manifest.stockPackage.verifiedFiles["deepwork/SKILL.md"], "8c19f0533810a693a3437929343acabc70f79f74cb757c78c253cb353f1fe0a9");
+  const text = readFileSync(join(skillsDir, "deepwork/SKILL.md"), "utf8");
+  for (const marker of ["<session-id>.md", "<task-slug>/progress.md", "Todo", "original", "deepwork never commits on its own initiative", "1 + 2 review budget"]) assert.ok(text.includes(marker), marker);
+  assert.ok(!text.includes("grep -m1"));
+  for (const inherited of STOCK_INHERITED_SKILLS) assert.equal(existsSync(join(skillsDir, inherited)), false);
+});
+
+test("3.0.3 drift refuses before replacing existing output and a 3.0.1 deepwork cannot pass its lock", {skip: HAS_STOCK_303 && HAS_STOCK ? false : "both pinned stock packages required"}, () => {
+  const packageDir = join(S, "303-drift"), outDir = join(S, "303-preserved-output");
+  mkdirSync(join(packageDir, "src"), {recursive: true});
+  cpSync(join(STOCK_303, "src/skills"), join(packageDir, "src/skills"), {recursive: true});
+  cpSync(join(STOCK_303, "package.json"), join(packageDir, "package.json"));
+  mkdirSync(outDir); writeFileSync(join(outDir, "sentinel"), "preserved");
+  cpSync(join(STOCK_PKG, "src/skills/deepwork/SKILL.md"), join(packageDir, "src/skills/deepwork/SKILL.md"));
+  assert.throws(() => buildSkills({packageDir, personalDir: fakePersonal(join(S, "303-personal-drift")), outDir}), /stock file drifted: deepwork\/SKILL.md/);
+  assert.equal(readFileSync(join(outDir, "sentinel"), "utf8"), "preserved");
+});
+
+test("3.0.3 preserves all eight approved personal files and five executable helpers", {skip: HAS_STOCK_303 && process.env.OPROFILE_RUNTIME_DIR ? false : "set OMO_303_PACKAGE and OPROFILE_RUNTIME_DIR for pinned sources"}, () => {
+  const personalDir = join(process.env.OPROFILE_RUNTIME_DIR, "../skills");
+  const {skillsDir, manifest} = buildSkills({packageDir: STOCK_303, personalDir, outDir: join(S, "303-personal")});
+  const files = ["executing-plans/SKILL.md", "writing-plans/SKILL.md", "executing-plans/references/code-reviewer.md", ...["plan-workspace", "review-package", "task-brief", "task-done", "task-start"].map(name => `executing-plans/scripts/${name}`)];
+  for (const path of files) {
+    const source = join(personalDir, path), output = join(skillsDir, path);
+    assert.deepEqual(readFileSync(output), readFileSync(source), path);
+    assert.equal(statSync(output).mode & 0o777, statSync(source).mode & 0o777, path);
+    assert.equal(manifest.output.files[`skills/${path}`], createHash("sha256").update(readFileSync(source)).digest("hex"));
+    if (path.includes("/scripts/")) { assert.equal(statSync(output).mode & 0o777, 0o755); execFileSync("bash", ["-n", output]); }
+  }
 });
 
 if (!HAS_STOCK) {
@@ -166,7 +202,7 @@ if (!HAS_STOCK) {
     writeFileSync(join(fakePkg, "src", "skills", "deepwork", "SKILL.md"), "upgraded bytes");
     assert.throws(
       () => buildSkills({ packageDir: fakePkg, personalDir: fakePersonal(join(S, "personal-c")), outDir: join(S, "out-c") }),
-      (e) => e instanceof BuildRefusal && /version is "3\.1\.0" — pinned "3\.0\.1"/.test(e.message) && /re-diff skill-overrides/.test(e.message)
+      (e) => e instanceof BuildRefusal && /version is "3\.1\.0" — supported pinned releases: 3\.0\.1, 3\.0\.3/.test(e.message) && /re-diff skill-overrides/.test(e.message)
     );
     assert.ok(!existsSync(join(S, "out-c")), "refusal writes nothing");
   });

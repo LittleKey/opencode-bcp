@@ -17,6 +17,12 @@ export const OMO_TARGETS = {
       server: 'd0db4526a00e257dd5bbf7924a465cc095eec3fa39d5fca85ec8db9e973a989f',
     },
   },
+  '3.0.3': {
+    entries: {
+      index: '160c7bfb22f1105fd88c558d1a0686c549864a3f7b0efca5586319d7c663ec27',
+      server: 'e31460f6c754370020717d70f4e2ba88ba8003e67ed59cc91ca599279d509e40',
+    },
+  },
 };
 
 export function omoTargetFor(digest) {
@@ -729,15 +735,161 @@ function getCurrentReviveJob`),
   },
 ];
 
+// 3.0.3 keeps the reviewed BCP delivery contract. Its four alias fallbacks were
+// removed upstream; never reapply those backports. Upstream now maps user text,
+// parentID and time itself, but does not reconstruct absent input identity or
+// propagate it through the terminal gate. Keep those distinct responsibilities.
+const PATCH_OVERRIDES_3_0_3 = {
+  'foreground-delivery': {
+    replacement: Object.fromEntries(['index', 'server'].map(entry => {
+      const output = entry === 'index' ? 'output' : 'output2';
+      return [entry, pick(PATCHES_3_0_1.find(patch => patch.id === 'foreground-delivery').replacement, entry)
+        .replace(`presentDelivery(${output}.output, metadata) + deliverySuffix(metadata)`,
+          `presentRetainedChildDelivery(${output}.output, metadata, updated.parentSessionID)`)];
+    })),
+  },
+  'register-launch-now': {
+    anchor: 'return deps.backgroundJobBoard.registerLaunch({\n      taskID,\n      parentSessionID: pending2.parentSessionId,',
+    replacement: 'return deps.backgroundJobBoard.registerLaunch({\n      taskID,\n      now: pending2.nativeCallStartedAt,\n      parentSessionID: pending2.parentSessionId,',
+  },
+  'ack-injected-resume-call': {
+    anchor: V(
+      'let remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??',
+      'let remembered = deps.backgroundJobBoard.resolveReusable(input2.sessionID, requested, agentType) ??'),
+    replacement: V(
+      'if (input.callID) deps.acknowledgeInjectedResume?.(input.sessionID, requested, agentType);\n    let remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??',
+      'if (input2.callID) deps.acknowledgeInjectedResume?.(input2.sessionID, requested, agentType);\n    let remembered = deps.backgroundJobBoard.resolveReusable(input2.sessionID, requested, agentType) ??'),
+  },
+  'shim-user-text-and-parentid': {
+    purpose: 'Keep upstream 3.0.3 message mapping intact and bind an assistant without parentID to the preceding real user, without inventing an ID when the input is unavailable.',
+    anchor: 'var warnedListUnavailable = false;',
+    replacement: `function toV1Transcript(messages2) {
+  const mapped = [];
+  let inputID;
+  for (const entry of messages2) {
+    const message = toV1Message(entry);
+    if (message.info.role === "user")
+      inputID = message.info.id;
+    else if (message.info.role === "assistant" && message.info.parentID === undefined && typeof inputID === "string")
+      message.info.parentID = inputID;
+    mapped.push(message);
+  }
+  return mapped;
+}
+var warnedListUnavailable = false;`,
+  },
+  'shim-context-transcript-identity': {
+    anchor: 'data: raw.map(toV1Message),',
+    replacement: 'data: toV1Transcript(raw),',
+  },
+  'shim-paged-transcript-identity': {
+    anchor: V(
+      'data: page.data.slice().reverse().map((message) => toV1Message(isRecord4(message) ? message : { type: "unknown" }))',
+      'data: page.data.slice().reverse().map((message) => toV1Message(isRecord3(message) ? message : { type: "unknown" }))'),
+    replacement: V(
+      'data: toV1Transcript(page.data.slice().reverse().map((message) => isRecord4(message) ? message : { type: "unknown" }))',
+      'data: toV1Transcript(page.data.slice().reverse().map((message) => isRecord3(message) ? message : { type: "unknown" }))'),
+  },
+  'commit-transcript-origin': {
+    anchor: '\n      return commit(token, evidence.verdict, evidence.text, undefined, "transcript");',
+    replacement: '\n      return commit(token, evidence.verdict, evidence.text, undefined, "transcript", evidence.bcpOrigin);',
+  },
+  'task-result-delivery': {
+    anchor: 'return current.resultSummary;\n        }\n        const v2 = options2.input.hostFlavor === "v2";',
+    replacement: `const metadata = await deliveryMetadata(options2.input.directory, current);
+          const afterDelivery = board.get(taskID);
+          if (afterDelivery?.generation !== current.generation || afterDelivery.terminalRevision !== current.terminalRevision || afterDelivery.activityRevision !== current.activityRevision)
+            throw new Error("Task changed while delivery metadata was inspected; retrieve its current result.");
+          return presentDelivery(current.resultSummary, metadata) + deliverySuffix(metadata);
+        }
+        const v2 = options2.input.hostFlavor === "v2";`,
+  },
+  'revive-unknown-delivery': {
+    anchor: 'return renderReviveOutput(idParam, queueContinuation ? launched ?? current : current, true);',
+    replacement: 'return renderReviveOutput(idParam, queueContinuation ? launched ?? current : current, true, options2.input.directory, options2.backgroundJobBoard);',
+  },
+  'native-pin-instance-state': {
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP, '      let finalizedRegistry;'),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP, '      const nativeAgentWrites = new Set();\n      let finalizedRegistry;'),
+  },
+};
+
+const readonlyResultBody = name => `function readonlyTerminalResult(requested, ${name}) {
+  const state = ${name}?.state === "reconciled" ? ${name}.terminalState : ${name}?.state;
+  const summary = ${name}?.resultSummary?.trim();
+  if (state === "completed" && summary)
+    return summary;
+  throw new Error(\`Task \${requested} result was not consumed. No action was sent.\`);
+}`;
+const readonlyDeliveryBody = name => `async function readonlyTerminalResult(requested, ${name}, directory, board) {
+  const state = ${name}?.state === "reconciled" ? ${name}.terminalState : ${name}?.state;
+  const summary = ${name}?.resultSummary?.trim();
+  if (state === "completed" && summary) {
+    const metadata = await deliveryMetadata(directory, ${name});
+    const latest = board.get(${name}.taskID);
+    if (latest?.generation !== ${name}.generation || latest.terminalRevision !== ${name}.terminalRevision || latest.activityRevision !== ${name}.activityRevision || latest.parentSessionID !== ${name}.parentSessionID)
+      throw new Error("Task changed while delivery metadata was inspected; retrieve its current result.");
+    return presentDelivery(summary, metadata) + deliverySuffix(metadata);
+  }
+  throw new Error(\`Task \${requested} result was not consumed. No action was sent.\`);
+}`;
+
+export const PATCHES_3_0_3 = [
+  ...PATCHES_3_0_1.filter(patch => !patch.id.startsWith('alias-')).map(patch => ({...patch, ...PATCH_OVERRIDES_3_0_3[patch.id]})),
+  {
+    id: 'native-retained-child-delivery',
+    purpose: 'Validate the new retained-child suffix against the current owner and execution, compact only exact verified body bytes, and keep the upstream recovery marker authoritative at the tail.',
+    anchor: 'function formatChildRef(ref) {',
+    replacement: `function presentRetainedChildDelivery(text, metadata, parentSessionID) {
+  const ref = readAuthoritativeChildRef(text);
+  if (!ref) return presentDelivery(text, metadata) + deliverySuffix(metadata);
+  const marker = "\\n" + formatChildRef(ref);
+  if (ref.parentSessionID !== parentSessionID || ref.sessionID !== metadata?.execution?.task_id ||
+      ref.agent !== metadata?.result_reference?.writer?.agent || !text.endsWith(marker)) return text;
+  const original = text.slice(0, -marker.length);
+  const close = original.endsWith("</task>") ? "</task>" : original.endsWith("</subagent>") ? "</subagent>" : undefined;
+  if (!close) return text;
+  const delivered = presentDelivery(original, metadata);
+  return delivered.slice(0, -close.length) + deliverySuffix(metadata) + "\\n" + close + marker;
+}
+function formatChildRef(ref) {`,
+  },
+  {
+    id: 'commit-queued-transcript-origin',
+    purpose: 'Carry the exact queued prompt/terminal identity through the new inspectQueuedAnswer commit, independently of the ordinary completion path.',
+    anchor: '\n    return commit(token, evidence.verdict, evidence.text, undefined, "transcript");',
+    replacement: '\n    return commit(token, evidence.verdict, evidence.text, undefined, "transcript", evidence.bcpOrigin);',
+  },
+  {
+    id: 'readonly-result-delivery',
+    purpose: 'The new disposed-plugin read-only result path returns a verified receipt after existing ownership checks, with a fresh execution/ownership check after the metadata await.',
+    anchor: V(readonlyResultBody('record'), readonlyResultBody('record3')),
+    replacement: V(readonlyDeliveryBody('record'), readonlyDeliveryBody('record3')),
+  },
+  {
+    id: 'readonly-result-tracked-call',
+    purpose: 'Pass the directory and board to the disposed-plugin tracked-result delivery path.',
+    anchor: 'return readonlyTerminalResult(requested, tracked);',
+    replacement: 'return readonlyTerminalResult(requested, tracked, options2.input.directory, board);',
+  },
+  {
+    id: 'readonly-result-current-call',
+    purpose: 'Pass the directory and board to the disposed-plugin current-result delivery path.',
+    anchor: 'return readonlyTerminalResult(requested, current);',
+    replacement: 'return readonlyTerminalResult(requested, current, options2.input.directory, board);',
+  },
+];
+
 export function describeOmoPatches(version) {
   if (version === '3.0.1') return PATCHES_3_0_1.map(({id, purpose}) => ({id, purpose}));
+  if (version === '3.0.3') return PATCHES_3_0_3.map(({id, purpose}) => ({id, purpose}));
   if (version === '2.2.25') return [{id: 'legacy-2.2.25', purpose: 'Full 2.2.25 patch set (rollback-compatible legacy path).'}];
   throw new Error('Unsupported OMO version: ' + version);
 }
 
-function patchOmo3_0_1(original, entry) {
-  const expected = OMO_TARGETS['3.0.1'].entries[entry];
-  assert.equal(createHash('sha256').update(original).digest('hex'), expected, 'OMO 3.0.1 ' + entry + ' upstream digest mismatch');
+function patchOmo3(original, version, entry) {
+  const expected = OMO_TARGETS[version].entries[entry];
+  assert.equal(createHash('sha256').update(original).digest('hex'), expected, 'OMO ' + version + ' ' + entry + ' upstream digest mismatch');
   let source = original;
   function once(before, after) {
     assert.equal(source.split(before).length, 2, 'OMO patch anchor is not unique: ' + before.slice(0, 90));
@@ -745,7 +897,7 @@ function patchOmo3_0_1(original, entry) {
   }
   // Upstream Council procedure text (steps 1–5) is intentionally left untouched:
   // 3.0.1 keeps upstream Council byte-identical, no private agenda is spliced in.
-  for (const patch of PATCHES_3_0_1) {
+  for (const patch of version === '3.0.3' ? PATCHES_3_0_3 : PATCHES_3_0_1) {
     once(pick(patch.anchor, entry), pick(patch.replacement, entry));
   }
   return DELIVERY_IMPORT + source;
@@ -770,5 +922,5 @@ export function patchOmo(original, options = {}) {
     throw new Error('OMO ' + detected.version + ' source is the ' + detected.entry + ' entry but ' + options.entry + ' was requested');
   }
   if (detected.version === '2.2.25') return patchOmo2_2_25(original);
-  return patchOmo3_0_1(original, detected.entry);
+  return patchOmo3(original, detected.version, detected.entry);
 }

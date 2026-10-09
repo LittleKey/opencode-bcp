@@ -38,7 +38,6 @@ export class BuildRefusal extends Error {
 }
 
 export const STOCK_PACKAGE_NAME = "oh-my-opencode-slim";
-export const STOCK_PACKAGE_VERSION = "3.0.1";
 export const STOCK_SKILLS_REL = "src/skills";
 
 // Stock-packaged skills served by the plugin artifact's in-process
@@ -81,6 +80,17 @@ const STOCK_SKILL_SHA256 = {
   "worktrees/SKILL.md": "09c9b694ff3450e96d078ff687f25dae6238202972fdc62a6769605531bc22f6",
 };
 
+// Each supported release has its own lock and audited override selection.
+// Only deepwork changed in 3.0.3; the other fifteen relevant files are identical.
+const STOCK_RELEASES = {
+  "3.0.1": { files: STOCK_SKILL_SHA256, overrides: {} },
+  "3.0.3": {
+    files: { ...STOCK_SKILL_SHA256, "deepwork/SKILL.md": "8c19f0533810a693a3437929343acabc70f79f74cb757c78c253cb353f1fe0a9" },
+    overrides: { deepwork: "3.0.3/deepwork.json" },
+  },
+};
+export const STOCK_PACKAGE_VERSIONS = Object.keys(STOCK_RELEASES);
+
 const sha256Bytes = (buf) => createHash("sha256").update(buf).digest("hex");
 
 // Sorted relative file list of a directory tree (files only).
@@ -118,8 +128,8 @@ export function applyPatches(text, ops, label) {
   return { text: out, applied };
 }
 
-function loadPatchFile(overridesDir, skill) {
-  const path = join(overridesDir, `${skill}.json`);
+function loadPatchFile(overridesDir, skill, file = `${skill}.json`) {
+  const path = join(overridesDir, file);
   if (!existsSync(path)) {
     throw new BuildRefusal([`patch file missing: ${path} — every patched skill needs an auditable delta file`]);
   }
@@ -159,6 +169,7 @@ export function buildSkills(opts) {
 
   // stock package identity
   const pkgPath = join(packageDir, "package.json");
+  let version;
   if (!existsSync(pkgPath)) report.push(`stock package.json missing: ${pkgPath}`);
   else {
     let pkg;
@@ -168,10 +179,13 @@ export function buildSkills(opts) {
       pkg = { parseError: err.message };
     }
     if (pkg.name !== STOCK_PACKAGE_NAME) report.push(`stock package name is ${JSON.stringify(pkg.name)} — expected ${JSON.stringify(STOCK_PACKAGE_NAME)}`);
-    if (pkg.version !== STOCK_PACKAGE_VERSION) {
-      report.push(`stock package version is ${JSON.stringify(pkg.version)} — pinned ${JSON.stringify(STOCK_PACKAGE_VERSION)}; re-diff skill-overrides and re-pin STOCK_SKILL_SHA256 for a deliberate upgrade`);
+    version = pkg.version;
+    if (!Object.hasOwn(STOCK_RELEASES, version)) {
+      report.push(`stock package version is ${JSON.stringify(version)} — supported pinned releases: ${STOCK_PACKAGE_VERSIONS.join(", ")}; re-diff skill-overrides and re-pin stock hashes for a deliberate upgrade`);
     }
   }
+  if (report.length > 0) throw new BuildRefusal(report);
+  const release = STOCK_RELEASES[version];
   const stockSkillsDir = join(packageDir, ...STOCK_SKILLS_REL.split("/"));
   if (!existsSync(stockSkillsDir)) report.push(`stock skills dir missing: ${stockSkillsDir}`);
 
@@ -185,7 +199,7 @@ export function buildSkills(opts) {
       const [top] = rel.split("/");
       const relevant = PATCHED_SKILLS.includes(top) || STOCK_INHERITED_SKILLS.includes(top);
       if (!relevant) continue;
-      const pinned = STOCK_SKILL_SHA256[rel];
+      const pinned = release.files[rel];
       if (!pinned) {
         report.push(`unpinned stock skill file present: ${rel} — add it to STOCK_SKILL_SHA256 or account for it explicitly`);
         continue;
@@ -194,7 +208,7 @@ export function buildSkills(opts) {
       if (actual !== pinned) report.push(`stock file drifted: ${rel} sha256 ${actual} != pinned ${pinned}`);
       else verifiedStock[rel] = actual;
     }
-    for (const rel of Object.keys(STOCK_SKILL_SHA256)) {
+    for (const rel of Object.keys(release.files)) {
       if (!stockFiles.includes(rel)) report.push(`pinned stock file missing: ${rel} — the stock package no longer carries it; re-pin`);
     }
   }
@@ -237,7 +251,7 @@ export function buildSkills(opts) {
     for (const skill of PATCHED_SKILLS) {
       let patch;
       try {
-        patch = loadPatchFile(overridesDir, skill);
+        patch = loadPatchFile(overridesDir, skill, release.overrides[skill]);
       } catch (err) {
         if (err instanceof BuildRefusal) {
           report.push(...err.report);
@@ -325,7 +339,7 @@ export function buildSkills(opts) {
     generator: "integrations/omo-slim/build-skills.mjs",
     stockPackage: {
       name: STOCK_PACKAGE_NAME,
-      version: STOCK_PACKAGE_VERSION,
+      version,
       dir: packageDir,
       skillsRel: STOCK_SKILLS_REL,
       verifiedFiles: verifiedStock,

@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {lstatSync,readFileSync,readdirSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+const root=import.meta.dirname,path='/home/littlekey/.config/opencode/plugin',s=lstatSync(path);
+assert.ok(s.isDirectory()&&!s.isSymbolicLink());assert.deepEqual(readdirSync(path),[],'legacy discovery directory changed since inspection');
+const hash=p=>createHash('sha256').update(readFileSync(p)).digest('hex');
+const record={at:new Date().toISOString(),specSha256:hash(join(root,'production/CANDIDATE.json')),baselineSha256:hash(join(root,'production/BASELINE.json')),additionalScopes:{plugin:{'':{type:'dir',mode:s.mode&0o777}}}};
+writeFileSync(join(root,'production/TRANSACTION-INPUTS.json'),JSON.stringify(record,null,2)+'\n',{flag:'wx',mode:0o600});
+console.log('Frozen the previously inspected empty legacy plugin directory; production unchanged.');

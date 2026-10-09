@@ -1,0 +1,36 @@
+{
+  "target": "skills/deepwork/SKILL.md",
+  "note": "BCP state, original-source handoff, risk-based review and user-authorized commit policy over stock 3.0.3. Keep the upstream pinned router, task directory, claim rules and bounded progress-file shape; Todo remains live execution status and durable files are recovery snapshots.",
+  "ops": [
+    {
+      "id": "todo-live-status",
+      "find": "files. Route content to one address: status, open items, one-line verdicts\n→ the progress file; full analyses and verdicts → a topic file;\ndeliverables (code, specs, data, docs) → real project paths; scratch\nintermediates → nowhere.",
+      "replace": "files. Keep live execution status and open items in the Todo. Keep durable\ndecisions, one-line verdicts and original evidence references in the task\nprogress file; use a topic file only when a durable artifact is needed.\nDeliverables (code, specs, data, docs) belong in real project paths."
+    },
+    {
+      "id": "snapshot-handoff-boundaries",
+      "find": "gone). Below: an open-items checklist (3–8 items) and a dated log folding\nevery closed phase or decision into one line — `[x] name: one-line\nconclusion (see <file>)`. Update at every phase close, decision, and\nreview, folding as you go; the head and log-line format are the only fixed\nshapes.",
+      "replace": "gone). Below: a dated recovery snapshot of decisions and evidence, with\none-line conclusions and original references. Refresh it at meaningful\nhandoff or recovery boundaries, folding as you go; do not maintain a second\ncontinuously synchronized checklist. Make the snapshot's age visible and\nconsult live execution status before resuming."
+    },
+    {
+      "id": "original-source-handoffs",
+      "find": "Full delegated output lands verbatim in\n`<task-slug>/<topic>.md` — written by the lane itself when it can write,\ntranscribed by the orchestrator when it cannot; the progress file gets\nonly a one-line conclusion plus the path. Never paste\n`@council`/`@oracle`/`@librarian` output into a progress file or fork\none. The artifact's first line is the lane's one-line conclusion, the\nsame line it returns; accept lane completion only after re-reading the\nartifact from disk and finding that first line (on miss, re-check once).",
+      "replace": "Retain delegated conclusions through original user-readable replies or\nlane-authored topic artifacts. Keep only a one-line conclusion and the\noriginal reference in the progress snapshot; do not transcribe full reports\ninto a second copy. Before acceptance or dependent dispatch, read the\noriginal source and check its exact version, evidence and limits. A retained\nreply or an artifact's first line alone is not semantic acceptance."
+    },
+    {
+      "id": "rg-status-discovery",
+      "find": "(`grep -m1 '^status:' .slim/deepwork/*/progress.md`)",
+      "replace": "(`rg -m 1 '^status:' .slim/deepwork/*/progress.md`)"
+    },
+    {
+      "id": "oracle-gates-from-risk",
+      "find": "- before dispatch, draft a phased implementation/delegation plan: a small number\n  of coherent phases from the work's dependencies and natural delivery\n  boundaries; do not split work merely to reduce an Oracle review's scope;\n- make an `@oracle` review mandatory after each phase; record the phase order,\n  specialist ownership, gate order, and one-line gate rationale in the deepwork\n  file; share a compact version with the user;",
+      "replace": "- before dispatch, choose a small number of coherent implementation phases from\n  the work's dependencies and natural delivery boundaries; do not split work\n  merely to reduce an Oracle review's scope;\n- schedule `@oracle` reviews from the work's goal and risk, not one mechanical\n  gate per phase; where accepted research or a prior review's evidence is still\n  valid for a phase, reference it instead of scheduling a fresh gate for\n  unchanged ground. Each scheduled gate keeps the 1 + 2 review budget below.\n  Record the phase order, specialist ownership, gate order, and one-line gate\n  rationale in the progress snapshot; share a compact version with the user;"
+    },
+    {
+      "id": "user-authorized-commits",
+      "find": "- create a focused commit when the phase is an independently valid delivery\n  boundary before starting the next phase;",
+      "replace": "- when the user requests checkpoints or integration, propose a focused commit\n  at an independently valid delivery boundary and create it only with explicit\n  authorization. Otherwise continue verified work without adding a commit\n  approval gate; deepwork never commits on its own initiative;"
+    }
+  ]
+}
