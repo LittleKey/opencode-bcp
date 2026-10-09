@@ -6,6 +6,10 @@ dist/
 
 # transient scratch from live drills
 harness/scratch/
+harness/live-agg/
+
+# transient snapshot dumps from verification drills (large artifacts, e.g. 166MB)
+snapshot/
 
 # raw run dumps (keep curated acceptance evidence + Phase A probe evidence)
 harness/runs/*
