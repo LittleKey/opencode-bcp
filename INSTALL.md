@@ -5,7 +5,7 @@ BCP 以单个 TypeScript 插件文件装入 opencode，无运行时依赖安装�
 ## 前置要求
 
 - [bun](https://bun.sh)（安装脚本用它构建产物）
-- opencode 1.x（最低 1.18.29，实际验证 1.18.33）或 opencode 2.0.20+（最低并实际验证 2.0.20）。同一个构建产物同时提供 v1 `server` 与 v2 `setup` 双入口，安装脚本检测宿主 major 后装入同一个文件；2.0.0 已通过发布复审并安装到现有 v1 生产配置，限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。最低版本声明不代表所有中间版本都已验证。
+- opencode 1.x（最低 1.18.29，实际验证 1.18.33；2026-10-09 已在 1.18.35 完成隔离重验与生产进程核验，见 [integrations/omo-slim/README.md](integrations/omo-slim/README.md)）或 opencode 2.0.20+（最低并实际验证 2.0.20）。同一个构建产物同时提供 v1 `server` 与 v2 `setup` 双入口，安装脚本检测宿主 major 后装入同一个文件；2.0.0 已通过发布复审并安装到现有 v1 生产配置，限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。最低版本声明不代表所有中间版本都已验证。
 
 ## 安装
 
@@ -57,7 +57,7 @@ rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 
 ## v1.20.0 编排集成（引用回执与 Council 宿主取证）
 
-（历史部署基线：本节描述 2.2.25 时代的 local-plugins 集成流程。当前 3.0.1 双宿主完整个人组合由 dotfiles runtime 流程管理，已安装到 v1 生产配置；原 UI 尚未重启。见 [docs/upgrade-v2.0.md](docs/upgrade-v2.0.md)。）
+（历史部署基线：本节描述 2.2.25 时代的 local-plugins 集成流程。当前 3.0.4 个人组合由 dotfiles runtime 流程管理，于 2026-10-11 磁盘安装到 v1 生产配置，用户重启后的 1.18.35 服务已于 2026-10-12 通过有界只读元数据核验（见 [integrations/omo-slim/README.md](integrations/omo-slim/README.md)）；此前 3.0.3 组合 2026-10-09 的生产进程核验为历史记录。见 [docs/upgrade-v2.0.md](docs/upgrade-v2.0.md)。）
 
 OMO 适配现在由三个自有源码文件组成（`omo-patch.mjs`、`omo-delivery.mjs`、`omo-council.mjs`，见 [integrations/omo-slim](integrations/omo-slim/README.md)）。部署流程随之变化：local-plugins 的 `build.mjs` 在构建时直接从本仓库 `integrations/omo-slim/` 同步这三个文件（`OPENCODE_BCP_SOURCE` 可覆盖源目录），不再存在需要手工同步的副本；更新本仓库后须重新执行 `node build.mjs` 并重启 OpenCode 才会驻留新行为。
 

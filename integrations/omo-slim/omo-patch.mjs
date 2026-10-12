@@ -23,6 +23,14 @@ export const OMO_TARGETS = {
       server: 'e31460f6c754370020717d70f4e2ba88ba8003e67ed59cc91ca599279d509e40',
     },
   },
+  '3.0.4': {
+    entries: {
+      // npm registry tarball oh-my-opencode-slim-3.0.4.tgz (exact-version pin,
+      // workarea install verified byte-identical to the prep extraction).
+      index: 'a34d6d4342a1c29bdd93a224c183220ea9ac8747ba463d5c609534a5e46bd248',
+      server: '03149fd3e9bf33f849b5766db470e98c8c5bf9addb785d5d37cee0fb6df2335e',
+    },
+  },
 };
 
 export function omoTargetFor(digest) {
@@ -880,9 +888,144 @@ function formatChildRef(ref) {`,
   },
 ];
 
+// 3.0.4 upstream renamed the shadowed v2 bundle locals back to their canonical
+// names (input/record/diagnostic — the server entry now matches the index
+// entry) and reshaped three delivery sites (task_result evidence fallback,
+// background notification anchor, native pin registry access). Only the deltas
+// below differ from PATCHES_3_0_3; every other anchor still matches both 3.0.4
+// entries byte-for-byte and is inherited unchanged.
+const PATCH_OVERRIDES_3_0_4 = {
+  'register-launch-now': {
+    // 3.0.4 keeps the unshadowed `pending` local, so the 3.0.1 plain form is
+    // correct again and the 3.0.3 pending2 override is neutralized.
+    anchor: PATCHES_3_0_1.find(patch => patch.id === 'register-launch-now').anchor,
+    replacement: PATCHES_3_0_1.find(patch => patch.id === 'register-launch-now').replacement,
+  },
+  'ack-injected-resume-call': {
+    anchor: 'let remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??',
+    replacement: 'if (input.callID) deps.acknowledgeInjectedResume?.(input.sessionID, requested, agentType);\n    let remembered = deps.backgroundJobBoard.resolveReusable(input.sessionID, requested, agentType) ??',
+  },
+  'hook-deps-wiring': {
+    anchor: '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      shouldManageSession:',
+    replacement: '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      directory: _ctx.directory,\n      acknowledgeInjectedResume: (parent, requested, agent) => acknowledgeInjectedNativeResume(injectionState, parent, requested, agent),\n      shouldManageSession:',
+  },
+  'native-terminal-reconcile': {
+    anchor: 'await deps.terminalGate.reconcile(record, {\n        kind: "output",',
+    replacement: 'const nativeSignal = {\n        kind: "output",',
+  },
+  'native-terminal-reconcile-loop': {
+    replacement: pick(PATCHES_3_0_1.find(patch => patch.id === 'native-terminal-reconcile-loop').replacement, 'index'),
+  },
+  'read-settlement-contrast': {
+    anchor: 'value.pendingRuntimeContrast.token = token;\n      return deferred(token, diagnostic);',
+    replacement: 'value.pendingRuntimeContrast.token = token;\n      return { ...deferred(token, diagnostic), retryAfter: readSettled };',
+  },
+  'read-settlement-blocked': {
+    anchor: 'return deferred(token, diagnostic);\n  }\n  async function read(key, token, operation)',
+    replacement: 'return { ...deferred(token, diagnostic), retryAfter: readSettled };\n  }\n  async function read(key, token, operation)',
+  },
+  'update-origin-merge': {
+    anchor: 'resultSummary: input.resultSummary ?? existing.resultSummary,\n      lastStatusError:',
+    replacement: 'resultSummary: input.resultSummary ?? existing.resultSummary,\n      bcpOrigin: input.bcpOrigin ?? existing.bcpOrigin,\n      lastStatusError:',
+  },
+  'foreground-delivery': {
+    anchor: pick(PATCHES_3_0_1.find(patch => patch.id === 'foreground-delivery').anchor, 'index'),
+    replacement: pick(PATCHES_3_0_1.find(patch => patch.id === 'foreground-delivery').replacement, 'index')
+      .replace('presentDelivery(output.output, metadata) + deliverySuffix(metadata)',
+        'presentRetainedChildDelivery(output.output, metadata, updated.parentSessionID)'),
+  },
+  'task-result-delivery': {
+    anchor: 'return current.resultSummary;\n        }\n        const read = await readUntrackedEvidence({ input: options2.input, readTimeoutMs: options2.readTimeoutMs }, taskID);',
+    replacement: `const metadata = await deliveryMetadata(options2.input.directory, current);
+          const afterDelivery = board.get(taskID);
+          if (afterDelivery?.generation !== current.generation || afterDelivery.terminalRevision !== current.terminalRevision || afterDelivery.activityRevision !== current.activityRevision)
+            throw new Error("Task changed while delivery metadata was inspected; retrieve its current result.");
+          return presentDelivery(current.resultSummary, metadata) + deliverySuffix(metadata);
+        }
+        const read = await readUntrackedEvidence({ input: options2.input, readTimeoutMs: options2.readTimeoutMs }, taskID);`,
+  },
+  'task-result-evidence-delivery': {
+    anchor: 'return completedText;\n      }\n    })\n  };\n}\n// src/tools/task-revive.ts',
+    replacement: `const metadata = await deliveryMetadata(options2.input.directory, { taskID, parentSessionID, state: "completed", bcpOrigin: evidence.bcpOrigin });
+         return completedText + deliverySuffix(metadata);
+      }
+    })
+  };
+}
+// src/tools/task-revive.ts`,
+  },
+  'notify-delivery-metadata': {
+    anchor: 'const text = [\n        `<task id="${run.taskID}" state="${state}">`,',
+    purpose: 'Background terminal notifications carry verified delivery metadata; a failed post-await freshness comparison suppresses the notification before presentation and transport.',
+    // The metadata await must not leak a stale receipt: re-verify the full
+    // generation/terminal/activity triple as a synchronous statement AFTER the
+    // enclosing await resolves — never inside a .then continuation, where a
+    // microtask queued during metadata resolution can slip between the
+    // comparison and the notifier's resumption. A failure throws a sentinel
+    // that suppresses the notification entirely — no presentation, no
+    // transport send, no retry scheduling for an already-known-stale output.
+    // Lease release and pending-flag cleanup stay in the upstream finally
+    // block; the await happens after lease acquisition, before send.
+    replacement: 'const bcpMetadata = await deliveryMetadata(options2.input.directory, record);\n      {\n        const latest = options2.backgroundJobBoard.get(record.taskID);\n        if (!latest || latest.generation !== record.generation || latest.terminalRevision !== record.terminalRevision || latest.activityRevision !== record.activityRevision) {\n          const superseded = new Error("Execution changed while the terminal notification was inspected; its captured output is stale.");\n          superseded.bcpNotificationSuperseded = true;\n          throw superseded;\n        }\n      }\n      const text = [\n        `<task id="${run.taskID}" state="${state}">`,',
+  },
+  'notify-delivery-body': {
+    anchor: 'record.resultSummary ?? (state === "completed" ? "Completed." : "Failed."),\n        `</${tag}>`,\n        "</task>"',
+    replacement: 'presentDelivery(record.resultSummary ?? (state === "completed" ? "Completed." : "Failed."), bcpMetadata),\n        `</${tag}>`,\n        "</task>",\n        deliverySuffix(bcpMetadata)',
+  },
+  'revive-render-signature': {
+    anchor: 'function renderReviveOutput(idParam, record, admissionUnknown = false) {',
+    replacement: 'async function renderReviveOutput(idParam, record, admissionUnknown = false, directory, board) {',
+  },
+  'revive-render-delivery': {
+    replacement: pick(PATCHES_3_0_1.find(patch => patch.id === 'revive-render-delivery').replacement, 'index'),
+  },
+  'native-pin-instance-call': {
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP, '          applyAgentToDraft(draft, name, cfg, registry.nativePolicies[name]?.rules);'),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP, '          applyAgentToDraft(draft, name, cfg, registry.nativePolicies[name]?.rules, nativeAgentWrites);'),
+  },
+  'readonly-result-delivery': {
+    anchor: readonlyResultBody('record'),
+    replacement: readonlyDeliveryBody('record'),
+  },
+};
+
+// 3.0.4-specific patches that have no 3.0.3 ancestor:
+// - notify-suppressed-catch: the notification catch block gains an explicit
+//   suppression branch for the freshness sentinel thrown by
+//   notify-delivery-metadata, so a known-stale notification is dropped
+//   instead of being retried against an execution that already moved on.
+// - notify-currentness-activity: notification currentness includes the board
+//   activity revision. This closes the transport-wrapper deferral window: the
+//   wrapper schedules the send operation in a later microtask, so a change
+//   that lands after the post-await comparison is caught at the send boundary.
+//   Because upstream re-uses isCurrentNotification in the send-boundary check,
+//   the acceptance callback and the retry guard, this single addition also
+//   keeps a raced acceptance from marking a stale delivery as sent and keeps
+//   the catch-path retry guard from re-arming a stale notification.
+const PATCHES_3_0_4_ADDITIONS = [
+  {
+    id: 'notify-suppressed-catch',
+    purpose: 'A failed post-await freshness comparison suppresses the terminal notification before presentation and transport without scheduling stale retries; lease release and pending-flag cleanup stay in the upstream finally block.',
+    anchor: '    } catch (error) {\n      log("[revived-run-tracker] notification failed", {\n        taskID: run.taskID,\n        generation: run.generation,\n        parentSessionID: run.parentSessionID,\n        attempt,\n        timedOut: error instanceof NotificationTransportTimeoutError,\n        error: stringifyError(error)\n      });\n      scheduleNotificationRetry(run, record, notification);\n    } finally {',
+    replacement: '    } catch (error) {\n      if (error?.bcpNotificationSuperseded) {\n        log("[revived-run-tracker] notification suppressed: execution changed during metadata inspection", {\n          taskID: run.taskID,\n          generation: run.generation,\n          parentSessionID: run.parentSessionID,\n          attempt\n        });\n      } else {\n        log("[revived-run-tracker] notification failed", {\n          taskID: run.taskID,\n          generation: run.generation,\n          parentSessionID: run.parentSessionID,\n          attempt,\n          timedOut: error instanceof NotificationTransportTimeoutError,\n          error: stringifyError(error)\n        });\n        scheduleNotificationRetry(run, record, notification);\n      }\n    } finally {',
+  },
+  {
+    id: 'notify-currentness-activity',
+    purpose: 'Notification currentness includes the board activity revision, so an activity-only change invalidates the send-boundary check, the acceptance callback and the retry guard — no stale output is delivered, marked sent, or re-armed for retry.',
+    anchor: 'return !disposed && runs.get(run.taskID) === run && run.notification === notification && run.generation === record.generation && run.terminalRevision === record.terminalRevision && current?.generation === record.generation && current.terminalRevision === record.terminalRevision && run.terminalState === record.state && terminalOutcome(current) === record.state;',
+    replacement: 'return !disposed && runs.get(run.taskID) === run && run.notification === notification && run.generation === record.generation && run.terminalRevision === record.terminalRevision && current?.generation === record.generation && current.terminalRevision === record.terminalRevision && current?.activityRevision === record.activityRevision && run.terminalState === record.state && terminalOutcome(current) === record.state;',
+  },
+];
+
+export const PATCHES_3_0_4 = [
+  ...PATCHES_3_0_3.map(patch => ({ ...patch, ...PATCH_OVERRIDES_3_0_4[patch.id] })),
+  ...PATCHES_3_0_4_ADDITIONS,
+];
+
 export function describeOmoPatches(version) {
   if (version === '3.0.1') return PATCHES_3_0_1.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.3') return PATCHES_3_0_3.map(({id, purpose}) => ({id, purpose}));
+  if (version === '3.0.4') return PATCHES_3_0_4.map(({id, purpose}) => ({id, purpose}));
   if (version === '2.2.25') return [{id: 'legacy-2.2.25', purpose: 'Full 2.2.25 patch set (rollback-compatible legacy path).'}];
   throw new Error('Unsupported OMO version: ' + version);
 }
@@ -897,7 +1040,7 @@ function patchOmo3(original, version, entry) {
   }
   // Upstream Council procedure text (steps 1–5) is intentionally left untouched:
   // 3.0.1 keeps upstream Council byte-identical, no private agenda is spliced in.
-  for (const patch of version === '3.0.3' ? PATCHES_3_0_3 : PATCHES_3_0_1) {
+  for (const patch of version === '3.0.4' ? PATCHES_3_0_4 : version === '3.0.3' ? PATCHES_3_0_3 : PATCHES_3_0_1) {
     once(pick(patch.anchor, entry), pick(patch.replacement, entry));
   }
   return DELIVERY_IMPORT + source;

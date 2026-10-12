@@ -41,6 +41,7 @@ export const OMO_HELPER_FILES = {
   '2.2.25': ['omo-delivery.mjs', 'omo-council.mjs'],
   '3.0.1': ['omo-delivery.mjs'],
   '3.0.3': ['omo-delivery.mjs'],
+  '3.0.4': ['omo-delivery.mjs'],
 };
 export const omoHelperFiles = version => {
   const files = OMO_HELPER_FILES[version];
@@ -511,7 +512,7 @@ export async function buildOmoIntegration({
   let zod;
   let vendor;
   if (entry === 'index') {
-    if (version === '3.0.1' || version === '3.0.3') {
+    if (version === '3.0.1' || version === '3.0.3' || version === '3.0.4') {
       const vendored = vendor3_0_1_IndexExternals({bundle, packageDir, outputDir});
       bundle = vendored.bundle;
       vendor = vendored.vendor;
@@ -545,7 +546,7 @@ export async function buildOmoIntegration({
   // ships none of this.
   let closure;
   let resources;
-  if (version === '3.0.1' || version === '3.0.3') {
+  if (version === '3.0.1' || version === '3.0.3' || version === '3.0.4') {
     const roots = CLOSURE_ROOT_SPECIFIERS[entry];
     validateBundleSpecifiers({
       bundle,

@@ -1,6 +1,18 @@
-# OMO Slim 摘要锁定构建（2.2.25 / 3.0.1 / 3.0.3）
+# OMO Slim 摘要锁定构建（2.2.25 / 3.0.1 / 3.0.3 / 3.0.4）
 
 macOS 普通上游安装的构建、隔离试装与限制见 [MACOS-TRIAL.md](MACOS-TRIAL.md)。现有个人 Linux 升级事务不是通用跨机器安装器。
+
+## 3.0.4 已完成磁盘安装与重启后受限验收（2026-10-11 安装，2026-10-12 验收）
+
+构建器现支持 `version: '3.0.4'` 的 index/server 双入口。锁定的上游 index SHA-256 为 `a34d6d4342a1c29bdd93a224c183220ea9ac8747ba463d5c609534a5e46bd248`，server 为 `03149fd3e9bf33f849b5766db470e98c8c5bf9addb785d5d37cee0fb6df2335e`。未知摘要与非唯一补丁锚点仍拒绝构建。3.0.4 补丁集 = 43 项唯一锚点补丁：24 项沿用 3.0.3 原文，17 项因上游重构适配（上游重命名了 v2 bundle 中被遮蔽的局部变量，部分锚点文本因此不同于 3.0.3 版本），2 项为 3.0.4 新增路径补丁（含通知 currentness 边界扩展 `notify-currentness-activity`，把终态通知的新鲜度比较封闭到元数据 await 之后及发送/接受边界，闭合该比较竞态；sentinel 抑制与上游重试语义不变）。3.0.3/3.0.1/2.2.25 构建不受影响。
+
+产物（artifact-r3，位于 `.slim/omo-3.0.4-upgrade-20261011/artifact-r3/omoPlugin/`）：dist/index.js `060e169bd20e6286b4a10cb3f04963ca3f27b6e93fa816bbcc96481cc4bd86b6`、dist/server/index.js `dfb98115965d3330aeeb2d8d5a1d560d13ef14a3a485afea5fde2bdd6bc16a29`、omo-delivery.mjs `ce4344c47d41dec4dbc4b5fe1d8a49b764d0ffb0941757577161518f77421c99`（不变）、ARTIFACT.json `a768826fa932417e15739c37254e197ea4780fc545336ef5df635e7618d65705`。2023 个 union 文件经完整校验器核验，161 项摘要声明独立重哈希零偏差；r1/r2 产物保留。独立复审 PASS（竞态修复经独立针对性执行验证）——该复审是产物有界结论，不是部署验收。构建与验证记录见 [REPORT.md](../../.slim/omo-3.0.4-upgrade-20261011/artifact-r3/logs/REPORT.md)。
+
+测试：`test/omo-3.0.4.test.mjs` 15 项通过（`node --test --test-concurrency=1`，通知 harness 使用真实 transport 包装、isCurrentNotification、重试调度器与错误映射）；3.0.3 固定夹具回归 9 项通过。已知限制如实保留：2 项真实 v1/v2 环境门控跳过；12 项历史缺夹具失败（agent-defaults/native-pin，`.slim/deepwork` 夹具已移除）未重跑——不据此声称完整测试套件通过。
+
+磁盘安装（2026-10-11）在个人 runtime 的授权事务中完成：入站组件先在插件发现之外完整核验（4052 项 sha+mode），旧 3.0.3 组件原子归档至 `install-prep/archive/omoPluginV1-pre-omo304` 后换入新组件，无删除优先步骤；安装权威换为 `a9478a5c3536965f1883b3a976aeba411b696b2ccc70e6507de9617da8482d61`（4110 条记录全部对实树重核验，绑定 manifest `1ef3c7675b12ff9aa4d8958243cf5a85d394c36be7b089a1e55a6e895d3fbf76`），退役的 `eli5` 技能目录同事务移除。安装当日宿主进程只记录、未发信号（在线会话当时仍可能由归档的 3.0.3 组件提供服务）。用户已于 2026-10-12 重启，随后的只读重启后验收通过：实际服务的 1.18.35 进程（OpenChamber 托管，核验时 pid 238858）13/13 项元数据检查全部通过——宿主版本恰为 1.18.35、9/9 角色注册、9 项服务端角色 prompt SHA-256 与隔离分体冒烟证据逐一致、9/9 模型/变体与合并个人预设一致、5 份 `*_append.md` 每角色恰好一次、16/16 只读拒绝规则、49 项技能服务中 18 项磁盘个人技能与磁盘内容一致且 `executing-plans`/`writing-plans`/`eli5` 三项退役技能全部缺席；权威与入口摘要在查询后未变。运行时 API 不暴露插件版本字段：3.0.4 身份由磁盘组件摘要加新进程/服务元数据证据支撑，不以运行时版本字符串或普适行为为依据。摘要绑定报告为机器本地文件 `.slim/omo-3.0.4-upgrade-20261011/install-prep/evidence/post-restart-verification.json`（SHA-256 `080d003e70d1245a985fa2ecfa92fe6a94cd091218891d5cbf25fb35466bab6a`）。隔离 1.18.35 冒烟（27 项）与产物复审均不构成服务运行时验收；本次验收为有界元数据验收，完整压缩恢复、真实模型轮次与 v2 宿主生命周期仍在验收范围之外。安装侧证据见个人 runtime 仓库的 `opencode/runtime/README.md`。
+
+技能生成器未新增 3.0.4 支持（有意不添加；stock 覆盖生成仍拒绝未 pin 的包版本，要求重新比对覆盖并重 pin 后才允许升级）。个人安装器不使用 build-skills 的 stock 覆盖路径，也不应以别名绕过，应继续使用提交的完整生成树。上游 `src/skills` 在 3.0.3↔3.0.4 间零差异（18 项字节相同），打包技能清单不变。
 
 ## 3.0.3 已安装并通过重载验收（2026-10-09）
 
@@ -14,7 +26,7 @@ macOS 普通上游安装的构建、隔离试装与限制见 [MACOS-TRIAL.md](MA
 
 ## 历史版本与验收记录
 
-以下描述保留各版本当时的部署与验证范围；当前 3.0.3 状态与限制以上文为准。
+以下描述保留各版本当时的部署与验证范围；当前 3.0.4 状态与限制以上文为准。
 
 本目录保存已部署适配的三个自有源码文件：`omo-patch.mjs`、`omo-delivery.mjs`、`omo-council.mjs`。当前部署不再手工复制：`~/.config/opencode/local-plugins/build.mjs` 在构建时从本目录同步这三个文件（`OPENCODE_BCP_SOURCE` 可覆盖源目录），因此本目录是唯一源，local-plugins 内为构建副本。v1.13 沿用 v1.12 的 OMO 终态与通知接线，BCP 桥内增加经授权的最终正文留存。上游 OMO bundle、用户配置和生成产物不提交到本仓库。
 
