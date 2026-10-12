@@ -20,8 +20,8 @@ describe("scripts/build.sh: builder CLI and artifacts", () => {
     expect(existsSync(join(REPO, "dist", "plugin.js"))).toBe(false)
   })
 
-  test("package version is 2.0.0 and stays private/unpublished", () => {
-    expect(PKG.version).toBe("2.0.0")
+  test("package version is 2.0.1 and stays private/unpublished", () => {
+    expect(PKG.version).toBe("2.0.1")
     expect(PKG.private).toBe(true)
     expect(PKG.name).toBe("opencode-bcp")
   })
@@ -42,7 +42,7 @@ describe("scripts/build.sh: builder CLI and artifacts", () => {
 
   test("bundle carries provenance banner and no runtime @opencode/* import", () => {
     const src = readFileSync(bundle, "utf8")
-    expect(src).toContain("@opencode-bcp-generated v2.0.0 dual-entry bundle")
+    expect(src).toContain("@opencode-bcp-generated v2.0.1 dual-entry bundle")
     expect(src).toContain("server=v1 >=1.18.29")
     expect(src).not.toMatch(/from\s+["']@opencode/)
     // both entry implementations must be reachable in the single artifact

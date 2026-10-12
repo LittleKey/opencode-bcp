@@ -25,6 +25,10 @@ const BOARD_INDEX_DECLARATION = "（目录与摘要为检索提示；除非逐�
 // §11.3 默认空流条件提示（v1.4.9 Q1，:436-443 逐字常量文案，不含板数据）
 const EMPTY_OWN_STREAM_HINT =
   "This session's own stream is empty. Other authorized streams are listed in `other_streams`; select `stream` explicitly if needed."
+const GET_HINT_MALFORMED =
+  "Malformed bb:// ID. Re-copy the intended record's full ID verbatim from the original board_store receipt or board_index output; do not retype it from memory."
+const GET_HINT_NOT_FOUND =
+  "May be mistranscribed, nonexistent, or not visible to you. If it arrived in a brief or summary, re-copy the intended record's full ID verbatim from the original board_store receipt or board_index output — do not guess or edit. If it cannot be reconfirmed, report the failed ID back instead of substituting."
 
 // 参数级认知指引（DESIGN §11.6 :498-505，逐字）：只补最易误用的四参数（I3）。
 const putArgs = z.object({
@@ -177,14 +181,14 @@ export function defineBoardTools(deps: {
         try {
           t = parseBbId(id)
         } catch {
-          return { id, status: "not_found", detail: "malformed_id" }
+          return { id, status: "not_found", detail: "malformed_id", hint: GET_HINT_MALFORMED }
         }
         const policy = refPolicy(authz, { scopeId: t.scopeId, streamId: t.streamId })
         if (policy === "forbidden") return { id, status: "forbidden" }
-        if (policy === "hidden") return { id, status: "not_found" }
+        if (policy === "hidden") return { id, status: "not_found", hint: GET_HINT_NOT_FOUND }
         const g = resolved.scope.getById(id)
         if (g.status === "unavailable") return { id, status: "unavailable" }
-        if (g.status === "not_found") return { id, status: "not_found" }
+        if (g.status === "not_found") return { id, status: "not_found", hint: GET_HINT_NOT_FOUND }
         // nav 边逐边授权，不假设同流（防御性纵深；covered_by 同 superseded_by 规则，fix-6）
         let superseded_by: string | null = null
         let covered_by: string | null = null
@@ -211,7 +215,19 @@ export function defineBoardTools(deps: {
         return { id, status: "found", record: g.record, hash: `sha256:${g.hash}`, nav: { superseded_by, covered_by },
           ...(artifacts.length ? { artifacts, artifact_check: artifacts.every(a => a.status === "verified") ? "verified_bytes_only" : "incomplete" } : {}) }
       })
-      return `${JSON.stringify(results, null, 2)}\n${BOARD_DATA_DECLARATION}`
+      let hintsLeft = 3
+      const capped = results.map((r) => {
+        if (r.status === "not_found" && "hint" in r) {
+          if (hintsLeft > 0) {
+            hintsLeft--
+            return r
+          }
+          const { hint, ...rest } = r
+          return rest
+        }
+        return r
+      })
+      return `${JSON.stringify(capped, null, 2)}\n${BOARD_DATA_DECLARATION}`
     },
   }
 
