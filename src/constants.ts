@@ -3,7 +3,7 @@
 // 自动注入仅剩聚合压力提醒（模板②）；决策规则改为常驻工具描述文案。
 // 本文件常量文案逐字节取自 DESIGN，禁止改写（test/constants.test.ts golden 校验）。
 
-/** §11.6 工具描述认知契约（v1.9.1 同版本核对复用；保留 v1.8.8 长内容拆分建议）：board_put / board_get / board_index 为 §11.6 ```text golden 逐字节；board_aggregate 无文案契约（§11.6 注），维持既有中文描述不变。 */
+/** §11.6 工具描述认知契约（v1.9.1 同版本核对复用；保留 v1.8.8 长内容拆分建议）：board_put / board_get / board_index 为 §11.6 ```text golden 逐字节；board_aggregate 无文案契约（§11.6 注），维持既有中文描述不变（v1.21.0 批量下限 8→4，描述文本同步 4–16）。 */
 export const TOOL_DESCRIPTIONS = {
   board_put:
     "Before returning any task result, publish or reuse one board handoff for that result.\n" +
@@ -23,7 +23,7 @@ export const TOOL_DESCRIPTIONS = {
     "If required prior decisions or findings lack sources, search authorized\n" +
     "streams by keyword or ask the delegator. A miss is not proof of absence:\n" +
     "report gaps, do not guess. Avoid speculative searches for extra dependencies.",
-  board_aggregate: "把本流 8–16 条旧目录项折叠为一个索引摘要（仅目录折叠，原条目可继续 board.get）",
+  board_aggregate: "把本流 4–16 条旧目录项折叠为一个索引摘要（仅目录折叠，原条目可继续 board.get）",
 }
 
 /** §11.6 task 段全文（v1.9.1 引用 board_get 核对规则；v1 `task` 与 v2 `subagent` 同一份文本，§11.7/§16.4-1）。 */

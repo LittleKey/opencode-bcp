@@ -55,7 +55,7 @@ const indexArgs = z.object({
 })
 
 const aggregateArgs = z.object({
-  member_ids: z.array(z.string()).min(8).max(16),
+  member_ids: z.array(z.string()).min(4).max(16),
   description: z.string(),
   navigation_body: z.string(),
 })

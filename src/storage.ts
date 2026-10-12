@@ -37,7 +37,7 @@ import { recentKnowledgeIds } from "./indexing"
 export const DEFAULT_QUOTA_BYTES = 536870912 // 512 MiB
 export const LOCK_RETRY_MS = 20
 export const LOCK_RETRY_MAX = 250 // 锁为内核 flock，无陈旧回收常量（P10）
-export const AGG_BATCH_MIN = 8
+export const AGG_BATCH_MIN = 4 // §8.1 [第九轮修订]（v1.21.0）：下限 8→4
 export const AGG_BATCH_MAX = 16
 export const AGG_TRIGGER_VISIBLE = 24          // §8.1：>24 可见目录项
 export const AGG_TRIGGER_SUM_DESC_BYTES = 4096 // §8.1：描述合计 >4 KiB
@@ -104,7 +104,7 @@ export type PutResult =
 
 export type AggregateArgs = {
   writer: Writer                 // 工具层取自 ToolContext；存储层按 §8.4 校验与每个成员原始作者双字段相等
-  memberIds: string[]            // 8–16 个本流 bb:// id
+  memberIds: string[]            // 4–16 个本流 bb:// id
   description: string            // 目录描述（1–80 code points，单行）
   navigationBody: string         // 导航正文（UTF-8 Markdown ≤256 KiB）
 }

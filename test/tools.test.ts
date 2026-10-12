@@ -542,11 +542,11 @@ describe("tools", () => {
   })
 
   // t-agg-6
-  test("t-agg-6: zod 边界——member_ids 7/17 → ZodError", async () => {
+  test("t-agg-6: zod 边界——member_ids 3/17 → ZodError", async () => {
     const scope = makeScope("ta6")
     const s1 = scope.registerSession("s1", "build")
     const { tools } = stub(scope, s1.streamId)
-    await expect(tools.board_aggregate.execute(CTX, aggArgs(placeholderIds(7)))).rejects.toThrow()
+    await expect(tools.board_aggregate.execute(CTX, aggArgs(placeholderIds(3)))).rejects.toThrow()
     await expect(tools.board_aggregate.execute(CTX, aggArgs(placeholderIds(17)))).rejects.toThrow()
   })
 })

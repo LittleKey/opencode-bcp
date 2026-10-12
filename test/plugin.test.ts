@@ -992,9 +992,9 @@ describe("plugin", () => {
       return { scope, streamId }
     }
     const plain = (count: number) => Array.from({ length: count }, (_, i) => `旧记录 ${i}`)
-    // eligible 7 → aggregateCandidates null
-    const s7 = unitScope("ses_b7", plain(13))
-    expect(aggregateCandidates(s7.scope, s7.streamId, caller, 49)).toBeNull()
+    // eligible 3（v1.21.0 前下限 8 时用 7 测 null）→ aggregateCandidates null
+    const s3 = unitScope("ses_b3", plain(9))
+    expect(aggregateCandidates(s3.scope, s3.streamId, caller, 49)).toBeNull()
     // 可见 24 → 门槛 null；25 → 非 null
     const s24 = unitScope("ses_b24", plain(24))
     const c24 = aggregateCandidates(s24.scope, s24.streamId, caller, 49)
@@ -1002,7 +1002,7 @@ describe("plugin", () => {
     expect(gate(c24)).toBeNull()
     const s25 = unitScope("ses_b25", plain(25))
     expect(gate(aggregateCandidates(s25.scope, s25.streamId, caller, 49))).not.toBeNull()
-    // 字节 4096 → 门槛 null；4097 → 非 null（17 条：eligible 11 ≥ 8、visible 17 ≤ 24；CJK 3B/字）
+    // 字节 4096 → 门槛 null；4097 → 非 null（17 条：eligible 11 ≥ 4、visible 17 ≤ 24；CJK 3B/字）
     const d256 = "汉".repeat(85) + "x" // 256 B
     const d128 = "汉".repeat(42) + "ab" // 128 B
     const s4096 = unitScope("ses_b96", [...Array.from({ length: 15 }, () => d256), d128, d128])

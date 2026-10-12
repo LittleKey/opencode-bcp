@@ -59,10 +59,10 @@ describe("认知契约常量 golden（DESIGN §11.6）", () => {
     expect(TOOL_DESCRIPTIONS.board_index).toBe(blocks[2])
   })
 
-  // §11.6 注：board_aggregate 无文案契约（不在 §11.6 文案契约范围），维持既有描述文本不变
-  test("board_aggregate description 维持既有文本不变（注记口径）", () => {
+  // §11.6 注：board_aggregate 无文案契约（不在 §11.6 文案契约范围）；v1.21.0 批量下限 8→4，描述文本同步
+  test("board_aggregate description 与 v1.21.0 批量下限口径逐字相等（注记口径）", () => {
     expect(TOOL_DESCRIPTIONS.board_aggregate).toBe(
-      "把本流 8–16 条旧目录项折叠为一个索引摘要（仅目录折叠，原条目可继续 board.get）",
+      "把本流 4–16 条旧目录项折叠为一个索引摘要（仅目录折叠，原条目可继续 board.get）",
     )
   })
 

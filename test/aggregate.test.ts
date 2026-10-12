@@ -136,14 +136,14 @@ describe("aggregate", () => {
   })
 
   // agg-3
-  test("数量边界：7 → batch_size_7；16 合法通过；17 → batch_size_17", () => {
+  test("数量边界：3 → batch_size_3；16 合法通过；17 → batch_size_17", () => {
     const { scope, streamId } = setup()
     const seeded = seedAged(scope, streamId, 23) // 17 可用 + 6 近期尾部
     admitRounds(scope, streamId, 49)
     const ids = seeded.map((s) => s.id)
-    expect(scope.aggregate(streamId, aggArgs(ids.slice(0, 7)))).toEqual({
+    expect(scope.aggregate(streamId, aggArgs(ids.slice(0, 3)))).toEqual({
       status: "invalid",
-      errors: [{ id: "*", reason: "batch_size_7" }],
+      errors: [{ id: "*", reason: "batch_size_3" }],
     })
     expect(scope.aggregate(streamId, aggArgs(ids.slice(0, 17)))).toEqual({
       status: "invalid",
@@ -151,6 +151,16 @@ describe("aggregate", () => {
     })
     const r16 = scope.aggregate(streamId, aggArgs(ids.slice(0, 16)))
     expect(r16.status).toBe("aggregated")
+  })
+
+  // agg-3b（v1.21.0：批量下限 8→4）
+  test("下限边界：4 条 eligible 批次合法通过", () => {
+    const { scope, streamId } = setup()
+    const seeded = seedAged(scope, streamId, 10) // 4 可用 + 6 近期尾部
+    admitRounds(scope, streamId, 49)
+    const ids = seeded.map((s) => s.id)
+    const r4 = scope.aggregate(streamId, aggArgs(ids.slice(0, 4)))
+    expect(r4.status).toBe("aggregated")
   })
 
   // agg-4
