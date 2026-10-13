@@ -8,11 +8,13 @@ import { join } from "node:path"
 import { openScopeForRoot, faultHook, type Scope, type AggregateArgs } from "../src/storage"
 import { buildRecordBytes, recordHash, type BbRecord } from "../src/schema"
 import { formatBbId, entryFileName } from "../src/ids"
+import { defineBoardTools, type BoardToolContext } from "../src/tools"
 import { aggregateCandidates, candidateSetIdOf } from "../src/aggregate"
 import { listIndex, snapshotCounts } from "../src/indexing"
 
 const AUTHOR = { sessionId: "agg-author", agent: "build" }
 const NAV_BODY = "# 导航\n- 成员列表见 members"
+const CTX_AGG: BoardToolContext = { sessionID: AUTHOR.sessionId, agent: AUTHOR.agent, messageID: "agg-read" }
 
 const dirs: string[] = []
 function tempDir(): string {
@@ -114,6 +116,9 @@ describe("aggregate", () => {
     expect(rec.summary_basis).toBe("descriptions")
     expect(rec.members).toHaveLength(8)
     expect(rec.members!.map((m) => m.hash)).toEqual(members.map((m) => m.hash))
+    // 成员附标题快照：description = 聚合时成员原记录 description 逐字相等；content = navigation_body 原文
+    expect(rec.members!.map((m) => m.description)).toEqual(members.map((_, i) => `aged 记录 ${i + 1}`))
+    expect(rec.content).toBe(NAV_BODY)
     expect(scope.readMeta(streamId).high_water).toBe(before + 1)
   })
 
@@ -378,7 +383,10 @@ describe("aggregate", () => {
     const meta0 = scope.readMeta(streamId)
     const seq = meta0.high_water + 1
     const id = formatBbId(scope.config.scope_id, streamId, seq)
-    const members = batchA.map((mid) => ({ id: mid, hash: seeded.find((s) => s.id === mid)!.hash }))
+    const members = batchA.map((mid) => {
+      const seed = seeded.find((s) => s.id === mid)!
+      return { id: mid, hash: seed.hash, description: `aged 记录 ${seeded.indexOf(seed) + 1}` }
+    })
     const summary: BbRecord = {
       schema_version: 1, id, scope_id: scope.config.scope_id, stream_id: streamId, sequence: seq,
       writer: aggWriter(), created_at: new Date().toISOString(), created_round: 49,
@@ -450,5 +458,41 @@ describe("aggregate", () => {
     expect(g.status).toBe("found")
     if (g.status !== "found") return
     expect((g.record.members ?? []).map((m) => m.id)).not.toContain(r.id)
+  })
+
+  // agg-15（成员附标题快照）：旧格式摘要记录（members 缺 description 字段）读取兼容
+  test("旧格式摘要（members 仅 id+hash）读取兼容：readEntry/getById/board_get 不报错且不注入 description", async () => {
+    const { scope, streamId } = setup()
+    const seeded = seedAged(scope, streamId, 14)
+    admitRounds(scope, streamId, 49)
+    // 手工构造旧格式摘要 entry：members 仅 {id, hash}，无 description 键
+    const seq = scope.readMeta(streamId).high_water + 1
+    const legacyMembers = seeded.slice(0, 8).map((m) => ({ id: m.id, hash: m.hash }))
+    const summary: BbRecord = {
+      schema_version: 1, id: formatBbId(scope.config.scope_id, streamId, seq),
+      scope_id: scope.config.scope_id, stream_id: streamId, sequence: seq,
+      writer: aggWriter("legacy-agg"), created_at: new Date().toISOString(), created_round: 49,
+      description: "旧格式聚合摘要", content: NAV_BODY,
+      kind: "index_summary", members: legacyMembers, summary_basis: "descriptions",
+    }
+    writeFileSync(join(scope.dir, "streams", streamId, "entries", entryFileName(seq)), buildRecordBytes(summary))
+    // readEntry：解析成功、members 原样保留（读取层不注入 description 默认值，P15）
+    const item = scope.readEntry(streamId, seq)
+    expect(item?.kind).toBe("index_summary")
+    expect(item?.members).toEqual(legacyMembers)
+    expect(item?.members!.every((m) => !("description" in m))).toBe(true)
+    // getById（board_get 底层读入口）：found 且 hash = 落盘字节 recordHash
+    const g = scope.getById(summary.id)
+    expect(g.status).toBe("found")
+    if (g.status !== "found") return
+    expect(g.hash).toBe(recordHash(scope.readEntryBytes(streamId, seq)!))
+    expect(g.record.members!.every((m) => !("description" in m))).toBe(true)
+    // board_get 工具读路径不报错，旧格式 record 原样透出
+    const tools = defineBoardTools({ resolveScope: async () => ({ scope, streamId, isolated: false }), log: () => {} })
+    const out = await tools.board_get.execute(CTX_AGG, { ids: [summary.id] })
+    const arr = JSON.parse(out.slice(0, out.indexOf("\n（"))) as { id: string; status: string; record: BbRecord }[]
+    expect(arr).toHaveLength(1)
+    expect(arr[0]!.status).toBe("found")
+    expect(arr[0]!.record.members).toEqual(legacyMembers)
   })
 })

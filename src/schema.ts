@@ -12,8 +12,12 @@ export const CONTENT_MAX_BYTES = 262144
 export type Writer = { agent: string; session_id: string; message_id: string }
 export type CaptureOrigin = { kind: "host_final" | "host_stage"; input_message_id: string; text_sha256: string; message_completed_at?: number; stage_boundary?: import("./reply").StageBoundary; requested_by?: Writer; source_errors?: string[]; file_bindings?: { path: string; ref: string; native_edit?: true }[] }
 
-/** 聚合成员投影（仅 index_summary 记录携带；hash = 成员 entry 落盘字节的 sha256） */
-export type AggregateMember = { id: string; hash: string }
+/**
+ * 聚合成员投影（仅 index_summary 记录携带；hash = 成员 entry 落盘字节的 sha256）。
+ * description = 成员聚合时的原 description 逐字快照（仅导航呈现，不进入 content、不参与 content 搜索）；
+ * 旧格式摘要记录可缺失该字段（读取兼容）。
+ */
+export type AggregateMember = { id: string; hash: string; description?: string }
 
 export type BbRecord = {
   schema_version: number

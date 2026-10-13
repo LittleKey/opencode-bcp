@@ -619,7 +619,7 @@ export class Scope {
           callerSessionId: args.writer.session_id, callerAgent: args.writer.agent,
         })
         if (cls.status !== "eligible") { errors.push({ id: idStr, reason: cls.reason }); continue }
-        members.push({ id: idStr, hash: g.hash })
+        members.push({ id: idStr, hash: g.hash, description: rec.description })
       }
       if (errors.length > 0) return { status: "invalid", errors }
       const seq = meta0.high_water + 1
