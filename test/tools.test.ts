@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { openScopeForRoot, type Scope } from "../src/storage"
 import { formatBbId } from "../src/ids"
-import { defineBoardTools, type BoardToolContext } from "../src/tools"
+import { defineBoardTools, explainAggReason, type BoardToolContext } from "../src/tools"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -519,6 +519,8 @@ describe("tools", () => {
     const second = await tools.board_aggregate.execute(CTX, aggArgs(members.map((m) => m.id)))
     expect(second.startsWith("rejected: aggregate_invalid")).toBe(true)
     for (const m of members) expect(second).toContain(`- ${m.id}: already_covered`)
+    // 解释保护：至少一处完整成员行断言（含英文解释），删掉 AGG_REASON_EXPLANATIONS 时此断言失败
+    expect(second).toContain(`- ${members[0]!.id}: already_covered (already folded under an existing summary)`)
   })
 
   // t-agg-5
@@ -548,5 +550,44 @@ describe("tools", () => {
     const { tools } = stub(scope, s1.streamId)
     await expect(tools.board_aggregate.execute(CTX, aggArgs(placeholderIds(3)))).rejects.toThrow()
     await expect(tools.board_aggregate.execute(CTX, aggArgs(placeholderIds(17)))).rejects.toThrow()
+  })
+
+  // t-agg-7
+  test("t-agg-7: 拒绝短码解释表驱动——10 个固定短码逐字正确 + batch_size_3/17（导出 explainAggReason 单元覆盖正常入口不可达分支：cross_stream 前置 unknown_ref、batch_size 前置 Zod）", () => {
+    const cases: [string, string][] = [
+      ["fence", " (requires current_round−created_round>2; tool-call loops do not advance rounds)"],
+      ["recent", " (still among this stream's 6 most recent knowledge records; waiting more rounds does not guarantee release)"],
+      ["round_unknown", " (current round or the record's created_round is unknown)"],
+      ["pinned", " (pin-protected; do not lift a pin just to aggregate)"],
+      ["not_original_author", " (not authored by the caller; waiting will not help — drop this member)"],
+      ["index_summary", " (summaries cannot be members (single-level))"],
+      ["already_covered", " (already folded under an existing summary)"],
+      ["duplicate_member", " (same id listed twice — deduplicate)"],
+      ["not_found", " (record not found or unavailable; re-check the source ID)"],
+      ["cross_stream", " (record belongs to another stream)"],
+    ]
+    for (const [reason, want] of cases) expect(explainAggReason(reason)).toBe(want)
+    expect(explainAggReason("batch_size_3")).toBe(" (member count must be 4–16)")
+    expect(explainAggReason("batch_size_17")).toBe(" (member count must be 4–16)")
+  })
+
+  // t-agg-8
+  test("t-agg-8: 未知短码与原型链名回退裸短码（Object.hasOwn 不取继承属性）", () => {
+    for (const reason of ["mystery", "constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(explainAggReason(reason)).toBe("")
+    }
+  })
+
+  // t-agg-9
+  test("t-agg-9: tombstone 成员 → 聚合拒绝 not_found，解释不断言记录不存在", async () => {
+    const scope = makeScope("ta9")
+    const s1 = scope.registerSession("s1", "build")
+    const members = seedAged(scope, s1.streamId, 8)
+    admitRounds(scope, s1.streamId)
+    scope.markTombstone(s1.streamId, members[0]!.id, "撤回") // 记录存在但已 tombstone → getById unavailable，聚合层归为 not_found
+    const { tools } = stub(scope, s1.streamId)
+    const out = await tools.board_aggregate.execute(CTX, aggArgs(members.map((m) => m.id)))
+    expect(out.startsWith("rejected: aggregate_invalid")).toBe(true)
+    expect(out).toContain(`- ${members[0]!.id}: not_found (record not found or unavailable; re-check the source ID)`)
   })
 })

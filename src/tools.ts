@@ -74,6 +74,26 @@ function countEntries(scope: Scope, streamId: string): number {
   }
 }
 
+/** board_aggregate 拒绝短码的报错时解释（仅随 rejected: aggregate_invalid 输出，不进工具描述，避免每会话常驻成本）。 */
+const AGG_REASON_EXPLANATIONS: Record<string, string> = {
+  fence: "requires current_round−created_round>2; tool-call loops do not advance rounds",
+  recent: "still among this stream's 6 most recent knowledge records; waiting more rounds does not guarantee release",
+  round_unknown: "current round or the record's created_round is unknown",
+  pinned: "pin-protected; do not lift a pin just to aggregate",
+  not_original_author: "not authored by the caller; waiting will not help — drop this member",
+  index_summary: "summaries cannot be members (single-level)",
+  already_covered: "already folded under an existing summary",
+  duplicate_member: "same id listed twice — deduplicate",
+  not_found: "record not found or unavailable; re-check the source ID",
+  cross_stream: "record belongs to another stream",
+}
+/** 导出仅供测试：Object.hasOwn 自有属性检查，未知短码不查原型链（constructor/toString/__proto__ 等回退裸短码）。 */
+export const explainAggReason = (reason: string): string => {
+  if (Object.hasOwn(AGG_REASON_EXPLANATIONS, reason)) return ` (${AGG_REASON_EXPLANATIONS[reason]})`
+  if (reason.startsWith("batch_size_")) return " (member count must be 4–16)"
+  return ""
+}
+
 export function defineBoardTools(deps: {
   // agent = 注册路径验证的 caller 身份（I1）；缺省/未知时工具侧回退 ToolContext 原值
   resolveScope: (sessionId: string, agent: string) => Promise<{ scope: Scope; streamId: string; isolated: boolean; agent?: string | null } | null>
@@ -367,7 +387,7 @@ export function defineBoardTools(deps: {
           })
           return `summary ${result.id} aggregated (covered ${args.member_ids.length} members)\nhash sha256:${result.hash}\nsequence ${result.sequence}`
         case "invalid":
-          return `rejected: aggregate_invalid\n${result.errors.map((e) => `- ${e.id}: ${e.reason}`).join("\n")}`
+          return `rejected: aggregate_invalid\n${result.errors.map((e) => `- ${e.id}: ${e.reason}${explainAggReason(e.reason)}`).join("\n")}`
         case "quota_exceeded":
           return `rejected: quota_exceeded used=${result.used} quota=${result.quota}`
       }

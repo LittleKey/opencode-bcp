@@ -59,10 +59,10 @@ describe("认知契约常量 golden（DESIGN §11.6）", () => {
     expect(TOOL_DESCRIPTIONS.board_index).toBe(blocks[2])
   })
 
-  // §11.6 注：board_aggregate 无文案契约（不在 §11.6 文案契约范围）；v1.21.0 批量下限 8→4，描述文本同步
-  test("board_aggregate description 与 v1.21.0 批量下限口径逐字相等（注记口径）", () => {
+  // §11.6 注：board_aggregate 无文案契约（不在 §11.6 文案契约范围）；v1.21.0 批量下限 8→4，描述文本同步；英文简洁描述——短码含义在报错输出（tools.ts AGG_REASON_EXPLANATIONS）而非描述；拒绝句仅限定 aggregate_invalid 分支（配额/未注册/参数错误不走该格式，见 oracle 复评 CONCERNS 修正 1）
+  test("board_aggregate description（英文简洁版，拒绝句限定 aggregate_invalid）逐字相等", () => {
     expect(TOOL_DESCRIPTIONS.board_aggregate).toBe(
-      "把本流 4–16 条旧目录项折叠为一个索引摘要（仅目录折叠，原条目可继续 board.get）",
+      "Fold 4–16 older catalog entries of this stream into one index summary (catalog folding only; original entries remain readable via board.get). For aggregate_invalid, inspect member reasons. Retry after the relevant conditions change; update navigation_body if members change.",
     )
   })
 
