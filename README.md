@@ -27,6 +27,8 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 委派返回的呈现与 Council 取证：作者超长且字节精确的完整终态原文可呈现为 `<bcp_result_reference>` 检索回执（接收者须先 `board_get` 取回原文；回执不是验收），未知、更短或不匹配的输出保留原文——该交付引用回执契约经共享核在 v1 与 v2 宿主均接入（v2 侧由 OMO 3.0.1 交付 helper 对原生 subagent 包装做严格字节/身份校验后替换）。Council 问题中显式的 `ses_*` / `cou-N` 宿主原文装配是 2.2.25 部署基线的历史行为，仅存在于 v1 历史集成；3.0.1 起 Council 使用上游自身实现，主角色不再组织私人席位，宿主不再做该取证拼接。历史契约与限制见 [v1.20 编排集成](docs/orchestration-v1.20.md)。
 
+ACP 外部代理（omo-slim `acpAgents` 的 `acp_run`，如 claude 顾问）：宿主确认的成功结果默认留存原文并逐份返回回执（`Retained: <ID>` 或 `Retention failed|skipped: <原因>`，随附固定指引行）；标题由任务首行 `Task:` 确定性生成（`ACP result: <代理> | <任务标题>`）；作者身份取 wrapper 会话的宿主确认身份，同一输入轮的 wrapper 转述自动去重。已在真实 claude 链路完成冒烟与重启后验证（含中文派发被前置守卫零触达拒绝）。契约见 [v1.21 ACP 工具结果留存](docs/acp-tool-result-v1.21.md)（v1 宿主专属）。
+
 ## 核心模型速览
 
 - **scope**：授权隔离单元。跨 scope 读取一律返回统一的 `forbidden`，不区分目标是否存在——无存在性泄漏；同 scope 内隐藏目标与不存在目标统一返回 `not_found`，二者逐字节一致。
@@ -44,6 +46,7 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 | `board_get` | 按 ID 读回确切记录；原文和版本仍在当前上下文中且无变更信号时，可复用已完成的核对 |
 | `board_index` | 无 query 的 `range="authorized"` 浏览跨流紧凑目录；`query` 搜索正文和路径；省略两者浏览本人目录 |
 | `board_aggregate` | 把多条旧目录项折叠为一条索引摘要：只缩目录，原文恒可 `board_get` |
+| `board_export` | 按 `bb://` ID + 期望 sha256 把记录 JSON 逐字节导出到项目内 `.opencode/bcp/exports/`；可见性复用 `board_get` 可读路径，单次 1–8 条、≤512 KiB，原子发布且不覆盖既有文件（v1 宿主） |
 
 v1/v2 默认 auto 模式都不提供 `board_put`（自动留存 + `board_store`）；显式 `autoCapture: false` 的手动模式在两宿主上都额外注册 `board_put` 旧契约（与 `board_store` 并存），兼容既有禁发布角色配置。
 
@@ -117,6 +120,7 @@ src/
   schema.ts         # 消息 schema（Zod 4）
   eligibility.ts    # 目录压力资格判定
   constants.ts      # 常量单源
+  delivery.ts       # 交付引用可见性过滤与 board_export 导出
   adapters/v1/      # opencode 1.x 插件入口与 hook 接线
   adapters/v2/      # opencode 2.x 适配层（2.0.20；限定验收见 harness/acceptance/v2.0.0.md）
 test/               # 单元、契约及插件接线测试
