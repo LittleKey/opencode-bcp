@@ -53,3 +53,6 @@ export const PRESSURE_REMINDER_TEMPLATE =
   "BCP: This stream's catalog has grown past its pressure threshold.\n" +
   "List candidates with board_index and, if you are their original author and they are past protection, fold them with board_aggregate.\n" +
   "This reminder adds no obligations and never overrides this task's restrictions."
+
+/** Round 9 §3 board_export 工具描述（用户要求：精简，无长文案）。 */
+export const EXPORT_DESCRIPTION = "Export board records to verbatim project files."

@@ -2,7 +2,8 @@
 // 工具路径永不自动注册会话（注册只发生在 Task 5 会话事件钩子）；writer 只来自 ToolContext（M0-4 防冒充）。
 
 import { z } from "zod"
-import { readdirSync } from "node:fs"
+import { readdirSync, existsSync, lstatSync, readFileSync, writeFileSync, linkSync, mkdirSync, unlinkSync } from "node:fs"
+import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type { Scope } from "./storage"
 import { resolveAuthz, refPolicy } from "./permissions"
@@ -64,6 +65,16 @@ const aggregateArgs = z.object({
   navigation_body: z.string(),
 })
 
+// Round 9 §3：board_export 参数（无 project 参数；目标目录由 ctx.directory 派生，不可经参数改变）。
+const exportArgs = z.object({
+  records: z.array(z.object({
+    id: z.string().describe("Full bb:// record ID, copied verbatim"),
+    sha256: z.string().describe("Expected record hash as sha256:<64 hex>, from the store receipt or board_get"),
+  })).min(1).max(8),
+}).strict()
+
+const EXPORT_MAX_BYTES = 512 * 1024 // 单条与累计共用上限（round 9 §3.2）
+
 function countEntries(scope: Scope, streamId: string): number {
   try {
     return readdirSync(join(scope.dir, "streams", streamId, "entries")).filter(
@@ -99,7 +110,7 @@ export function defineBoardTools(deps: {
   resolveScope: (sessionId: string, agent: string) => Promise<{ scope: Scope; streamId: string; isolated: boolean; agent?: string | null } | null>
   log: (line: Record<string, unknown>) => void
   observePublication?: (sessionId: string, messageId: string) => (id: string, bindings: ArtifactBinding[], status: "stored" | "replay") => void
-}): { board_put: BoardToolDef; board_get: BoardToolDef; board_index: BoardToolDef; board_aggregate: BoardToolDef } {
+}): { board_put: BoardToolDef; board_get: BoardToolDef; board_index: BoardToolDef; board_aggregate: BoardToolDef; board_export: BoardToolDef } {
   const board_put: BoardToolDef = {
     args: putArgs,
     execute: async (ctx, rawArgs) => {
@@ -394,5 +405,111 @@ export function defineBoardTools(deps: {
     },
   }
 
-  return { board_put, board_get, board_index, board_aggregate }
+  // Round 9 §3 board_export：按 bb:// id + 期望 sha256 把记录 JSON 逐字节导出到项目目录。
+  // ACL 复用 board_get 路径（resolveScope → resolveAuthz → parseBbId → refPolicy，仅可读记录）；
+  // 这是数据交付，不是 ACL 重实现。整批校验先于任何发布；已发布文件允许留存供重试复用。
+  const board_export: BoardToolDef = {
+    args: exportArgs,
+    execute: async (ctx, rawArgs) => {
+      const args = exportArgs.parse(rawArgs)
+      const resolved = await deps.resolveScope(ctx.sessionID, ctx.agent)
+      if (!resolved) return "rejected: unregistered_session"
+      if (!ctx.directory) return "rejected: export_directory_unavailable"
+      const authz = resolveAuthz(resolved.scope, { sessionId: ctx.sessionID, agent: ctx.agent })
+      // 同 id 去重：同 id 同哈希合并为一条；同 id 不同哈希为调用方冲突。
+      const unique = new Map<string, { id: string; sha256: string }>()
+      for (const r of args.records) {
+        const prev = unique.get(r.id)
+        if (prev && prev.sha256 !== r.sha256) return `rejected: conflicting_hash ${r.id}`
+        if (!prev) unique.set(r.id, r)
+      }
+      type Planned = { id: string; filename: string; bytes: Uint8Array; sha256: string }
+      const planned: Planned[] = []
+      let totalBytes = 0
+      for (const r of unique.values()) {
+        let t: ReturnType<typeof parseBbId>
+        try {
+          t = parseBbId(r.id)
+        } catch {
+          return `rejected: malformed_id ${r.id}`
+        }
+        const expected = /^sha256:[0-9a-fA-F]{64}$/.test(r.sha256) ? r.sha256.slice(7).toLowerCase() : null
+        if (!expected) return `rejected: malformed_hash ${r.id}`
+        const policy = refPolicy(authz, { scopeId: t.scopeId, streamId: t.streamId })
+        if (policy === "forbidden") return `rejected: forbidden ${r.id}`
+        if (policy === "hidden") return `rejected: not_found ${r.id}`
+        const g = resolved.scope.getById(r.id)
+        if (g.status === "unavailable") return `rejected: unavailable ${r.id}`
+        if (g.status === "not_found") return `rejected: not_found ${r.id}`
+        if (g.hash !== expected) return `rejected: hash_mismatch ${r.id}`
+        // 逐字节导出：读原始 entry 文件字节，而非 JSON 重建；内部 ID 必须与请求一致。
+        const bytes = resolved.scope.readEntryBytes(t.streamId, t.seq)
+        if (!bytes || createHash("sha256").update(bytes).digest("hex") !== expected) return `rejected: unavailable ${r.id}`
+        let parsed: { id?: string }
+        try {
+          parsed = JSON.parse(Buffer.from(bytes).toString("utf8")) as { id?: string }
+        } catch {
+          return `rejected: unavailable ${r.id}`
+        }
+        if (parsed.id !== r.id) return `rejected: record_id_mismatch ${r.id}`
+        if (bytes.length > EXPORT_MAX_BYTES) return `rejected: record_oversize ${r.id}`
+        totalBytes += bytes.length
+        if (totalBytes > EXPORT_MAX_BYTES) return "rejected: total_oversize"
+        planned.push({ id: r.id, filename: `${t.scopeId}-${t.streamId}-e${String(t.seq).padStart(6, "0")}.json`, bytes, sha256: expected })
+      }
+      // 目标目录固定由 ctx.directory 派生；既有 .opencode 子链上的符号链接一律拒绝。
+      const exportsDir = join(ctx.directory, ".opencode", "bcp", "exports")
+      let chain = ctx.directory
+      for (const part of [".opencode", "bcp", "exports"]) {
+        chain = join(chain, part)
+        if (existsSync(chain) && lstatSync(chain).isSymbolicLink()) return "rejected: unsafe_path"
+      }
+      try {
+        mkdirSync(exportsDir, { recursive: true, mode: 0o700 })
+      } catch (error) {
+        return `rejected: ${error instanceof Error ? error.message : String(error)}`
+      }
+      // 真实数据交付：正常宿主工具权限之外，显式声明 board_export 动作与目标位置。
+      try {
+        await ctx.ask?.({ permission: "board_export", patterns: [join(exportsDir, "*")], always: [], metadata: { directory: exportsDir } })
+      } catch {
+        return "rejected: export_permission_not_granted"
+      }
+      const published: { relpath: string; sha256: string; bytes: number }[] = []
+      for (const p of planned) {
+        const final = join(exportsDir, p.filename)
+        const relpath = `.opencode/bcp/exports/${p.filename}`
+        const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i])
+        let reused = false
+        if (existsSync(final)) {
+          // 同名同哈希复用；不同内容报错（绝不覆盖）。
+          if (lstatSync(final).isSymbolicLink() || !lstatSync(final).isFile()) return `rejected: clobber_conflict ${relpath}`
+          if (!sameBytes(readFileSync(final), p.bytes)) return `rejected: clobber_conflict ${relpath}`
+          reused = true
+        } else {
+          const temp = join(exportsDir, `.tmp-${randomUUID()}`)
+          try {
+            writeFileSync(temp, p.bytes, { mode: 0o600 })
+            linkSync(temp, final) // 原子 no-clobber 发布
+            reused = false
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "EEXIST" && existsSync(final)) {
+              if (!lstatSync(final).isFile() || !sameBytes(readFileSync(final), p.bytes)) return `rejected: clobber_conflict ${relpath}`
+              reused = true
+            } else {
+              return `rejected: ${error instanceof Error ? error.message : String(error)}`
+            }
+          } finally {
+            try { if (existsSync(temp)) unlinkSync(temp) } catch { /* best-effort temp cleanup */ }
+          }
+        }
+        published.push({ relpath, sha256: p.sha256, bytes: p.bytes.length })
+        if (!reused) deps.log({ ts: new Date().toISOString(), ev: "exported", session: ctx.sessionID, id: p.id, bytes: p.bytes.length })
+      }
+      // 成功输出不回显任何内容正文。
+      return JSON.stringify({ files: published, totalBytes: published.reduce((n, f) => n + f.bytes, 0) }, null, 2)
+    },
+  }
+
+  return { board_put, board_get, board_index, board_aggregate, board_export }
 }

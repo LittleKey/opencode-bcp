@@ -184,7 +184,7 @@ describe("acceptance", () => {
     expect(recordHash(new Uint8Array(rawA2))).toBe(hashA)
     expect(scope.getById(a.id)).toMatchObject({ status: "found", hash: hashA })
     expect(Object.keys(defineBoardTools({ resolveScope: async () => null, log: () => {} })).sort()).toEqual(
-      ["board_aggregate", "board_get", "board_index", "board_put"],
+      ["board_aggregate", "board_export", "board_get", "board_index", "board_put"],
     )
   })
 

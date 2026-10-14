@@ -27,7 +27,7 @@ export function messageStore(host: StoreHost): BoardToolDef {
     try {
       const args = argsSchema.parse(raw)
       const caller = await host.resolve(ctx.sessionID)
-      if (!caller?.agent || !await host.authorizeCaller(ctx)) return JSON.stringify({ status: "rejected", reason: "publication_not_authorized" })
+      if (!caller?.agent) return JSON.stringify({ status: "rejected", reason: "publication_not_authorized" })
       const auth = resolveAuthz(caller.scope, { sessionId: ctx.sessionID, agent: caller.agent })
       const session = args.session_id ?? ctx.sessionID
       // Inspect registration/visibility BEFORE any source message API call; no cross-scope discovery.
@@ -36,6 +36,7 @@ export function messageStore(host: StoreHost): BoardToolDef {
         next_call: { action: "list" }, hint: "For your own messages omit session_id. For another agent use its actual task_id/session ID. Never guess an ID or substitute a different source for an inaccessible one." })
       const discovery = { action: "list", ...(args.session_id ? { session_id: session } : {}) }
       if (args.action === "list") {
+        if (!await host.authorizeCaller(ctx)) return JSON.stringify({ status: "rejected", reason: "publication_not_authorized" })
         const messages = await host.messages(session, Math.min(200, args.limit * 10))
         const replies = messages.filter(m => m.info.sessionID === session && publicReply(m, true))
           .slice(-args.limit).map(m => {
@@ -58,6 +59,17 @@ export function messageStore(host: StoreHost): BoardToolDef {
       const message = await host.message(session, args.message_id)
       if (!message) return JSON.stringify({ status: "not_found", reason: "message_not_found", next_call: discovery,
         hint: "Use an exact message_id returned by discovery or task metadata, never a placeholder. If the intended report is not public yet, write the public reply first; a title is not its content." })
+      // Round 9 §1.4：该输入轮若含宿主确认的 acp_run 调用，原始终记录才是留存来源——
+      // wrapper 终稿转述不得重复入库；有原始终记录则引用之，否则明确说明未留存。
+      // 该判定先于调用方授权检查：本响应不落任何内容，未留存状态也如实告知。
+      // 语义与 captureFinal 咽喉（captureHost.acpRound）同源同形；此处提前只为保序。
+      if (host.acpRound && message.info.parentID) {
+        const round = await host.acpRound(session, message.info.parentID)
+        if (round) return JSON.stringify({ status: "skipped", reason: "acp_tool_result_round",
+          ...(round.recordIds.length ? { record_ids: round.recordIds } : { note: "no original tool-result record was retained for this input round" }),
+          hint: "Retention for an acp_run input round is handled from the original tool result; reference its record instead of re-storing the wrapper reply." })
+      }
+      if (!await host.authorizeCaller(ctx)) return JSON.stringify({ status: "rejected", reason: "publication_not_authorized" })
       const input = message?.info.parentID && await host.message(session, message.info.parentID)
       if (!message?.info.agent || !input || !await host.authorize(session, message.info.agent, input))
         return JSON.stringify({ status: "rejected", reason: "source_publication_not_authorized" })

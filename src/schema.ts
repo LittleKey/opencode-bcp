@@ -10,7 +10,9 @@ export const DESCRIPTION_MAX_CODE_POINTS = 80
 export const CONTENT_MAX_BYTES = 262144
 
 export type Writer = { agent: string; session_id: string; message_id: string }
-export type CaptureOrigin = { kind: "host_final" | "host_stage"; input_message_id: string; text_sha256: string; message_completed_at?: number; stage_boundary?: import("./reply").StageBoundary; requested_by?: Writer; source_errors?: string[]; file_bindings?: { path: string; ref: string; native_edit?: true }[] }
+// host_tool_result：ACP acp_run 工具结果捕获（第九轮）——tool/call_id/external_agent 仅在该 kind 下出现；
+// writer = wrapper 会话宿主确认身份，绝不写 orchestrator。
+export type CaptureOrigin = { kind: "host_final" | "host_stage" | "host_tool_result"; input_message_id: string; text_sha256: string; message_completed_at?: number; stage_boundary?: import("./reply").StageBoundary; requested_by?: Writer; source_errors?: string[]; file_bindings?: { path: string; ref: string; native_edit?: true }[]; tool?: string; call_id?: string; external_agent?: string }
 
 /**
  * 聚合成员投影（仅 index_summary 记录携带；hash = 成员 entry 落盘字节的 sha256）。

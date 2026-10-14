@@ -59,6 +59,22 @@ test("hidden record indistinguishable from unknown and no source inspection", as
   f.messages.get("final")!.parts = [{ type: "text", text: record.id }]
   expect((await inspectDelivery(f.request, f.host) as any).candidates).toEqual([{ id: record.id, readability: "not_found" }])
 })
+test("review e000003: capture record_ids follow caller visibility; emptied by filtering uses neutral wording", async () => {
+  const f = await fixture()
+  const visible = await f.put([]) // own 流记录：父调用方可读
+  const record = f.scope.put(f.hidden.streamId, { writer: { agent: "councillor", session_id: "hidden", message_id: "x" }, createdRound: 1, description: "secret", content: "secret" })
+  if (record.status !== "stored") throw Error("fixture")
+  f.messages.get("final")!.parts = [{ type: "text", text: "Done" }] // 终稿无 bb 引用
+  const host = { ...f.host, capture: async () => ({ status: "skipped", reason: "acp_tool_result_round", record_ids: [visible, record.id] }) }
+  expect((await inspectDelivery(f.request, host) as any).capture)
+    .toEqual({ status: "skipped", reason: "acp_tool_result_round", record_ids: [visible] }) // 保留可见引用，滤除不可见
+  const emptied: any = await inspectDelivery(f.request, { ...host,
+    capture: async () => ({ status: "skipped", reason: "acp_tool_result_round", record_ids: [record.id] }) })
+  expect(emptied.capture).toEqual({ status: "unconfirmed", reason: "capture_not_accessible" }) // 中性措辞，非“未留存”
+  const serialized = JSON.stringify(emptied)
+  expect(serialized).not.toContain(record.id)
+  expect(serialized).not.toContain("no original tool-result record was retained")
+})
 test("wrong owner, missing terminal, running and invalid parent do not invent association", async () => {
   const f = await fixture(); await f.put()
   for (const request of [{ ...f.request, callerSessionID: "other" }, { ...f.request, terminalMessageID: undefined }, { ...f.request, state: "running" }, { ...f.request, inputMessageID: "wrong" }])

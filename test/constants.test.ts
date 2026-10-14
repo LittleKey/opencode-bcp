@@ -12,7 +12,15 @@ const design = readFileSync(join(import.meta.dir, "..", "DESIGN.md"), "utf8")
 test("reference-first descriptions match their versioned contract", () => {
   const doc = readFileSync(join(import.meta.dir, "..", "docs/catalog-discovery-v1.19.md"), "utf8")
   const blocks = [...doc.matchAll(/```text\n([\s\S]*?)\n```/g)].map(x => x[1])
-  expect(blocks).toEqual([AUTO_CAPTURE_INSTRUCTION, AUTO_TOOL_DESCRIPTIONS.board_index])
+  const acpDoc = readFileSync(join(import.meta.dir, "..", "docs/acp-tool-result-v1.21.md"), "utf8")
+  const acpBlock = [...acpDoc.matchAll(/```text\n([\s\S]*?)\n```/g)].map(x => x[1])
+  expect(blocks.length).toBe(2)
+  // Round 13：常驻 acp_run 例外段已移除，常量回到通用文本，两份快照均应逐字相等。
+  expect(blocks[0]).toBe(AUTO_CAPTURE_INSTRUCTION)
+  expect(blocks[0]).not.toContain("acp_run")
+  expect(blocks[1]).toBe(AUTO_TOOL_DESCRIPTIONS.board_index)
+  expect(acpBlock).toEqual([AUTO_CAPTURE_INSTRUCTION])
+  expect(AUTO_CAPTURE_INSTRUCTION.includes("acp_run")).toBe(false)
   expect(AUTO_TOOL_DESCRIPTIONS).not.toHaveProperty("board_put")
 })
 

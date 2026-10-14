@@ -130,7 +130,7 @@ test("real adapter removes default put, registers retained decisions before disp
     messages: async () => ({ data: [...f.messages.values()] }),
   } }
   const plugin = await BlackboardPlugin({ directory: f.dir, client } as unknown as PluginInput, { dataDir: f.dir })
-  expect(Object.keys(plugin.tool!).sort()).toEqual(["board_aggregate", "board_get", "board_index", "board_store"])
+  expect(Object.keys(plugin.tool!).sort()).toEqual(["board_aggregate", "board_export", "board_get", "board_index", "board_store"])
   await plugin["chat.message"]!({ sessionID: "s", agent: "orchestrator", messageID: "u" }, { message: f.input.info as never, parts: f.input.parts as never })
   const result = JSON.parse(await plugin.tool!.board_store.execute(f.args, f.ctx as never) as string)
   expect(result.status).toBe("stored")

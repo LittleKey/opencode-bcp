@@ -17,7 +17,7 @@ export type DeliveryHost = {
   scopeFor: (sessionID: string) => Promise<Scope | null>
   parentFor: (sessionID: string) => Promise<string | null>
   message: (sessionID: string, messageID: string) => Promise<HostMessage | null>
-  capture?: (sessionID: string, messageID: string) => Promise<{ status: string; id?: string; reason?: string }>
+  capture?: (sessionID: string, messageID: string) => Promise<{ status: string; id?: string; reason?: string; record_ids?: string[]; note?: string }>
   canReadResult?: (sessionID: string) => Promise<boolean>
   currentResult?: (sessionID: string, inputMessageID: string) => boolean
 }
@@ -46,7 +46,18 @@ export async function inspectDelivery(request: DeliveryRequest, host: DeliveryHo
   // IDs in author text are candidates, never an assertion of delivery or acceptance.
   const text = (terminal.parts ?? []).filter(p => p.type === "text").map(p => p.text ?? "").join("\n")
   let capture = await host.capture?.(request.taskID, request.terminalMessageID)
-  if (capture?.id && refPolicy(auth, parseBbId(capture.id)) !== "ok") capture = { status: "unconfirmed", reason: "capture_not_accessible" }
+  // capture 元数据与正文 bb 引用同一可见性规则（e000003）：调用方不可见的记录 ID 一律不进入结果。
+  // record_ids 因不可见被清空时改用中性 capture_not_accessible，不冒充“未留存”说明。
+  if (capture) {
+    const visible = (id: string) => { try { return refPolicy(auth, parseBbId(id)) === "ok" } catch { return false } }
+    if (capture.id && !visible(capture.id)) capture = { status: "unconfirmed", reason: "capture_not_accessible" }
+    else if (capture.record_ids) {
+      const recordIds = capture.record_ids.filter(visible)
+      capture = recordIds.length === capture.record_ids.length ? capture
+        : recordIds.length ? { ...capture, record_ids: recordIds }
+        : { status: "unconfirmed", reason: "capture_not_accessible" }
+    }
+  }
   const ids = [...new Set([...(capture?.id ? [capture.id] : []), ...(text.match(/bb:\/\/[0-9a-f-]+\/[0-9a-f-]+\/e\d+/gi) ?? [])])]
   const candidates: unknown[] = []
   let resultReference: ResultReference | undefined

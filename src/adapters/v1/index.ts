@@ -17,10 +17,11 @@ import { malformedSha256 } from "../../artifacts"
 import { ReceiptCheck } from "../../receipt-check"
 import { normalizeTaskDescription, sourceHandoff } from "../../handoff"
 import { DELIVERY_BRIDGE, inspectDelivery, type DeliveryRequest, type HostMessage } from "../../delivery"
-import { captureFinal, NO_STORE, permissionAction, publicationAllowed, type CaptureHost, type PermissionRule } from "../../capture"
+import { captureFinal, captureToolResult, formatToolResultReceipt, parseTaskTitle, toolResultKey, NO_STORE, permissionAction, publicationAllowed, type CaptureHost, type PermissionRule } from "../../capture"
 import { beginEditObservation, invalidateEditEvidence, observeEdits, editEvidence } from "../../edit-evidence"
 import { messageStore, STORE_DESCRIPTION } from "../../message-store"
 import { COUNCIL_BRIDGE, inspectCouncilSource, type CouncilRequest } from "../../council"
+import { EXPORT_DESCRIPTION } from "../../constants"
 
 type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不再以空串冒充）
 
@@ -69,6 +70,8 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     if (id) recentSources.set(session, [...(recentSources.get(session) ?? []).filter(old => old !== id), id].slice(-8))
   }
   const autoCapture = options?.autoCapture !== false
+  // Round 9：ACP acp_run 工具结果默认留存开关（仅在 autoCapture 开启时生效）。
+  const acpCapture = options?.acpCapture !== false
   const descriptions = autoCapture ? AUTO_TOOL_DESCRIPTIONS : TOOL_DESCRIPTIONS
   const taskDescription = autoCapture ? AUTO_TASK_DESC_APPEND : TASK_DESC_APPEND
 
@@ -311,6 +314,8 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
           throw Error("capture_source_permission_not_granted")
       } }
     },
+    // Round 9 §1.4：同轮判定经 captureHost 交给 captureFinal 咽喉，事件/交付桥接/补存三入口同路径。
+    acpRound: (session, inputMessageID) => acpRoundInfo(session, inputMessageID),
   }
   const retained = async (session: string, id?: string) => {
     if (!id) return
@@ -322,12 +327,23 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     if (found.record.writer.session_id === session && found.record.origin)
       receipts.sourced(session, found.record.origin.input_message_id, id)
   }
+  // Round 11：统一的留存后通知——子会话 retained() + 权限核验后的父会话 remember()。
+  // 普通终稿捕获与 ACP 工具结果捕获共用；父通知失败只记诊断，不回滚记录、不改回执。
+  const notifyRetained = async (session: string, id?: string) => {
+    try {
+      await retained(session, id)
+      // Parent delivery availability must not depend on the order of OMO's terminal callback.
+      const parent = id && (await sessionInfo(session))?.parentID
+      const resolved = parent && await lookupScopeContext(parent, "")
+      if (id && parent && resolved && refPolicy(resolveAuthz(resolved.scope, { sessionId: parent, agent: "" }), parseBbId(id)) === "ok") remember(parent, id)
+      // 可观测性：共享通知确实执行且到达父级半段（parent 字段只能来自父查找步骤）。
+      st.log({ ev: "acp_retained_notified", session, id, parent: parent ?? null })
+    } catch (error) {
+      st.log({ ev: "retained_notify_failed", session, id, reason: String(error) })
+    }
+  }
   const capture = (session: string, message: string) => captureFinal(session, message, captureHost).then(async result => {
-    await retained(session, result.id)
-    // Parent delivery availability must not depend on the order of OMO's terminal callback.
-    const parent = result.id && (await sessionInfo(session))?.parentID
-    const resolved = parent && await lookupScopeContext(parent, "")
-    if (result.id && parent && resolved && refPolicy(resolveAuthz(resolved.scope, { sessionId: parent, agent: "" }), parseBbId(result.id)) === "ok") remember(parent, result.id)
+    await notifyRetained(session, result.id)
     return result
   })
   const canReadResult = async (session: string) => {
@@ -382,12 +398,88 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     args: (t.args as unknown as { shape: unknown }).shape as ToolDefinition["args"],
     execute: (args: unknown, ctx: ToolContext) => t.execute(ctx, args),
   })
+  // ==== ACP acp_run 工具结果留存（rounds 9-12）====
+  const hostMessages = async (session: string, limit: number): Promise<HostMessage[]> => {
+    const result = await input.client.session.messages({ path: { id: session }, query: { limit } })
+    if (!Array.isArray(result.data)) throw Error("messages_unavailable")
+    return result.data as HostMessage[]
+  }
+  const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+  // Round 9 §2.2：after 时部件可能尚未持久化（仍显示 running）——窗口内未命中做短暂有界重试；
+  // 定位失败 = 明确失败语义，绝不写空 message_id、绝不以 callID 充当消息 ID。
+  const locateAcpToolPart = async (session: string, callID: string): Promise<{ writerMessageID: string; inputMessageID: string } | "not_found" | "ambiguous"> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let messages: HostMessage[]
+      try { messages = await hostMessages(session, 50) } catch { await sleep(25); continue }
+      const owners = new Map<string, string>()
+      for (const m of messages) {
+        if (m.info?.sessionID !== session || (m.info as { role?: string }).role !== "assistant" || !m.info.id || !m.info.parentID) continue
+        if ((m.parts ?? []).some(p => p.type === "tool" && p.tool === "acp_run" && p.callID === callID)) owners.set(m.info.id, m.info.parentID)
+      }
+      if (owners.size === 1) { const [messageID, parentID] = [...owners][0]!; return { writerMessageID: messageID, inputMessageID: parentID } }
+      if (owners.size > 1) return "ambiguous"
+      await sleep(25)
+    }
+    return "not_found"
+  }
+  // 同输入轮 ACP 判定（round 9 §1.4）：after 钩子内存登记 + 宿主消息查询（重启后恢复判定）+
+  // 幂等键回查原始终记录。不依赖 recentSources，不建新状态文件，无永久封禁——下一用户输入轮恢复。
+  const acpRounds = new Map<string, string>() // `${session}:${inputMessageID}` → recordId | ""（已确认 ACP 轮但无记录）
+  const acpRoundInfo = async (session: string, inputMessageID: string): Promise<{ recordIds: string[] } | null> => {
+    const cacheKey = `${session}:${inputMessageID}`
+    const cached = acpRounds.get(cacheKey)
+    if (cached !== undefined) return { recordIds: cached ? [cached] : [] }
+    let messages: HostMessage[]
+    try { messages = await hostMessages(session, 50) } catch { return null } // 查询失败既不能证明也不能封禁
+    const callIDs = new Set<string>()
+    for (const m of messages) {
+      if (m.info?.sessionID !== session || m.info?.parentID !== inputMessageID || (m.info as { role?: string }).role !== "assistant") continue
+      for (const p of m.parts ?? []) if (p.type === "tool" && p.tool === "acp_run" && p.callID) callIDs.add(p.callID)
+    }
+    if (!callIDs.size) return null
+    const recordIds: string[] = []
+    const resolved = await lookupScopeContext(session, "")
+    if (resolved) {
+      const meta = resolved.scope.readMeta(resolved.streamId)
+      for (const callID of callIDs) {
+        const id = meta.idem[toolResultKey(session, callID)]?.id
+        if (id) recordIds.push(id)
+      }
+    }
+    return { recordIds }
+  }
+  // acp_run 结果留存主路径：与普通终稿捕获同一套机制（captureToolResult 内部走
+  // host.authorize/publicationAllowed + scope.put 幂等，见 src/capture.ts）。
+  const retainAcpResult = async (hookInput: { sessionID: string; callID: string; args?: { agent?: unknown } }, output: { output?: unknown }) => {
+    const session = hookInput.sessionID
+    if (typeof output.output !== "string") {
+      st.log({ ev: "acp_tool_result", session, call: hookInput.callID, status: "unconfirmed", reason: "result_unavailable" })
+      return
+    }
+    const raw = output.output
+    const fail = (reason: string) => {
+      output.output = formatToolResultReceipt(raw, { status: "unconfirmed", reason })
+      st.log({ ev: "acp_tool_result", session, call: hookInput.callID, status: "unconfirmed", reason })
+    }
+    const located = await locateAcpToolPart(session, hookInput.callID)
+    if (located === "not_found" || located === "ambiguous") return fail(located === "ambiguous" ? "source_ambiguous" : "source_message_unavailable")
+    const input = await readMessage(session, located.inputMessageID)
+    if (!input || (input.info as { role?: string }).role !== "user" || input.info.id !== located.inputMessageID) return fail("input_unavailable")
+    const externalAgent = typeof hookInput.args?.agent === "string" ? hookInput.args.agent : ""
+    const result = await captureToolResult({
+      session, callID: hookInput.callID, raw, externalAgent,
+      writerMessageID: located.writerMessageID, inputMessageID: located.inputMessageID,
+      input, taskTitle: parseTaskTitle(input),
+    }, captureHost)
+    // 同输入轮去重登记（round 9 §1.4）：覆盖"已调用但留存失败"——wrapper 补加标记也无法经终稿路径重捕。
+    acpRounds.set(`${session}:${located.inputMessageID}`, result.id ?? "")
+    if (result.id) await notifyRetained(session, result.id)
+    output.output = formatToolResultReceipt(raw, result)
+    st.log({ ev: "acp_tool_result", session, call: hookInput.callID, status: result.status, ...(result.id ? { id: result.id } : {}), ...(result.reason ? { reason: result.reason } : {}) })
+  }
+
   const storeTool = messageStore({ ...captureHost,
-    messages: async (session, limit) => {
-      const result = await input.client.session.messages({ path: { id: session }, query: { limit } })
-      if (!Array.isArray(result.data)) throw Error("messages_unavailable")
-      return result.data as HostMessage[]
-    },
+    messages: async (session, limit) => hostMessages(session, limit),
     authorizeCaller: async ctx => {
       const resolved = await lookupScopeContext(ctx.sessionID, "")
       const parent = st.admitted.get(ctx.sessionID)
@@ -408,6 +500,8 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
       board_index: toToolDef(boardTools.board_index, descriptions.board_index),
       board_aggregate: toToolDef(boardTools.board_aggregate, descriptions.board_aggregate),
       board_store: toToolDef(storeTool, STORE_DESCRIPTION),
+      // Round 9 §3：BCP 通用工具，与 board_get/board_store 并列注册；描述保持精简。
+      board_export: toToolDef(boardTools.board_export, EXPORT_DESCRIPTION),
     },
 
     "tool.execute.before": async (hookInput, output) => {
@@ -460,6 +554,16 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     },
 
     "tool.execute.after": async (hookInput, output) => {
+      // Rounds 9-12：acp_run 结果默认留存（同一捕获路径）；关闭时原样返回、不作任何声明。
+      if (hookInput.tool === "acp_run") {
+        if (!autoCapture || !acpCapture) return
+        try { await retainAcpResult(hookInput, output) }
+        catch (error) {
+          st.log({ ev: "acp_tool_result", session: hookInput.sessionID, call: hookInput.callID, status: "unconfirmed", reason: String(error) })
+          if (typeof output.output === "string") output.output = formatToolResultReceipt(output.output, { status: "unconfirmed", reason: "retention_error" })
+        }
+        return
+      }
       if (!["edit", "write", "apply_patch"].includes(hookInput.tool)) return
       const key = `${hookInput.sessionID}:${hookInput.callID}`
       const started = editTokens.get(key)
@@ -663,6 +767,7 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
         if (e.type === "session.deleted" && message?.id) {
           receipts.forget(message.id); recentSources.delete(message.id)
           for (const key of editTokens.keys()) if (key.startsWith(message.id + ":")) editTokens.delete(key)
+          for (const key of acpRounds.keys()) if (key.startsWith(message.id + ":")) acpRounds.delete(key)
           return
         }
         if (e.type === "message.updated" && message?.role === "assistant" && message.sessionID && message.id) {
@@ -670,6 +775,8 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
         }
         if (e.type === "message.updated" && message?.role === "assistant" && message.finish === "stop" && message.time?.completed && message.sessionID && message.id) {
           if (autoCapture) {
+            // Round 9 §1.4 的同轮判定统一在 captureFinal 咽喉执行（见 captureHost.acpRound），
+            // 此处不再单独特判；跳过结果（含原始终记录引用）由 result 原样落日志。
             const result = await capture(message.sessionID, message.id)
             st.log({ ev: "final_capture", session: message.sessionID, message_id: message.id, ...result })
             // No model wake, corrective publication or mutation of the original reply.
