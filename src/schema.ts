@@ -6,8 +6,19 @@
 export const KINDS = ["note", "finding", "change", "review", "decision", "index_summary"] as const
 export type RecordKind = (typeof KINDS)[number]
 
-export const DESCRIPTION_MAX_CODE_POINTS = 80
+// 描述预算（v1.21.2）：提示层仍要求 ≤80 字符；硬上限按 UTF-8 字节计。
+// 80 code points 在 CJK/emoji 场景已达 240–320B，实测合规标题常落几百字节，故硬门槛取 512B。
+export const DESCRIPTION_MAX_BYTES = 512
 export const CONTENT_MAX_BYTES = 262144
+
+/** 按 UTF-8 字节截断到 DESCRIPTION_MAX_BYTES，永不切断多字节字符（幂等：≤上限原样返回） */
+export function truncateDescription(title: string): string {
+  const bytes = Buffer.from(title, "utf8")
+  if (bytes.length <= DESCRIPTION_MAX_BYTES) return title
+  let end = DESCRIPTION_MAX_BYTES
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end-- // 回退到多字节字符的起始字节之前
+  return bytes.subarray(0, end).toString("utf8")
+}
 
 export type Writer = { agent: string; session_id: string; message_id: string }
 // host_tool_result：ACP acp_run 工具结果捕获（第九轮）——tool/call_id/external_agent 仅在该 kind 下出现；
@@ -65,7 +76,7 @@ export function validatePutInput(input: Partial<PutInput>): FieldError[] {
   } else {
     if (d.trim() === "") errs.push({ field: "description", code: "description_blank" })
     if (/[\n\r]/.test(d)) errs.push({ field: "description", code: "description_newline" })
-    if ([...d].length > DESCRIPTION_MAX_CODE_POINTS) {
+    if (Buffer.byteLength(d, "utf8") > DESCRIPTION_MAX_BYTES) {
       errs.push({ field: "description", code: "description_too_long" })
     }
   }

@@ -538,7 +538,7 @@ describe("tools", () => {
     expect(await tools.board_aggregate.execute(CTX, aggArgs(ids, { description: "a\r\nb" }))).toBe(
       "rejected: description_newline",
     )
-    expect(await tools.board_aggregate.execute(CTX, aggArgs(ids, { description: "a".repeat(81) }))).toBe(
+    expect(await tools.board_aggregate.execute(CTX, aggArgs(ids, { description: "a".repeat(513) }))).toBe(
       "rejected: description_too_long",
     )
   })

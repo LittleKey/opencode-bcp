@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { Scope } from "./storage"
 import type { HostMessage } from "./delivery"
-import { validatePutInput, type RecordKind, type Writer } from "./schema"
+import { validatePutInput, truncateDescription, type RecordKind, type Writer } from "./schema"
 import type { EditEvidence } from "./edit-evidence"
 import { prepareArtifacts, retainArtifacts, type FileAccess } from "./artifacts"
 import { publicReply, replyKey, type StageBoundary } from "./reply"
@@ -99,7 +99,7 @@ export async function captureFinal(session: string, messageID: string, host: Cap
     if (!access) return { status: "skipped", reason: "publication_not_authorized" }
     const body = maskPublicationMarkers(content)
     const firstLine = body.split(/\r?\n/).find(line => line.trim()) ?? "Final reply"
-    const description = request?.description ?? publicationMarker(content).description ?? [...`[${agent}] ${firstLine.trim()}`].slice(0, 80).join("")
+    const description = request?.description ?? publicationMarker(content).description ?? truncateDescription(`[${agent}] ${firstLine.trim()}`)
     const invalid = validatePutInput({ description, content, ...(request?.kind ? { kind: request.kind } : {}) })
     if (invalid.length) return unknown(invalid.map(e => e.code).join(","))
     // Host-observed edits belong to this input, not arbitrary paths mentioned in prose.

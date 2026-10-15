@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test"
 import {
   validatePutInput,
+  truncateDescription,
   encodeImmutablePayload,
   payloadBytesEqual,
   buildRecordBytes,
@@ -55,10 +56,22 @@ describe("schema", () => {
     expect(validatePutInput({ description: "a\nb", content: "c" }).map((e) => e.code)).toContain("description_newline")
   })
 
-  // schema-5
-  test("81 code points（含多字节）→ too_long；80 通过", () => {
-    expect(validatePutInput({ description: "é".repeat(81), content: "c" }).map((e) => e.code)).toContain("description_too_long")
-    expect(validatePutInput({ description: "é".repeat(80), content: "c" })).toEqual([])
+  // schema-5（v1.21.2：描述上限改按 UTF-8 字节计，硬门槛 512B；提示层仍要求 ≤80 字符）
+  test("描述 >512 UTF-8 字节 → too_long；恰 512 字节（ASCII 或多字节）通过", () => {
+    expect(validatePutInput({ description: "a".repeat(513), content: "c" }).map((e) => e.code)).toContain("description_too_long")
+    expect(validatePutInput({ description: "a".repeat(512), content: "c" })).toEqual([])
+    expect(validatePutInput({ description: "é".repeat(256), content: "c" })).toEqual([])
+    expect(validatePutInput({ description: "é".repeat(257), content: "c" }).map((e) => e.code)).toContain("description_too_long")
+  })
+
+  // schema-5b（v1.21.2：截断按整字节、不切断多字节字符）
+  test("truncateDescription 恰 512B 原样；超限按字节截断且落在字符边界", () => {
+    expect(truncateDescription("a".repeat(512))).toBe("a".repeat(512))
+    expect(truncateDescription("a".repeat(513))).toBe("a".repeat(512))
+    expect(truncateDescription("汉".repeat(171))).toBe("汉".repeat(170)) // 513B → 510B
+    expect(truncateDescription("a".repeat(510) + "汉")).toBe("a".repeat(510)) // 513B，界落在字符中间 → 丢弃整字
+    expect(truncateDescription("a".repeat(509) + "汉")).toBe("a".repeat(509) + "汉") // 恰 512B
+    expect(truncateDescription("😀".repeat(129))).toBe("😀".repeat(128)) // 4B emoji：516B → 512B
   })
 
   // schema-6

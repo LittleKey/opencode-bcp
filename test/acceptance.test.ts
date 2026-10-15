@@ -150,7 +150,7 @@ describe("acceptance", () => {
   })
 
   // acc-m1-1（M1-1：四变体整条创建失败；无半条记录、无 stored 宣称）
-  test("description 缺失/空白/\\r\\n/81 码点 → rejected 且 entries 文件数不变、无 stored", async () => {
+  test("description 缺失/空白/\\r\\n/超 512 字节 → rejected 且 entries 文件数不变、无 stored", async () => {
     const scope = open("m1-1")
     const { streamId } = scope.registerSession("acc-sess", "build")
     const log: Record<string, unknown>[] = []
@@ -160,7 +160,7 @@ describe("acceptance", () => {
     await expect(tools.board_put.execute(CTX, { content: "c" })).rejects.toThrow() // zod 必填缺失（宿主层拒收）
     expect(await tools.board_put.execute(CTX, { description: "", content: "c" })).toBe("rejected: description_blank")
     expect(await tools.board_put.execute(CTX, { description: "a\r\nb", content: "c" })).toBe("rejected: description_newline")
-    expect(await tools.board_put.execute(CTX, { description: "a".repeat(81), content: "c" })).toBe("rejected: description_too_long")
+    expect(await tools.board_put.execute(CTX, { description: "a".repeat(513), content: "c" })).toBe("rejected: description_too_long")
 
     expect(entryFiles(scope, streamId).length).toBe(before)
     expect(log.filter((l) => l.ev === "stored")).toEqual([])

@@ -25,7 +25,9 @@ test("old and titled markers share top-level grammar; entities and title normali
   expect(publicationMarker(STORE)).toEqual({ requested: true })
   expect(publicationMarker('Result\n<!--  bcp:store\tdescription=" A &quot;B&quot; &amp; C &lt;D&gt; &apos;x&apos; "  -->\r\n'))
     .toEqual({ requested: true, description: 'A "B" & C <D> \'x\'' })
-  expect(publicationMarker(`Result\n<!-- bcp:store description="${"界😀".repeat(60)}" -->`).description).toBe("界😀".repeat(40))
+  expect(publicationMarker(`Result\n<!-- bcp:store description="${"界😀".repeat(60)}" -->`).description).toBe("界😀".repeat(60)) // 420B ≤ 512B：全保留
+  expect(publicationMarker(`Result\n<!-- bcp:store description="${"界😀".repeat(80)}" -->`).description).toBe("界😀".repeat(73)) // 560B → 511B，不切字符
+  expect(publicationMarker(`Result\n<!-- bcp:store description="${"a".repeat(509)}汉" -->`).description).toBe(`${"a".repeat(509)}汉`) // 恰 512B
   expect(publicationMarker('<!-- bcp:store description=" " -->')).toEqual({ requested: true })
   expect(publicationMarker('<!-- bcp:store description="x\u0000y" -->')).toEqual({ requested: true })
   expect(publicationMarker(`${STORE}\n<!-- bcp:store description="first" -->\n<!-- bcp:store description="second" -->`).description).toBe("first")

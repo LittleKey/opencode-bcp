@@ -1,4 +1,6 @@
 // One grammar for publication intent and non-content protocol metadata.
+import { truncateDescription } from "./schema"
+
 export const NO_STORE = "<!-- bcp:no-store -->"
 export const STORE = "<!-- bcp:store -->"
 const entities: Record<string, string> = { quot: '"', amp: "&", lt: "<", gt: ">", apos: "'" }
@@ -20,7 +22,7 @@ export function publicationMarker(content: string): { requested: boolean; descri
     if (!marker || marker[1]?.includes("-->")) continue
     requested = true
     const title = marker[1]?.replace(/&(quot|amp|lt|gt|apos);/g, (_, name: string) => entities[name]!).trim()
-    if (!description && title && !/[\u0000-\u001f\u007f]/.test(title)) description = [...title].slice(0, 80).join("")
+    if (!description && title && !/[\u0000-\u001f\u007f]/.test(title)) description = truncateDescription(title)
   }
   return { requested, ...(description ? { description } : {}) }
 }

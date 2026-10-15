@@ -105,7 +105,7 @@ export type PutResult =
 export type AggregateArgs = {
   writer: Writer                 // 工具层取自 ToolContext；存储层按 §8.4 校验与每个成员原始作者双字段相等
   memberIds: string[]            // 4–16 个本流 bb:// id
-  description: string            // 目录描述（1–80 code points，单行）
+  description: string            // 目录描述（非空单行，UTF-8 ≤512 字节）
   navigationBody: string         // 导航正文（UTF-8 Markdown ≤256 KiB）
 }
 
