@@ -43,8 +43,8 @@
  *       instances there would be skipped by restoreDeep — a documented
  *       limit, not silently broadened.
  *   v1 tool.execute.before                   ->  v2 tool.hook "execute.before":
- *       restoreDeep on the mutable tool input so local execution sees real
- *       values.
+ *       restoreDeep on a copy of parsed tool input so local execution sees
+ *       real values without modifying host-owned readonly snapshots.
  *   v1 experimental.text.complete            ->  NO direct v2 equivalent. The
  *       public interception surfaces for model output are:
  *       a) session.hook("http.response") with a mutable Response (official v2
@@ -497,8 +497,12 @@ export function createVibeGuardV2Plugin(options = {}) {
           session.cleanup?.();
           if (typeof input?.input === "string") {
             input.input = restoreText(input.input, session);
-          } else {
-            restoreDeep(input?.input, session);
+          } else if (input?.input != null) {
+            // The hook permits replacing input; host-owned parsed arguments
+            // may be frozen at any depth. Preserve the original snapshot.
+            const restored = deepCopyPlain(input.input);
+            restoreDeep(restored, session);
+            input.input = restored;
           }
         });
       }

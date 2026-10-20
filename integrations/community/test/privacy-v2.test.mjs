@@ -593,7 +593,8 @@ test("OpenAI chat tool-call arguments keep placeholders on the wire; text deltas
     // the existing tool.execute.before restores the host-parsed arguments safely
     const toolInput = { tool: "bash", sessionID: "ses_wire_oai", input: parsed };
     await toolHook(toolInput);
-    assert.equal(parsed.command, `echo ${WIRE_SECRET}`, "parsed arguments must restore via tool.execute.before");
+    assert.equal(toolInput.input.command, `echo ${WIRE_SECRET}`, "parsed arguments must restore via tool.execute.before");
+    assert.equal(parsed.command, `echo ${ph}`, "original arguments retain placeholders");
   }));
 
 test("Anthropic input_json_delta keeps placeholders; sibling text blocks still restore", async () =>
@@ -639,7 +640,8 @@ test("Anthropic input_json_delta keeps placeholders; sibling text blocks still r
 
     const toolInput = { tool: "bash", sessionID: "ses_wire_ant", input: parsed };
     await toolHook(toolInput);
-    assert.equal(parsed.command, `echo ${WIRE_SECRET}`, "parsed arguments must restore via tool.execute.before");
+    assert.equal(toolInput.input.command, `echo ${WIRE_SECRET}`, "parsed arguments must restore via tool.execute.before");
+    assert.equal(parsed.command, `echo ${ph}`, "original arguments retain placeholders");
   }));
 
 test("Responses function_call_arguments.delta and atomic function_call keep arguments; output_text still restores", async () =>
@@ -688,7 +690,8 @@ test("Responses function_call_arguments.delta and atomic function_call keep argu
 
     const toolInput = { tool: "bash", sessionID: "ses_wire_res", input: parsed };
     await toolHook(toolInput);
-    assert.equal(parsed.command, `echo ${WIRE_SECRET}`, "parsed arguments must restore via tool.execute.before");
+    assert.equal(toolInput.input.command, `echo ${WIRE_SECRET}`, "parsed arguments must restore via tool.execute.before");
+    assert.equal(parsed.command, `echo ${ph}`, "original arguments retain placeholders");
   }));
 
 test("non-streaming JSON body: tool_calls[].function.arguments keep placeholders, message content restores", async () =>
@@ -724,7 +727,8 @@ test("non-streaming JSON body: tool_calls[].function.arguments keep placeholders
 
     const toolInput = { tool: "bash", sessionID: "ses_wire_json", input: parsed };
     await toolHook(toolInput);
-    assert.equal(parsed.command, `echo ${WIRE_SECRET}`, "parsed arguments must restore via tool.execute.before");
+    assert.equal(toolInput.input.command, `echo ${WIRE_SECRET}`, "parsed arguments must restore via tool.execute.before");
+    assert.equal(parsed.command, `echo ${ph}`, "original arguments retain placeholders");
   }));
 
 // ---------------------------------------------------------------------------
@@ -766,6 +770,32 @@ test("root JSON-string response documents restore by re-assignment", async () =>
     await responseHook(hookInput);
     const out = await hookInput.response.text();
     assert.equal(out, JSON.stringify(`echo ${SECRET}`), `root JSON string must restore: ${out}`);
+  }));
+
+test("tool execute.before restores frozen snapshots without mutating originals", async () =>
+  withTempDir(async (tmp) => {
+    const { sessionRegistrations, toolRegistrations, cleanup } = await setupPlugin(tmp);
+    try {
+      const request = { sessionID: "ses_readonly", system: SECRET, messages: [] };
+      await hookFn(sessionRegistrations, "context")(request);
+      assert.match(request.system, PLACEHOLDER_RE);
+      const nested = Object.freeze([request.system, Object.freeze({ text: request.system })]);
+      for (const original of [
+        Object.freeze({ detail: "summary" }),
+        Object.freeze({ nested }),
+        { nested },
+        nested,
+      ]) {
+        const before = JSON.stringify(original);
+        const event = { sessionID: request.sessionID, input: original };
+        await hookFn(toolRegistrations, "execute.before")(event);
+        assert.equal(JSON.stringify(original), before, "original snapshot remains unchanged");
+        assert.deepEqual(event.input, JSON.parse(before.replaceAll(request.system, SECRET)));
+        assert.notEqual(event.input, original);
+      }
+    } finally {
+      await cleanup();
+    }
   }));
 
 test("tool execute.before restores root string tool inputs", async () =>
