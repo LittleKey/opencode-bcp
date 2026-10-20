@@ -31,6 +31,14 @@ export const OMO_TARGETS = {
       server: '03149fd3e9bf33f849b5766db470e98c8c5bf9addb785d5d37cee0fb6df2335e',
     },
   },
+  '3.0.5': {
+    entries: {
+      // npm registry tarball oh-my-opencode-slim-3.0.5.tgz (exact-version pin,
+      // prep extraction verified by SHA-256 before patching).
+      index: '43d499d1dab3f21797476bf9e32a7c30bf1c6ee6b9c60deb0d17f3815da85827',
+      server: 'e04dd74f4115c721a5fc2b31f14b129834120eb9fcf13d97285ab744eab42a3d',
+    },
+  },
 };
 
 export function omoTargetFor(digest) {
@@ -249,6 +257,10 @@ const pick = (value, entry) => (typeof value === 'string' ? value : value[entry]
 // config agents before plugin capture, so v1 keeps upstream alias behavior
 // byte-identical while the v2 capture-before-config snapshot stays guarded.
 const OMO_ALIAS_GUARD_INDEX_NOOP = 'var AGENT_ALIASES = {\n  explore: "explorer",\n  "frontend-ui-ux-engineer": "designer"\n};';
+
+// 3.0.5 adds the upstream librarian alias to the same module-level table, so the
+// index-entry self-anchoring no-op must match the new table verbatim.
+const OMO_ALIAS_GUARD_INDEX_NOOP_3_0_5 = 'var AGENT_ALIASES = {\n  explore: "explorer",\n  librarian: "explorer",\n  "frontend-ui-ux-engineer": "designer"\n};';
 
 export const PATCHES_3_0_1 = [
   {
@@ -1022,10 +1034,95 @@ export const PATCHES_3_0_4 = [
   ...PATCHES_3_0_4_ADDITIONS,
 ];
 
+// 3.0.5 keeps the full 3.0.4 patch set: 35 patches carry over verbatim (their
+// anchors still match both 3.0.5 entries byte-for-byte) and 8 ids are re-anchored
+// below. No patch was retired: upstream 3.0.5 extends the affected regions
+// (commit gains a hostOutcomeRead corroboration parameter and its callers pass
+// the host outcome; the task_result tool folds into task_status's
+// result:true path as standalone readTaskResult; AGENT_ALIASES gains the
+// librarian alias) without absorbing any BCP fix. Each re-anchor preserves the
+// original purpose exactly; only anchor/replacement text tracks the 3.0.5
+// bundle shape (indentation, renamed locals, upstream's new parameters).
+const PATCH_OVERRIDES_3_0_5 = {
+  'commit-signature': {
+    // 3.0.5 adds its own 6th parameter (hostOutcomeRead corroboration); bcpOrigin
+    // becomes the 7th parameter so existing callers leave it undefined.
+    anchor: 'function commit(token, state, text, lease, attribution = "event", hostOutcomeRead) {',
+    replacement: 'function commit(token, state, text, lease, attribution = "event", hostOutcomeRead, bcpOrigin) {',
+  },
+  'commit-transcript-origin': {
+    // The inspect-path transcript commit now passes upstream's terminalOutcome
+    // as the 6th argument; bcpOrigin threads through as the 7th.
+    anchor: '\n      return commit(token, evidence.verdict, evidence.text, undefined, "transcript", terminalOutcome);',
+    replacement: '\n      return commit(token, evidence.verdict, evidence.text, undefined, "transcript", terminalOutcome, evidence.bcpOrigin);',
+  },
+  'commit-queued-transcript-origin': {
+    // The queued-continuation caller keeps upstream's five leading arguments,
+    // so its origin must skip the new hostOutcomeRead slot (explicit undefined)
+    // and land in the 7th parameter. The inherited 3.0.4 call would pass
+    // evidence.bcpOrigin as hostOutcomeRead: the stored origin becomes
+    // undefined and upstream's outcome corroboration reads a foreign object.
+    anchor: PATCHES_3_0_4.find(patch => patch.id === 'commit-queued-transcript-origin').anchor,
+    replacement: '\n    return commit(token, evidence.verdict, evidence.text, undefined, "transcript", undefined, evidence.bcpOrigin);',
+  },
+  'task-result-delivery': {
+    // readTaskResult is now a standalone function (task_result folded into
+    // task_status's result:true path), so the delivery block sits at the
+    // function's top level: 4/2-space indentation instead of the 3.0.4
+    // tool-closure nesting. The post-metadata check mirrors upstream's own
+    // await-window discipline: capture a gate token before the deliveryMetadata
+    // await, recapture after it, and compare activity/attempt/episode (gate
+    // capture-token dimensions — NOT board record fields). An episode can
+    // advance without moving the board triple, so only the token comparison
+    // catches that race; a missing recapture fails closed. The 3.0.4 board
+    // generation/terminalRevision/activityRevision CAS is retained, as are
+    // presentDelivery and the delivery suffix.
+    anchor: '    return current.resultSummary;\n  }\n  const read = await readUntrackedEvidence({ input: options2.input, readTimeoutMs: options2.readTimeoutMs }, taskID);',
+    replacement: `    const preMetadata = gate.capture(current);
+    const metadata = await deliveryMetadata(options2.input.directory, current);
+    const afterDelivery = board.get(taskID);
+    const postMetadata = gate.capture(current);
+    if (afterDelivery?.generation !== current.generation || afterDelivery.terminalRevision !== current.terminalRevision || afterDelivery.activityRevision !== current.activityRevision || postMetadata?.activityRevision !== preMetadata?.activityRevision || postMetadata?.attemptRevision !== preMetadata?.attemptRevision || postMetadata?.episode !== preMetadata?.episode)
+      throw new Error("Task changed while delivery metadata was inspected; retrieve its current result.");
+    return presentDelivery(current.resultSummary, metadata) + deliverySuffix(metadata);
+  }
+  const read = await readUntrackedEvidence({ input: options2.input, readTimeoutMs: options2.readTimeoutMs }, taskID);`,
+  },
+  'task-result-evidence-delivery': {
+    // Same standalone-function reshape: the transcript-evidence fallback tail
+    // now closes readTaskResult directly before reportUntrackedTaskStatus.
+    anchor: '  return completedText;\n}\nasync function reportUntrackedTaskStatus(options2, ref) {',
+    replacement: `  const metadata = await deliveryMetadata(options2.input.directory, { taskID, parentSessionID, state: "completed", bcpOrigin: evidence.bcpOrigin });
+  return completedText + deliverySuffix(metadata);
+}
+async function reportUntrackedTaskStatus(options2, ref) {`,
+  },
+};
+
+// Index entry only: the alias-guard anchors self-replace on the v1 entry and
+// 3.0.5 renamed that table's content (librarian alias added). The server-entry
+// halves of these three patches still match 3.0.5 byte-for-byte and are
+// inherited from the effective 3.0.4 patches.
+const withIndexAliasGuard3_0_5 = id => {
+  const base = PATCHES_3_0_4.find(patch => patch.id === id);
+  return {
+    anchor: V(OMO_ALIAS_GUARD_INDEX_NOOP_3_0_5, pick(base.anchor, 'server')),
+    replacement: V(OMO_ALIAS_GUARD_INDEX_NOOP_3_0_5, pick(base.replacement, 'server')),
+  };
+};
+PATCH_OVERRIDES_3_0_5['native-explicit-pin-retain'] = withIndexAliasGuard3_0_5('native-explicit-pin-retain');
+PATCH_OVERRIDES_3_0_5['native-pin-instance-state'] = withIndexAliasGuard3_0_5('native-pin-instance-state');
+PATCH_OVERRIDES_3_0_5['native-pin-instance-call'] = withIndexAliasGuard3_0_5('native-pin-instance-call');
+
+export const PATCHES_3_0_5 = [
+  ...PATCHES_3_0_4.map(patch => ({ ...patch, ...PATCH_OVERRIDES_3_0_5[patch.id] })),
+];
+
 export function describeOmoPatches(version) {
   if (version === '3.0.1') return PATCHES_3_0_1.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.3') return PATCHES_3_0_3.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.4') return PATCHES_3_0_4.map(({id, purpose}) => ({id, purpose}));
+  if (version === '3.0.5') return PATCHES_3_0_5.map(({id, purpose}) => ({id, purpose}));
   if (version === '2.2.25') return [{id: 'legacy-2.2.25', purpose: 'Full 2.2.25 patch set (rollback-compatible legacy path).'}];
   throw new Error('Unsupported OMO version: ' + version);
 }
@@ -1040,7 +1137,7 @@ function patchOmo3(original, version, entry) {
   }
   // Upstream Council procedure text (steps 1–5) is intentionally left untouched:
   // 3.0.1 keeps upstream Council byte-identical, no private agenda is spliced in.
-  for (const patch of version === '3.0.4' ? PATCHES_3_0_4 : version === '3.0.3' ? PATCHES_3_0_3 : PATCHES_3_0_1) {
+  for (const patch of version === '3.0.5' ? PATCHES_3_0_5 : version === '3.0.4' ? PATCHES_3_0_4 : version === '3.0.3' ? PATCHES_3_0_3 : PATCHES_3_0_1) {
     once(pick(patch.anchor, entry), pick(patch.replacement, entry));
   }
   return DELIVERY_IMPORT + source;
