@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { BlackboardV2Plugin } from "../src/adapters/v2/index"
 import { DELIVERY_BRIDGE } from "../src/delivery"
 import { COUNCIL_BRIDGE } from "../src/council"
+import { parseBbId } from "../src/ids"
 import { openScopeById } from "../src/storage"
 import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND } from "../src/constants"
 
@@ -20,7 +21,7 @@ const u = (id: string, text = "input"): Msg => ({ id, role: "user", content: [{ 
 const a = (id: string): Msg => ({ id, role: "assistant", content: [{ type: "text", text: "working" }, { type: "tool-call", id: `call-${id}`, name: "tool", input: {} }] })
 const t = (anchor = "a1"): Msg => ({ role: "tool", content: [{ type: "tool-result", id: `call-${anchor}`, name: "tool", result: { type: "text", value: "ok" } }] })
 
-async function makeHost(sessions: Record<string, { id: string; parentID?: string | null; agent?: string }>, dirOverride?: string) {
+async function makeHost(sessions: Record<string, { id: string; parentID?: string | null; agent?: string; location?: { directory: string } }>, dirOverride?: string, autoCapture = false, nativeExport = true) {
   // dirOverride：同项目目录多次 setup（reload/替换语义测试用）；此时 close 不删目录。
   const dataDir = dirOverride ?? mkdtempSync(join(tmpdir(), "bb-v2-wiring-"))
   const hostEvents: Array<{ type: string; data?: unknown }> = []
@@ -38,8 +39,14 @@ async function makeHost(sessions: Record<string, { id: string; parentID?: string
   const subagent = { id: "subagent", description: "Delegate work.", execute: async () => ({}) }
   const hooks: Record<string, (input: never) => Promise<void> | void> = {}
   let transformCb: ((editor: never) => Promise<void> | void) | null = null
+  const permissionRequests: unknown[] = []
+  let permissionError: Error | undefined
   const ctx = {
-    options: { dataDir, autoCapture: false }, // 身份/注入事务契约按手动模式固定（auto 见 test/v2-*.test.ts）
+    options: { dataDir, autoCapture }, // 身份/注入事务契约默认手动模式（auto 见 test/v2-*.test.ts）
+    permission: nativeExport ? { assert: async (input: unknown) => {
+      permissionRequests.push(input)
+      if (permissionError) throw permissionError
+    } } : {},
     tool: {
       transform: async (cb: (editor: never) => Promise<void> | void) => {
         transformCb = cb
@@ -97,7 +104,7 @@ async function makeHost(sessions: Record<string, { id: string; parentID?: string
   const tool = async (name: string, tctx: { sessionID: string; agent: string; messageID: string }, raw: unknown) => {
     const def = added.find((x) => x.name === name)
     if (!def) throw new Error(`tool not registered: ${name}`)
-    return def.execute(raw, tctx)
+    return def.execute(raw, { ...tctx, id: "export-call" } as never)
   }
   // 真实存储读取：scope-index.json → openScopeById → meta/entry
   const scopeOf = (sessionId: string) => {
@@ -124,7 +131,8 @@ async function makeHost(sessions: Record<string, { id: string; parentID?: string
       if (!dirOverride) rmSync(dataDir, { recursive: true, force: true })
     }
   }
-  return { dataDir, cleanup, added, subagent, transformCb, emit, settle, prompt, context, tool, meta, sessionIndex, scopeOf, close }
+  return { dataDir, cleanup, added, subagent, transformCb, emit, settle, prompt, context, tool, meta, sessionIndex, scopeOf, close,
+    permissionRequests, deny: (error: Error) => { permissionError = error } }
 }
 
 const hosts: Array<{ close: () => void }> = []
@@ -138,6 +146,63 @@ function track<T extends { close: () => void }>(h: T): T {
   hosts.push(h)
   return h
 }
+
+describe("v2 board_export native delivery", () => {
+  test("hosts without native permission.assert do not advertise exports", async () => {
+    const h = track(await makeHost({}, undefined, true, false))
+    expect(h.added.map((tool) => tool.name)).not.toContain("board_export")
+    expect(h.added.map((tool) => tool.name)).toContain("board_get")
+  })
+  for (const autoCapture of [false, true]) {
+    test(`exports exact bytes in the session's current directory (autoCapture=${autoCapture})`, async () => {
+      const session = { id: "exporter", parentID: null, agent: "build", location: { directory: "" } }
+      const h = track(await makeHost({ exporter: session, outsider: { ...session, id: "outsider" } }, undefined, autoCapture))
+      session.location.directory = join(h.dataDir, "moved-session")
+      await h.context({ sessionID: session.id, agent: "build", messages: [u("u1")] })
+      const scope = h.scopeOf(session.id)!
+      const stream = scope.resolveSession(session.id).streamId
+      const record = scope.put(stream, { writer: { agent: "build", session_id: session.id, message_id: "a1" },
+        createdRound: 1, description: "source", content: "Original evidence 原文" })
+      if (record.status !== "stored") throw Error("fixture record was not stored")
+      const source = scope.getById(record.id)
+      if (source.status !== "found") throw Error("fixture record is unreadable")
+      const args = { records: [{ id: record.id, sha256: `sha256:${source.hash}` }] }
+      const tctx = { sessionID: session.id, agent: "build", messageID: "m-export" }
+      const result = JSON.parse((await h.tool("board_export", tctx, args)).content)
+      const parsed = parseBbId(record.id)
+      expect(readFileSync(join(session.location.directory, result.files[0].relpath)))
+        .toEqual(Buffer.from(scope.readEntryBytes(parsed.streamId, parsed.seq)!))
+      expect(existsSync(join(h.dataDir, ".opencode", "bcp", "exports"))).toBe(false)
+      expect(h.permissionRequests).toEqual([{
+        sessionID: session.id, agent: "build", source: { type: "tool", messageID: "m-export", id: "export-call" },
+        action: "board_export", resources: [join(session.location.directory, ".opencode", "bcp", "exports", "*")],
+        save: [], metadata: { directory: join(session.location.directory, ".opencode", "bcp", "exports") },
+      }])
+      expect((await h.tool("board_export", tctx, { records: [{ id: record.id, sha256: `sha256:${"0".repeat(64)}` }] })).content)
+        .toBe(`rejected: hash_mismatch ${record.id}`)
+      // A separate native root session must not acquire this scope's records.
+      await h.context({ sessionID: "outsider", agent: "build", messages: [u("outside-input")] })
+      expect((await h.tool("board_export", { ...tctx, sessionID: "outsider" }, args)).content).toBe(`rejected: forbidden ${record.id}`)
+    })
+  }
+
+  test("permission denial propagates before any output directory exists", async () => {
+    const session = { id: "denied", agent: "build", location: { directory: "" } }
+    const h = track(await makeHost({ denied: session }))
+    session.location.directory = join(h.dataDir, "denied-project")
+    const error = new Error("native permission denied")
+    h.deny(error)
+    await expect(h.tool("board_export", { sessionID: session.id, agent: "build", messageID: "m1" }, { records: [] })).rejects.toBe(error)
+    expect(existsSync(session.location.directory)).toBe(false)
+  })
+
+  test("missing session directory never falls back to plugin location", async () => {
+    const h = track(await makeHost({ unknown: { id: "unknown", agent: "build" } }))
+    expect((await h.tool("board_export", { sessionID: "unknown", agent: "build", messageID: "m1" }, { records: [] })).content)
+      .toBe("rejected: export_directory_unavailable")
+    expect(h.permissionRequests).toEqual([])
+  })
+})
 
 describe("v2 adapter 接线（I1 身份刷新）", () => {
   test("context 每次以实际 agent 权威刷新：build→councillor 切换更新注册身份与 isolated", async () => {

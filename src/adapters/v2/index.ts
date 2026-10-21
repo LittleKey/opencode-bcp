@@ -28,6 +28,7 @@ import {
   AUTO_CAPTURE_INSTRUCTION,
   AUTO_TASK_DESC_APPEND,
   AUTO_TOOL_DESCRIPTIONS,
+  EXPORT_DESCRIPTION,
   PRESSURE_REMINDER_TEMPLATE,
   TASK_DESC_APPEND,
   TOOL_DESCRIPTIONS,
@@ -79,6 +80,17 @@ type ToolHookInput = {
   status?: "completed" | "error"
   result?: unknown
   error?: unknown
+}
+
+// The supported 2.0.20 SDK predates this native capability; 2.1.1 supplies it.
+// Keep older hosts usable without advertising exports they cannot authorize.
+type ExportPermission = {
+  assert?: (input: {
+    sessionID: string; agent: string
+    source: { type: "tool"; messageID: string; id: string }
+    action: string; resources: string[]; save: string[]
+    metadata: { directory: string }
+  }) => Promise<void>
 }
 
 // v2 内建词汇（hosts/v2 实机 @opencode/cli-linux-x64 2.0.20 注册面）：edit/write/glob/grep/
@@ -174,6 +186,7 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
     const dataDir = typeof options?.dataDir === "string" ? options.dataDir : undefined
     // v1 同口径：autoCapture 默认开启（v1.13 起的自动留存宿主），false 回退手动 board_put 契约。
     const autoCapture = options?.autoCapture !== false
+    const exportPermission = (ctx.permission as ExportPermission | undefined)?.assert?.bind(ctx.permission)
     const descriptions = autoCapture ? AUTO_TOOL_DESCRIPTIONS : TOOL_DESCRIPTIONS
     const taskAppend = autoCapture ? AUTO_TASK_DESC_APPEND : TASK_DESC_APPEND
     const st = createBlackboardState(dataDir)
@@ -653,10 +666,30 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
         description,
         input: def.args, // Zod4 实现 StandardSchema（§16.5）
         options: { codemode: false },
-        execute: async (rawArgs: unknown, tctx: ToolContext) => ({
+        execute: async (rawArgs: unknown, tctx: ToolContext) => {
           // writer.message_id = 工具执行身份（§16.3-4），不与提醒去重键合并
-          content: await def.execute({ sessionID: tctx.sessionID, agent: tctx.agent, messageID: tctx.messageID }, rawArgs),
-        }),
+          const identity = { sessionID: tctx.sessionID, agent: tctx.agent, messageID: tctx.messageID }
+          if (name === "board_export") {
+            if (!exportPermission) return { content: "rejected: native_export_permission_unavailable" }
+            // A session can move after plugin setup; never export into the plugin's stale location.
+            const session = await ctx.session.get({ sessionID: tctx.sessionID })
+            const directory = session?.location?.directory
+            if (!directory) return { content: "rejected: export_directory_unavailable" }
+            const exportsDir = join(directory, ".opencode", "bcp", "exports")
+            // Native denials must propagate, before the shared exporter creates directories or files.
+            await exportPermission({
+              sessionID: tctx.sessionID,
+              agent: tctx.agent,
+              source: { type: "tool", messageID: tctx.messageID, id: tctx.id },
+              action: "board_export",
+              resources: [join(exportsDir, "*")],
+              save: [],
+              metadata: { directory: exportsDir },
+            })
+            return { content: await def.execute({ ...identity, directory }, rawArgs) }
+          }
+          return { content: await def.execute(identity, rawArgs) }
+        },
       })
     }
 
@@ -666,6 +699,7 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
       addBoardTool(editor, "board_index", descriptions.board_index ?? TOOL_DESCRIPTIONS.board_index, boardTools.board_index)
       addBoardTool(editor, "board_aggregate", descriptions.board_aggregate ?? TOOL_DESCRIPTIONS.board_aggregate, boardTools.board_aggregate)
       addBoardTool(editor, "board_store", STORE_DESCRIPTION, storeTool)
+      if (exportPermission) addBoardTool(editor, "board_export", EXPORT_DESCRIPTION, boardTools.board_export)
       // §16.4-1：幂等追加 description（保留 executor/schema/options；重复 transform 后恰好一份）。
       // auto 模式：清除 v1 手动契约文案（TASK_DESC_APPEND 与任务工具散文）后换 auto 契约。
       editor.update("subagent", (tool) => {

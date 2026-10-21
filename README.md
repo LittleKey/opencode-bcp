@@ -46,9 +46,11 @@ ACP 外部代理（omo-slim `acpAgents` 的 `acp_run`，如 claude 顾问）：�
 | `board_get` | 按 ID 读回确切记录；原文和版本仍在当前上下文中且无变更信号时，可复用已完成的核对 |
 | `board_index` | 无 query 的 `range="authorized"` 浏览跨流紧凑目录；`query` 搜索正文和路径；省略两者浏览本人目录 |
 | `board_aggregate` | 把多条旧目录项折叠为一条索引摘要：只缩目录，原文恒可 `board_get` |
-| `board_export` | 按 `bb://` ID + 期望 sha256 把记录 JSON 逐字节导出到项目内 `.opencode/bcp/exports/`；可见性复用 `board_get` 可读路径，单次 1–8 条、≤512 KiB，原子发布且不覆盖既有文件（v1 宿主） |
+| `board_export` | 按 `bb://` ID + 期望 sha256 把记录 JSON 逐字节导出到项目内 `.opencode/bcp/exports/`；可见性复用 `board_get` 可读路径，单次 1–8 条、≤512 KiB，原子发布且不覆盖既有文件。v1 与提供 `permission.assert` 的 v2 宿主支持；v2 无此能力时不注册工具。 |
 
 v1/v2 默认 auto 模式都不提供 `board_put`（自动留存 + `board_store`）；显式 `autoCapture: false` 的手动模式在两宿主上都额外注册 `board_put` 旧契约（与 `board_store` 并存），兼容既有禁发布角色配置。
+
+V2 导出在执行时读取会话的当前目录，并调用宿主 `permission.assert` 检查 `board_export` 权限；拒绝原样传播，目录未知则不导出。该权限能力由 OpenCode 2.1.1 提供，2.0.20 的类型接口尚无此能力。记录可读性、期望哈希、配额与原子写入继续由共享导出实现检查。
 
 ## 记录生命周期示例
 
