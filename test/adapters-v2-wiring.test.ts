@@ -180,6 +180,11 @@ describe("v2 board_export native delivery", () => {
       }])
       expect((await h.tool("board_export", tctx, { records: [{ id: record.id, sha256: `sha256:${"0".repeat(64)}` }] })).content)
         .toBe(`rejected: hash_mismatch ${record.id}`)
+      // 省略 sha256：导出当前版本并在回执返回实际哈希；格式错误的哈希仍拒绝。
+      const noHash = JSON.parse((await h.tool("board_export", tctx, { records: [{ id: record.id }] })).content)
+      expect(noHash.files[0].sha256).toBe(source.hash)
+      expect((await h.tool("board_export", tctx, { records: [{ id: record.id, sha256: "sha256:short" }] })).content)
+        .toBe(`rejected: malformed_hash ${record.id}`)
       // A separate native root session must not acquire this scope's records.
       await h.context({ sessionID: "outsider", agent: "build", messages: [u("outside-input")] })
       expect((await h.tool("board_export", { ...tctx, sessionID: "outsider" }, args)).content).toBe(`rejected: forbidden ${record.id}`)

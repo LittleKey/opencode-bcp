@@ -69,7 +69,7 @@ const aggregateArgs = z.object({
 const exportArgs = z.object({
   records: z.array(z.object({
     id: z.string().describe("Full bb:// record ID, copied verbatim"),
-    sha256: z.string().describe("Expected record hash as sha256:<64 hex>, from the store receipt or board_get"),
+    sha256: z.string().optional().describe("Optional expected hash sha256:<64 hex>; provide it to pin the exact version you read (mismatch rejects). Omit to export the current version; the receipt returns its sha256 either way"),
   })).min(1).max(8),
 }).strict()
 
@@ -405,7 +405,8 @@ export function defineBoardTools(deps: {
     },
   }
 
-  // Round 9 §3 board_export：按 bb:// id + 期望 sha256 把记录 JSON 逐字节导出到项目目录。
+  // Round 9 §3 board_export：按 bb:// id（可选附期望 sha256 以钉住所读版本）把记录 JSON 逐字节导出到项目目录；
+  // 哈希省略时导出当前版本并在回执返回实际 sha256（LLM 逐 token 回抄长 hex 不可靠，2026-10-23 用户裁定）。
   // ACL 复用 board_get 路径（resolveScope → resolveAuthz → parseBbId → refPolicy，仅可读记录）；
   // 这是数据交付，不是 ACL 重实现。整批校验先于任何发布；已发布文件允许留存供重试复用。
   const board_export: BoardToolDef = {
@@ -416,11 +417,11 @@ export function defineBoardTools(deps: {
       if (!resolved) return "rejected: unregistered_session"
       if (!ctx.directory) return "rejected: export_directory_unavailable"
       const authz = resolveAuthz(resolved.scope, { sessionId: ctx.sessionID, agent: ctx.agent })
-      // 同 id 去重：同 id 同哈希合并为一条；同 id 不同哈希为调用方冲突。
-      const unique = new Map<string, { id: string; sha256: string }>()
+      // 同 id 去重：同 id 同哈希合并为一条；同 id 不同哈希为调用方冲突（哈希省略视为未指定，不参与冲突判定）。
+      const unique = new Map<string, { id: string; sha256?: string }>()
       for (const r of args.records) {
         const prev = unique.get(r.id)
-        if (prev && prev.sha256 !== r.sha256) return `rejected: conflicting_hash ${r.id}`
+        if (prev && prev.sha256 !== undefined && r.sha256 !== undefined && prev.sha256 !== r.sha256) return `rejected: conflicting_hash ${r.id}`
         if (!prev) unique.set(r.id, r)
       }
       type Planned = { id: string; filename: string; bytes: Uint8Array; sha256: string }
@@ -433,18 +434,23 @@ export function defineBoardTools(deps: {
         } catch {
           return `rejected: malformed_id ${r.id}`
         }
-        const expected = /^sha256:[0-9a-fA-F]{64}$/.test(r.sha256) ? r.sha256.slice(7).toLowerCase() : null
-        if (!expected) return `rejected: malformed_hash ${r.id}`
+        const expected = r.sha256 === undefined
+          ? undefined
+          : (/^sha256:[0-9a-fA-F]{64}$/.test(r.sha256) ? r.sha256.slice(7).toLowerCase() : null)
+        if (expected === null) return `rejected: malformed_hash ${r.id}`
         const policy = refPolicy(authz, { scopeId: t.scopeId, streamId: t.streamId })
         if (policy === "forbidden") return `rejected: forbidden ${r.id}`
         if (policy === "hidden") return `rejected: not_found ${r.id}`
         const g = resolved.scope.getById(r.id)
         if (g.status === "unavailable") return `rejected: unavailable ${r.id}`
         if (g.status === "not_found") return `rejected: not_found ${r.id}`
-        if (g.hash !== expected) return `rejected: hash_mismatch ${r.id}`
+        if (expected !== undefined && g.hash !== expected) return `rejected: hash_mismatch ${r.id}`
         // 逐字节导出：读原始 entry 文件字节，而非 JSON 重建；内部 ID 必须与请求一致。
         const bytes = resolved.scope.readEntryBytes(t.streamId, t.seq)
-        if (!bytes || createHash("sha256").update(bytes).digest("hex") !== expected) return `rejected: unavailable ${r.id}`
+        // 实际哈希以字节为准；调用方提供了期望哈希时校验一致，省略时直接采用并在回执返回。
+        const actual = bytes ? createHash("sha256").update(bytes).digest("hex") : null
+        if (!bytes || !actual) return `rejected: unavailable ${r.id}`
+        if (expected !== undefined && actual !== expected) return `rejected: hash_mismatch ${r.id}`
         let parsed: { id?: string }
         try {
           parsed = JSON.parse(Buffer.from(bytes).toString("utf8")) as { id?: string }
@@ -455,7 +461,7 @@ export function defineBoardTools(deps: {
         if (bytes.length > EXPORT_MAX_BYTES) return `rejected: record_oversize ${r.id}`
         totalBytes += bytes.length
         if (totalBytes > EXPORT_MAX_BYTES) return "rejected: total_oversize"
-        planned.push({ id: r.id, filename: `${t.scopeId}-${t.streamId}-e${String(t.seq).padStart(6, "0")}.json`, bytes, sha256: expected })
+        planned.push({ id: r.id, filename: `${t.scopeId}-${t.streamId}-e${String(t.seq).padStart(6, "0")}.json`, bytes, sha256: actual })
       }
       // 目标目录固定由 ctx.directory 派生；既有 .opencode 子链上的符号链接一律拒绝。
       const exportsDir = join(ctx.directory, ".opencode", "bcp", "exports")
