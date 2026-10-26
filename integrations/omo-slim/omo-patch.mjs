@@ -39,6 +39,14 @@ export const OMO_TARGETS = {
       server: 'e04dd74f4115c721a5fc2b31f14b129834120eb9fcf13d97285ab744eab42a3d',
     },
   },
+  '3.0.6': {
+    entries: {
+      // npm registry tarball oh-my-opencode-slim-3.0.6.tgz (exact-version pin,
+      // prep extraction verified by SHA-256 before patching).
+      index: '68815becae2a17c3173a3bb5da1b5f2460b933ae67ff27bda757449cb9dd0c0f',
+      server: 'ff9082e851490e00dcd80cb093d2db2e615754f4b4e17a7b9ca388c53da02951',
+    },
+  },
 };
 
 export function omoTargetFor(digest) {
@@ -1118,11 +1126,106 @@ export const PATCHES_3_0_5 = [
   ...PATCHES_3_0_4.map(patch => ({ ...patch, ...PATCH_OVERRIDES_3_0_5[patch.id] })),
 ];
 
+// 3.0.5 → 3.0.6: upstream #1652/#1649 replaced the injected-terminal-result
+// lifecycle (injections now reconcile through the terminal gate at injection
+// time; v2 retires task_revive) and #1637/#1657 reworked task-result
+// attribution (readUntrackedEvidence gains a hostInfo argument). Five anchors
+// moved; two patches retire; one addition covers a shim return that split in
+// two. 43 → 42 patches. Fail-closed digest and uniqueness matching unchanged.
+const PATCH_OVERRIDES_3_0_6 = {
+  // Keep only the plugin-directory wiring: the injected-resume acknowledgment
+  // this site also fed is retired below (its target state no longer exists),
+  // and wiring it would reference an undefined function.
+  'hook-deps-wiring': {
+    purpose: 'Pass the plugin directory into the task-session-manager hook.',
+    anchor: '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      shouldManageSession:',
+    replacement: '"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {\n      directory: _ctx.directory,\n      shouldManageSession:',
+  },
+  // 3.0.6 splits the context shim's transcript return into a paginated history
+  // rebuild and a tail slice; both must bind through toV1Transcript. The
+  // history site is overridden here, the tail site is a new addition below.
+  'shim-context-transcript-identity': {
+    anchor: '              data: history.reverse().map(toV1Message),',
+    replacement: '              data: toV1Transcript(history.reverse()),',
+  },
+  // 3.0.6 passes upstream's new third argument (hostInfo) to
+  // readUntrackedEvidence. The 3.0.5 gate.capture pre/post + board CAS body
+  // carries over unchanged: gate/board are still in readTaskResult scope.
+  'task-result-delivery': {
+    anchor: '    return current.resultSummary;\n  }\n  const read = await readUntrackedEvidence({ input: options2.input, readTimeoutMs: options2.readTimeoutMs }, taskID, hostInfo);',
+    replacement: `    const preMetadata = gate.capture(current);
+    const metadata = await deliveryMetadata(options2.input.directory, current);
+    const afterDelivery = board.get(taskID);
+    const postMetadata = gate.capture(current);
+    if (afterDelivery?.generation !== current.generation || afterDelivery.terminalRevision !== current.terminalRevision || afterDelivery.activityRevision !== current.activityRevision || postMetadata?.activityRevision !== preMetadata?.activityRevision || postMetadata?.attemptRevision !== preMetadata?.attemptRevision || postMetadata?.episode !== preMetadata?.episode)
+      throw new Error("Task changed while delivery metadata was inspected; retrieve its current result.");
+    return presentDelivery(current.resultSummary, metadata) + deliverySuffix(metadata);
+  }
+  const read = await readUntrackedEvidence({ input: options2.input, readTimeoutMs: options2.readTimeoutMs }, taskID, hostInfo);`,
+  },
+  // 3.0.6 moves reportUntrackedTaskStatus below the new DIAGNOSTIC_TERMINALS
+  // table, so the readTaskResult fallback tail now closes directly before it.
+  'task-result-evidence-delivery': {
+    anchor: '  return completedText;\n}\nvar DIAGNOSTIC_TERMINALS = new Set(["error", "cancelled", "stopped"]);',
+    replacement: `  const metadata = await deliveryMetadata(options2.input.directory, { taskID, parentSessionID, state: "completed", bcpOrigin: evidence.bcpOrigin });
+  return completedText + deliverySuffix(metadata);
+}
+var DIAGNOSTIC_TERMINALS = new Set(["error", "cancelled", "stopped"]);`,
+  },
+  // 3.0.6 reconciles injections through the terminal gate at injection time,
+  // dropping the terminalUnreconciled early-return branch; the annotation now
+  // sits directly after the stale guard, before upstream's
+  // processed-completion log. Same current-record fence as 3.0.5.
+  'synthetic-updated-annotate': {
+    anchor: '  const updated = result.kind === "stale" ? undefined : result.record;\n  if (!updated)\n    return;\n  log("[task-session-manager] processed injected background completion", {',
+    replacement: `  const updated = result.kind === "stale" ? undefined : result.record;
+  if (!updated)
+    return;
+  await annotateDeliveryPart(state.bcpDirectory, part, updated, message.info?.sessionID, () => {
+    const latest = state.backgroundJobBoard.get(updated.taskID);
+    return latest?.generation === updated.generation && latest.terminalRevision === updated.terminalRevision && latest.activityRevision === updated.activityRevision;
+  });
+  log("[task-session-manager] processed injected background completion", {`,
+  },
+};
+
+// New in 3.0.6: the context shim's tail-path transcript return (the history
+// rebuild path is handled by the overridden shim-context-transcript-identity).
+const PATCHES_3_0_6_ADDITIONS = [
+  {
+    id: 'shim-context-tail-transcript-identity',
+    purpose: 'Bind each tail-sliced transcript message to its real run input through the ordered host context (3.0.6 split the context shim return).',
+    anchor: '            data: tail.map(toV1Message),',
+    replacement: '            data: toV1Transcript(tail),',
+  },
+];
+
+// Retired for 3.0.6: the injected-resume acknowledgment (definition and call
+// site). Upstream #1652/#1649 now reconciles injected completions through the
+// terminal gate at injection time (updateFromInjectedCompletion →
+// terminalGate.reconcile), so consumed results are no longer left
+// terminalUnreconciled and the terminalJobsInjectedByParent ledger this patch
+// matched against is gone. Resume-time consumption of genuinely unreconciled
+// results is handled upstream (v2 acks inline in handleToolExecuteBefore via
+// markReconciled with a generation/terminalRevision settle check; v1 refuses
+// with explicit task_revive guidance). The patch's safety contract —
+// acknowledge exactly that owned execution — cannot be honored without the
+// removed ledger, so no broader replacement is attempted (fail-closed).
+const PATCHES_3_0_6_RETIRED = new Set(['ack-injected-resume-def', 'ack-injected-resume-call']);
+
+export const PATCHES_3_0_6 = [
+  ...PATCHES_3_0_5
+    .filter(patch => !PATCHES_3_0_6_RETIRED.has(patch.id))
+    .map(patch => ({ ...patch, ...PATCH_OVERRIDES_3_0_6[patch.id] })),
+  ...PATCHES_3_0_6_ADDITIONS,
+];
+
 export function describeOmoPatches(version) {
   if (version === '3.0.1') return PATCHES_3_0_1.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.3') return PATCHES_3_0_3.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.4') return PATCHES_3_0_4.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.5') return PATCHES_3_0_5.map(({id, purpose}) => ({id, purpose}));
+  if (version === '3.0.6') return PATCHES_3_0_6.map(({id, purpose}) => ({id, purpose}));
   if (version === '2.2.25') return [{id: 'legacy-2.2.25', purpose: 'Full 2.2.25 patch set (rollback-compatible legacy path).'}];
   throw new Error('Unsupported OMO version: ' + version);
 }
@@ -1137,7 +1240,7 @@ function patchOmo3(original, version, entry) {
   }
   // Upstream Council procedure text (steps 1–5) is intentionally left untouched:
   // 3.0.1 keeps upstream Council byte-identical, no private agenda is spliced in.
-  for (const patch of version === '3.0.5' ? PATCHES_3_0_5 : version === '3.0.4' ? PATCHES_3_0_4 : version === '3.0.3' ? PATCHES_3_0_3 : PATCHES_3_0_1) {
+  for (const patch of version === '3.0.6' ? PATCHES_3_0_6 : version === '3.0.5' ? PATCHES_3_0_5 : version === '3.0.4' ? PATCHES_3_0_4 : version === '3.0.3' ? PATCHES_3_0_3 : PATCHES_3_0_1) {
     once(pick(patch.anchor, entry), pick(patch.replacement, entry));
   }
   return DELIVERY_IMPORT + source;

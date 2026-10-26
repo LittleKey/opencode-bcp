@@ -1,6 +1,23 @@
-# OMO Slim 摘要锁定构建（2.2.25 / 3.0.1 / 3.0.3 / 3.0.4）
+# OMO Slim 摘要锁定构建（2.2.25 / 3.0.1 / 3.0.3 / 3.0.4 / 3.0.5 / 3.0.6）
 
 macOS 普通上游安装的构建、隔离试装与限制见 [MACOS-TRIAL.md](MACOS-TRIAL.md)。现有个人 Linux 升级事务不是通用跨机器安装器。
+
+## 3.0.6 构建器支持（2026-10-25，补丁/构建/测试，未部署）
+
+构建器现支持 `version: '3.0.6'` 的 index/server 双入口。锁定的上游 index SHA-256 为 `68815becae2a17c3173a3bb5da1b5f2460b933ae67ff27bda757449cb9dd0c0f`，server 为 `ff9082e851490e00dcd80cb093d2db2e615754f4b4e17a7b9ca388c53da02951`。未知摘要与非唯一补丁锚点仍拒绝构建（fail-closed 不变）。3.0.5↔3.0.6 的 `src/skills` 逐字节相同，技能侧无任何变更。
+
+3.0.6 补丁集 = 42 项唯一锚点补丁（3.0.5 的 43 项：36 项原文沿用、5 项因上游重构重新锚定/调整、2 项退役；另新增 1 项），锚点唯一性断言与 `once()` 防重复套用不变。逐项决定：
+
+- **退役 `ack-injected-resume-def` 与 `ack-injected-resume-call`**：上游 #1652/#1649 让注入完成在注入时即经 `terminalGate.reconcile` 对账，`terminalJobsInjectedByParent` 台账与 `reconcileConsumedTerminalJobs` 已删除；v2 续接路径改在 `handleToolExecuteBefore` 内联确认（`backgroundJobBoard.markReconciled`，带代次/终版 settled 检查），v1 对未对账结果直接拒绝续接并要求显式 `task_revive`。原补丁「只确认同一父会话/角色/代次完全一致的既有终态」的契约所匹配的台账已不存在，放宽匹配即违反 fail-closed，故退役而非改写。`deps.acknowledgeInjectedResume?.()` 为可选链，退役后无悬挂引用。
+- **重锚 `shim-context-transcript-identity` 并新增 `shim-context-tail-transcript-identity`**：上游把 context shim 的 transcript 返回拆为分页历史重建（`data: history.reverse().map(toV1Message)`）与尾部两条路径；两个位置都改为 `toV1Transcript(...)`，保持「assistant `parentID` 绑定最近真实 user 输入、synthetic 不充当输入身份」的既有绑定，`shim-paged-transcript-identity` 的分页路径锚点未变。
+- **重锚 `task-result-delivery`**：上游给 `readUntrackedEvidence` 增加了第三参数 `hostInfo`，锚点随之更新；3.0.5 引入的 `gate.capture` 前后读、board CAS 与代次围栏原样保留。
+- **重锚 `task-result-evidence-delivery`**：`readTaskResult` 未跟踪分支的函数尾现在紧邻上游新增的 `var DIAGNOSTIC_TERMINALS = ...`（`reportUntrackedTaskStatus` 整体后移），交付元数据接线随之重新定位，`evidence` 仍在作用域。
+- **重锚 `synthetic-updated-annotate`**：`updateFromInjectedCompletion` 不再在 `updated.terminalUnreconciled` 处提前返回（注入在闸门处已对账），注记围栏改插到 `if (!updated) return;` 与上游「processed injected background completion」日志之间，`part`/`message` 均为函数参数、作用域成立。
+- **调整 `hook-deps-wiring`（仅替换文本）**：接线中不再注入已退役的 `acknowledgeInjectedNativeResume` 依赖，仅保留 `directory: _ctx.directory,`；锚点本身未变。
+
+测试：`test/omo-3.0.6.test.mjs`（`node --test`，环境变量 `OMO_306_PACKAGE` 指向已展开的官方 3.0.6 包，缺省时跳过）5 项通过：摘要锁定与篡改/错版本/错入口拒绝；42 项补丁在两个入口的 stock 中各自恰好一次命中、打补丁后恰好消费一次且无丢失/重复；stock 无 BCP 交付标记；重锚接线断言（`toV1Transcript` 定义先于两处使用、CAS 消息恰两处、注记先于上游日志、退役标识不存在、directory-only 接线）；`buildOmoIntegration` 双入口端到端（manifest 版本/42 项补丁/闭包包数、bundle 标记、index 裸外部依赖为空）。既有版本测试与失败集合在改动前后逐名一致（均为 README 已记录的缺夹具/环境门控项），仅新增 3.0.6 的 5 项通过。
+
+隔离试构建（机器本地探针产物，非部署产物）：`/tmp/opencode/omo-306-build/v2-plugin`（dist/server/index.js SHA-256 `316a832e46053ec7c83ec14b60aef44ff40f022ced64edc9903de079968563ab`，omo-delivery.mjs `ce4344c47d41dec4dbc4b5fe1d8a49b764d0ffb0941757577161518f77421c99`，42 项补丁，41 个闭包包）与 `/tmp/opencode/omo-306-build/v1-plugin`（dist/index.js `0b4af9559527c4ed8408b9f1f6bc7f11dff974629b2092444b7b974b63fa7452`，40 个闭包包）。该目录主机重启后不复存在；3.0.6 尚无磁盘安装与验收，本文只声明构建器能力。
 
 ## 3.0.4 已完成磁盘安装与重启后受限验收（2026-10-11 安装，2026-10-12 验收）
 
