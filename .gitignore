@@ -15,7 +15,7 @@ snapshot/
 harness/runs/*
 !harness/runs/evidence-*.jsonl
 .opencode/
-.slim/deepwork/
+.slim/
 
 # BEGIN oh-my-opencode-slim worktrees
 .slim/worktrees/
