@@ -5,7 +5,7 @@ BCP 以单个 TypeScript 插件文件装入 opencode，无运行时依赖安装�
 ## 前置要求
 
 - [bun](https://bun.sh)（安装脚本用它构建产物）
-- opencode 1.x（最低 1.18.29，实际验证 1.18.33；2026-10-09 已在 1.18.35 完成隔离重验与生产进程核验，见 [integrations/omo-slim/README.md](integrations/omo-slim/README.md)）或 opencode 2.0.20+（最低并实际验证 2.0.20）。同一个构建产物同时提供 v1 `server` 与 v2 `setup` 双入口，安装脚本检测宿主 major 后装入同一个文件；2.0.0 已通过发布复审并安装到现有 v1 生产配置，限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。最低版本声明不代表所有中间版本都已验证。
+- opencode 1.x（最低 1.18.29，实际验证 1.18.33；2026-10-09 已在 1.18.35 完成隔离重验与生产进程核验，见 [integrations/omo-slim/README.md](integrations/omo-slim/README.md)）或 opencode 2.0.20+（最低 2.0.20，实际验证 2.1.4）。同一个构建产物同时提供 v1 `server` 与 v2 `setup` 双入口，安装脚本检测宿主 major 后装入同一个文件；2.0.0 已通过发布复审并安装到现有 v1 生产配置，限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。最低版本声明不代表所有中间版本都已验证。
 
 ## 安装
 

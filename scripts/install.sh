@@ -19,7 +19,7 @@
 #                     'opencode' on PATH) or an executable path whose
 #                     `--version` output is parsed. Default: probe PATH.
 #                     Gates: v1 requires >= 1.18.29 (tested 1.18.33);
-#                     v2 requires >= 2.0.20 (tested 2.0.20).
+#                     v2 requires >= 2.0.20 (tested 2.1.4).
 #   --artifact <file> install this prebuilt bundle instead of building
 #                     (implies --skip-build).
 #   --skip-build      use dist/blackboard.ts as-is (also: BB_INSTALL_SKIP_BUILD=1).

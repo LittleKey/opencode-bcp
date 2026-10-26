@@ -20,8 +20,8 @@ describe("scripts/build.sh: builder CLI and artifacts", () => {
     expect(existsSync(join(REPO, "dist", "plugin.js"))).toBe(false)
   })
 
-  test("package version is 2.0.1 and stays private/unpublished", () => {
-    expect(PKG.version).toBe("2.0.1")
+  test("package version is 2.0.2 and stays private/unpublished", () => {
+    expect(PKG.version).toBe("2.0.2")
     expect(PKG.private).toBe(true)
     expect(PKG.name).toBe("opencode-bcp")
   })
@@ -34,7 +34,7 @@ describe("scripts/build.sh: builder CLI and artifacts", () => {
     expect(rel.compatibility.v1.minimum).toBe("1.18.29")
     expect(rel.compatibility.v1.tested).toBe("1.18.33")
     expect(rel.compatibility.v2.minimum).toBe("2.0.20")
-    expect(rel.compatibility.v2.tested).toBe("2.0.20")
+    expect(rel.compatibility.v2.tested).toBe("2.1.4")
     expect(rel.compatibility.discoveryPath).toContain("plugin/blackboard.ts")
     expect(rel.artifactSha256).toMatch(/^[0-9a-f]{64}$/)
     expect(rel.artifactBytes).toBe(statSync(bundle).size)
@@ -42,7 +42,7 @@ describe("scripts/build.sh: builder CLI and artifacts", () => {
 
   test("bundle carries provenance banner and no runtime @opencode/* import", () => {
     const src = readFileSync(bundle, "utf8")
-    expect(src).toContain("@opencode-bcp-generated v2.0.1 dual-entry bundle")
+    expect(src).toContain("@opencode-bcp-generated v2.0.2 dual-entry bundle")
     expect(src).toContain("server=v1 >=1.18.29")
     expect(src).not.toMatch(/from\s+["']@opencode/)
     // both entry implementations must be reachable in the single artifact
@@ -50,10 +50,10 @@ describe("scripts/build.sh: builder CLI and artifacts", () => {
     expect(src).toContain("BlackboardV2Plugin")
   })
 
-  test("devDependencies: v2 host SDK pinned at tested 2.0.20, v1 SDK preserved", () => {
-    expect(PKG.devDependencies["@opencode/plugin"]).toBe("2.0.20")
+  test("devDependencies: v2 host SDK pinned at tested 2.1.4, v1 SDK preserved", () => {
+    expect(PKG.devDependencies["@opencode/plugin"]).toBe("2.1.4")
     expect(PKG.devDependencies["@opencode-ai/plugin"]).toBe("^1.18.31")
     const lock = readFileSync(join(REPO, "bun.lock"), "utf8")
-    expect(lock).toContain('"@opencode/plugin": "2.0.20"')
+    expect(lock).toContain('"@opencode/plugin": "2.1.4"')
   })
 })

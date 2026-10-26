@@ -24,7 +24,7 @@ BCP_CANONICAL_REL="plugin/blackboard.ts"
 BCP_MANIFEST_NAME="bcp-install.json"
 BCP_MANAGED_NAMES="plugin/blackboard.ts plugin/blackboard.js plugins/blackboard-v2.ts"
 BCP_V1_MIN="1.18.29";  BCP_V1_TESTED="1.18.33"
-BCP_V2_MIN="2.0.20";   BCP_V2_TESTED="2.0.20"
+BCP_V2_MIN="2.0.20";   BCP_V2_TESTED="2.1.4"
 
 # --- basics ------------------------------------------------------------------
 bcp_die() { local code="$1"; shift; echo "ERROR: $*" >&2; exit "$code"; }

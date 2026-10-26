@@ -77,7 +77,7 @@ cat > "$OUT_DIR/release.json" <<EOF
   "compatibility": {
     "discoveryPath": "<config-root>/plugin/blackboard.ts",
     "v1": { "minimum": "1.18.29", "tested": "1.18.33", "entry": "server()" },
-    "v2": { "minimum": "2.0.20", "tested": "2.0.20", "entry": "setup()" }
+    "v2": { "minimum": "2.0.20", "tested": "2.1.4", "entry": "setup()" }
   }
 }
 EOF
