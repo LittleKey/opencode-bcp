@@ -1038,8 +1038,9 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
         )
         snapshots.linkParent(sessionID, input.messageID, st.runInput.get(sessionID))
         receipts.assistant(sessionID, input.messageID, st.runInput.get(sessionID))
-        // 原生后台子代理交付回执：派发观察（R8.1 起点 = 经 subagent 调用观察到的
-        // 「新建」子会话）。新建判定：宿主 execute.before 会删除空串 sessionID
+        // 回执派发确认：首输入可早于工具返回，因此来源起点在 Created 事件观察；
+        // 此处只确认新建派发归属/描述，不能凭工具返回补建完整来源证明。
+        // 新建判定：宿主 execute.before 会删除空串 sessionID
         // （subagent.ts execute.before）⇒ input.input.sessionID 缺失即新建；子会话 ID
         // 取工具 Output result.output.sessionID（tool.ts:104-149）。前台 completed 与
         // 后台 running 的工具调用都按 completed 观察；状态异常/字段缺失 → 不建档
@@ -1135,7 +1136,12 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
           try {
             const event = ev as { type?: string; data?: Record<string, unknown> }
             if (event.type === "session.created") {
-              // R1：只观测，不写身份（唯一权威路径是 context 的 registerScopeContext）。
+              // 只为已登记父会话的新子会话建立临时连续观察域，不写身份/发布权限。
+              // 宿主先 create→prompt 首输入再返回工具；Created 与工具结果可交错，
+              // 二者都具备才允许关联。未看到 Created 的历史/恢复会话始终降级。
+              const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
+              const parentID = typeof event.data?.parentID === "string" ? event.data.parentID : ""
+              if (sessionID && parentID && st.scopes.has(parentID)) subagentLedger.observeCreated(parentID, sessionID)
             } else if (event.type === "session.forked") {
               const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
               if (sessionID) {
@@ -1153,6 +1159,10 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
               for (const key of [...editTokens.keys()]) {
                 if (key.startsWith(`${sessionID}:`)) editTokens.delete(key)
               }
+            } else if (event.type === "session.step.started") {
+              const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
+              const assistantID = typeof event.data?.assistantMessageID === "string" ? event.data.assistantMessageID : ""
+              if (sessionID && assistantID) subagentLedger.observeChildStart(sessionID, assistantID)
             } else if (event.type === "session.text.ended") {
               const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
               const assistantID = typeof event.data?.assistantMessageID === "string" ? event.data.assistantMessageID : ""
@@ -1215,6 +1225,9 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
               // R8.4：revert 提交 → 该子会话新关联资格整体失效。
               const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
               if (sessionID) subagentLedger.invalidate(sessionID, "revert")
+            } else if (event.type === "session.message.content.updated") {
+              const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
+              if (sessionID) subagentLedger.invalidate(sessionID, "content_updated")
             }
           } catch (err) {
             // R8 降级表：订阅/处理异常 → 不以「没观察到事件」证明没变化，回执账本整体失效。

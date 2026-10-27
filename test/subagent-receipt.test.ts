@@ -4,14 +4,18 @@
 // 非终稿同文不制造唯一、compaction/revert/容量淘汰后不恢复、多 text parts、
 // 空输出占位跳过、裸插值 description 逐字节复现、同 id 重投幂等、续跑不改指新结果。
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { BlackboardV2Plugin } from "../src/adapters/v2/index"
 import { openScopeById } from "../src/storage"
 import { replyKey } from "../src/reply"
-import { subagentNotificationText, receiptTail } from "../src/adapters/v2/subagent-receipt"
+import {
+  subagentNotificationText, receiptTail, SubagentReceiptLedger, attachSubagentReceipts,
+  DESCRIPTIONS_CAP, ASSISTANTS_CAP, TEXT_PARTS_CAP, CHILD_EVIDENCE_BYTES_CAP, SEEN_CHILDREN_CAP,
+} from "../src/adapters/v2/subagent-receipt"
+import type { ReceiptDeps } from "../src/adapters/v2/subagent-receipt"
 
 const sha256hex = (s: string): string => createHash("sha256").update(s).digest("hex")
 
@@ -24,22 +28,29 @@ const draftNotice = (id: string, text: string): Msg => ({ id, role: "user", cont
 const PARENT = "parent"
 const CHILD = "child"
 
-async function makeHost(sessions: Record<string, { id: string; parentID?: string | null; agent?: string }>, opts: { autoCapture?: boolean; boardGetEffect?: "allow" | "deny" } = {}) {
+async function makeHost(sessions: Record<string, { id: string; parentID?: string | null; agent?: string }>, opts: { autoCapture?: boolean; boardGetEffect?: "allow" | "deny"; boardStoreEffect?: "allow" | "deny" } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "bb-v2-receipt-"))
   const hostEvents: Array<{ type: string; data?: unknown }> = []
   const eventWaiters: Array<(r: { value: unknown; done: boolean }) => void> = []
+  let barrier: (() => void) | undefined
+  const deliver = (ev: { type: string; data?: unknown }) => {
+    if (ev.type === "test.barrier") barrier = (ev.data as { resolve: () => void }).resolve
+    return { value: ev, done: false }
+  }
   const emit = (type: string, data?: unknown): void => {
     const ev = { type, data }
     const w = eventWaiters.shift()
-    if (w) w({ value: ev, done: false })
+    if (w) w(deliver(ev))
     else hostEvents.push(ev)
   }
-  const settle = async (): Promise<void> => {
-    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 5))
-  }
+  // 下一次订阅拉取才确认前一个事件处理完成；不靠固定 sleep 猜 capture 是否落盘。
+  const settle = (): Promise<void> => new Promise((resolve) => emit("test.barrier", { resolve }))
   // 每会话可变 wire 表（ctx.session.context 按会话返回；测试直接改写模拟宿主装配视图）。
   const wires: Record<string, Wire[]> = {}
-  const agentPermissions = [{ action: "board_get", resource: "*", effect: opts.boardGetEffect ?? "allow" }]
+  const agentPermissions = [
+    { action: "board_get", resource: "*", effect: opts.boardGetEffect ?? "allow" },
+    { action: "board_store", resource: "*", effect: opts.boardStoreEffect ?? "allow" },
+  ]
   const hooks: Record<string, (input: never) => Promise<unknown> | unknown> = {}
   const ctx = {
     options: { dataDir, autoCapture: opts.autoCapture ?? false },
@@ -70,8 +81,11 @@ async function makeHost(sessions: Record<string, { id: string; parentID?: string
       subscribe: (_opts?: unknown) => {
         const iterator = {
           next: (): Promise<{ value: unknown; done: boolean }> => {
+            const complete = barrier
+            barrier = undefined
+            complete?.()
             const ev = hostEvents.shift()
-            if (ev) return Promise.resolve({ value: ev, done: false })
+            if (ev) return Promise.resolve(deliver(ev))
             return new Promise((resolve) => eventWaiters.push(resolve))
           },
           [Symbol.asyncIterator]: () => iterator,
@@ -134,6 +148,9 @@ async function seedWorld(h: Host, knobs: {
   recordMessageId?: string
   recordInputId?: string | null
   observeDispatch?: boolean
+  observeCreated?: boolean
+  inputBeforeDispatch?: boolean
+  dispatchBeforeCreated?: boolean
   observeChildInput?: boolean
   observeChildText?: boolean
   emitDelivered?: boolean
@@ -145,7 +162,8 @@ async function seedWorld(h: Host, knobs: {
   const assistantId = knobs.assistantId ?? "as-1"
   const childInputId = knobs.childInputId ?? "c-in"
   const noticeId = knobs.noticeId ?? "n-1"
-  if (knobs.observeDispatch !== false) {
+  const dispatch = async () => {
+    if (knobs.observeDispatch === false) return
     await h.toolAfter({
       tool: "subagent", sessionID: PARENT, messageID: "ta-1", id: "call-1", status: "completed",
       input: { agent: "explore", description, prompt: "go" },
@@ -153,9 +171,16 @@ async function seedWorld(h: Host, knobs: {
     })
   }
   await h.context({ sessionID: PARENT, agent: "build", messages: [u("p-in")] })
+  if (knobs.dispatchBeforeCreated) await dispatch()
+  if (knobs.observeCreated !== false) h.emit("session.created", { sessionID: CHILD, parentID: PARENT })
+  if (!knobs.inputBeforeDispatch && !knobs.dispatchBeforeCreated) await dispatch()
   await h.context({ sessionID: CHILD, agent: "build", messages: [u(childInputId)] })
   if (knobs.observeChildInput !== false) {
     h.emit("session.inbox.enqueued", { sessionID: CHILD, inboxID: childInputId })
+  }
+  if (knobs.inputBeforeDispatch) {
+    await h.settle()
+    await dispatch()
   }
   if (knobs.observeChildText !== false) {
     for (let i = 0; i < parts.length; i++) {
@@ -252,6 +277,7 @@ describe("subagent delivery receipt: positive association (R*.4-8, R8.6)", () =>
     // child A = 标准世界；child B 走同样的种子但换 ID。
     const a = await seedWorld(h, { noticeId: "n-a" })
     // child B：派发 + 注册 + 记录 + 观察 + 通知。
+    h.emit("session.created", { sessionID: "child2", parentID: PARENT })
     await h.toolAfter({
       tool: "subagent", sessionID: PARENT, messageID: "ta-2", id: "call-2", status: "completed",
       input: { agent: "explore", description: "Second task", prompt: "go2" },
@@ -606,5 +632,232 @@ describe("subagent delivery receipt: idempotency & display-copy boundary (R*.8)"
     const freshDraft: Msg[] = [u("p-in", "delegate"), draftNotice("n-1", subagentNotificationText(CHILD, "completed", "Do the thing", "The answer")), u("p-out", "next")]
     await runParentContext(h, freshDraft)
     expect((freshDraft[1]!.content as string).endsWith(receiptTail(bbId))).toBe(true)
+  })
+})
+
+describe("receipt repair: native ordering and real automatic capture", () => {
+  test("initial inbox before tool return AND tool return before Created consumption both work", async () => {
+    for (const order of [{ inputBeforeDispatch: true }, { dispatchBeforeCreated: true }]) {
+      const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
+      const { draft, bbId } = await seedWorld(h, order)
+      await runParentContext(h, draft)
+      expect((draft[1]!.content as string).endsWith(receiptTail(bbId))).toBe(true)
+    }
+  })
+  test("tool result cannot replace missing live creation proof", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
+    const { draft } = await seedWorld(h, { observeCreated: false })
+    await runParentContext(h, draft)
+    expect(draft[1]!.content).not.toContain("Retained: bb://")
+  })
+  test("a completed no-text step is observed even without a text event", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
+    const { draft, bbId } = await seedWorld(h)
+    h.emit("session.step.ended", { sessionID: CHILD, assistantMessageID: "tool-only", finish: "tool-calls" })
+    await h.settle()
+    h.wires[CHILD]!.splice(1, 0, { id: "tool-only", type: "assistant", finish: "tool-calls", time: { completed: 1 }, content: [] })
+    await runParentContext(h, draft)
+    expect((draft[1]!.content as string).endsWith(receiptTail(bbId))).toBe(true)
+  })
+
+  async function autoWorld(h: Host, body: string, inputText = "go") {
+    await h.hooks.prompt!({ sessionID: PARENT, messageID: "p-in", prompt: { text: "delegate" } } as never)
+    await h.context({ sessionID: PARENT, agent: "build", messages: [u("p-in", "delegate")] })
+    h.emit("session.created", { sessionID: CHILD, parentID: PARENT })
+    h.emit("session.inbox.enqueued", { sessionID: CHILD, inboxID: "c-in" })
+    await h.settle() // 宿主 prompt 先于工具返回；不是通过等待后重发输入弥补缺口。
+    h.wires[CHILD] = [{ id: "c-in", type: "user", text: inputText }]
+    await h.hooks.prompt!({ sessionID: CHILD, messageID: "c-in", prompt: { text: inputText } } as never)
+    await h.context({ sessionID: CHILD, agent: "build", messages: [u("c-in", inputText)] })
+    await h.toolAfter({
+      tool: "subagent", sessionID: PARENT, messageID: "ta-1", id: "call-1", status: "completed",
+      input: { agent: "build", description: "Do the thing", prompt: inputText },
+      result: { output: { sessionID: CHILD, status: "running" } },
+    })
+    // 无文本工具步骤不能被排除于来源域，也不能导致后续真实终稿永远 coverage_gap。
+    const toolStep = { id: "as-tool", type: "assistant", agent: "build", finish: "tool-calls",
+      time: { created: 1, completed: 2 }, content: [{ type: "tool", id: "t1", name: "read", state: { status: "completed" } }] }
+    const terminal = { id: "as-final", type: "assistant", agent: "build", finish: "stop",
+      time: { created: 3, completed: 4 }, content: [{ type: "text", text: body }] }
+    h.wires[CHILD]!.push(toolStep, terminal)
+    h.emit("session.step.started", { sessionID: CHILD, assistantMessageID: "as-tool" })
+    h.emit("session.step.ended", { sessionID: CHILD, assistantMessageID: "as-tool", finish: "tool-calls" })
+    h.emit("session.step.started", { sessionID: CHILD, assistantMessageID: "as-final" })
+    h.emit("session.text.ended", { sessionID: CHILD, assistantMessageID: "as-final", ordinal: 0, text: body })
+    h.emit("session.step.ended", { sessionID: CHILD, assistantMessageID: "as-final", finish: "stop" })
+    await h.settle()
+    const scope = h.scopeOf(CHILD)!
+    const hit = scope.readMeta(scope.resolveSession(CHILD).streamId).idem[replyKey(CHILD, "as-final", "final")]
+    const notice = subagentNotificationText(CHILD, "completed", "Do the thing", body)
+    h.wires[PARENT] = [
+      { id: "p-in", type: "user", text: "delegate" },
+      { id: "n-auto", type: "synthetic", text: notice, metadata: { source: "subagent", childID: CHILD, state: "completed" } },
+    ]
+    h.emit("session.inbox.delivered", { sessionID: PARENT, inboxID: "n-auto" })
+    await h.settle()
+    const draft = [u("p-in", "delegate"), draftNotice("n-auto", notice)]
+    await runParentContext(h, draft)
+    return { scope, hit, draft, body, log: readFileSync(join(h.dataDir, "log/blackboard.log"), "utf8") }
+  }
+
+  test("autoCapture:true + real store marker → captureFinal record → parent receipt (no manual put)", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions(), { autoCapture: true })) - 1]!
+    const { scope, hit, draft, body, log } = await autoWorld(h, 'Done.\n\n<!-- bcp:store description="native capture regression" -->')
+    expect(hit, log).toBeDefined()
+    expect(hit?.id).toStartWith("bb://")
+    const record = scope.getById(hit!.id)
+    expect(record.status).toBe("found")
+    if (record.status !== "found") throw Error("automatic record missing")
+    expect(record.record.origin?.kind).toBe("host_final")
+    expect(record.record.origin?.input_message_id).toBe("c-in")
+    expect(record.record.content).toBe(body)
+    expect((draft[1]!.content as string).endsWith(receiptTail(hit!.id))).toBe(true)
+  })
+  test("automatic path still respects absent marker, NO_STORE and publication denial", async () => {
+    for (const scenario of [
+      { body: "No publication marker" },
+      { body: 'Done.\n\n<!-- bcp:store description="blocked" -->', input: "go <!-- bcp:no-store -->" },
+      { body: 'Done.\n\n<!-- bcp:store description="denied" -->', denied: true },
+    ]) {
+      const h = hosts[hosts.push(await makeHost(baseSessions(), { autoCapture: true, boardStoreEffect: scenario.denied ? "deny" : "allow" })) - 1]!
+      const { hit, draft } = await autoWorld(h, scenario.body, scenario.input)
+      expect(hit).toBeUndefined()
+      expect(draft[1]!.content).not.toContain("Retained: bb://")
+    }
+  })
+})
+
+// 直接控制 await 边界与资源预算；留存/权限本身的真实接线由上面的 adapter 电池验证。
+function receiptFixture() {
+  const ledger = new SubagentReceiptLedger()
+  ledger.observeCreated(PARENT, CHILD)
+  ledger.observeDispatch(PARENT, CHILD, "task")
+  ledger.observeChildInput(CHILD, "c-in")
+  ledger.observeChildText(CHILD, "a", 0, "A")
+  ledger.observeChildFinish(CHILD, "a", "stop")
+  ledger.observeDelivered(PARENT, "n")
+  const text = subagentNotificationText(CHILD, "completed", "task", "A")
+  const msgs: Msg[] = [draftNotice("n", text)]
+  const wire: Wire[] = [{ id: "a", type: "assistant", finish: "stop", time: { completed: 1 }, content: [{ type: "text", text: "A" }] }]
+  const notice = { id: "n", type: "synthetic", text, metadata: { source: "subagent", childID: CHILD, state: "completed" } }
+  const id = "bb://00000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002/e000001"
+  const deps: ReceiptDeps = {
+    parentSessionID: PARENT, msgs: msgs as Array<Record<string, unknown>>, ledger,
+    parentWire: async () => [notice], childWire: async () => wire, childParentID: async () => PARENT,
+    retainedRecord: async () => id, parentCanRead: async () => true, log: () => {},
+  }
+  return { ledger, text, msgs, wire, notice, id, deps }
+}
+
+describe("receipt repair: raw notification, race fences and bounded evidence", () => {
+  test("persistent A + valid but different draft B never receives B's reference", async () => {
+    const f = receiptFixture()
+    f.ledger.observeChildText(CHILD, "b", 0, "B")
+    f.ledger.observeChildFinish(CHILD, "b", "stop")
+    f.wire.push({ id: "b", type: "assistant", finish: "stop", time: { completed: 2 }, content: [{ type: "text", text: "B" }] })
+    f.msgs[0]!.content = subagentNotificationText(CHILD, "completed", "task", "B")
+    await attachSubagentReceipts(f.deps)
+    expect(f.msgs[0]!.content).not.toContain("Retained:")
+  })
+  test("persistent notification changed during permission await is rechecked", async () => {
+    const f = receiptFixture()
+    f.deps.parentCanRead = async () => { f.notice.text = "replaced"; return true }
+    await attachSubagentReceipts(f.deps)
+    expect(f.msgs[0]!.content).toBe(f.text)
+  })
+  test("invalidation at each async gate cannot publish stale evidence", async () => {
+    for (const gate of ["childParentID", "childWire", "retainedRecord", "parentCanRead"] as const) {
+      for (const reason of ["compaction", "revert", "deleted", "reset", "capacity", "new_text", "delivery_evicted"]) {
+        const f = receiptFixture()
+        const invalidate = () => {
+          if (reason === "deleted") f.ledger.forgetSession(CHILD)
+          else if (reason === "reset") f.ledger.resetAll()
+          else if (reason === "capacity") for (let i = 0; i < 32; i++) f.ledger.observeCreated(PARENT, `new-${i}`)
+          else if (reason === "new_text") f.ledger.observeChildStart(CHILD, "new-message")
+          else if (reason === "delivery_evicted") for (let i = 0; i < 128; i++) f.ledger.observeDelivered(PARENT, `new-${i}`)
+          else f.ledger.invalidate(CHILD, reason)
+        }
+        if (gate === "childParentID") f.deps.childParentID = async () => { invalidate(); return PARENT }
+        if (gate === "childWire") f.deps.childWire = async () => { invalidate(); return f.wire }
+        if (gate === "retainedRecord") f.deps.retainedRecord = async () => { invalidate(); return f.id }
+        if (gate === "parentCanRead") f.deps.parentCanRead = async () => { invalidate(); return true }
+        await attachSubagentReceipts(f.deps)
+        expect(f.msgs[0]!.content).toBe(f.text)
+      }
+    }
+  })
+  test("description collision survives all retained generations; overflow invalidates, never shifts", async () => {
+    const f = receiptFixture()
+    f.ledger.observeChildText(CHILD, "old", 0, 'embedded\">\nB')
+    f.ledger.observeChildFinish(CHILD, "old", "stop")
+    f.wire.push({ id: "old", type: "assistant", finish: "stop", time: { completed: 1 }, content: [{ type: "text", text: 'embedded\">\nB' }] })
+    f.ledger.observeChildText(CHILD, "new", 0, "B")
+    f.ledger.observeChildFinish(CHILD, "new", "stop")
+    f.wire.push({ id: "new", type: "assistant", finish: "stop", time: { completed: 2 }, content: [{ type: "text", text: "B" }] })
+    f.ledger.observeContinuation(PARENT, CHILD, 'task\">\nembedded')
+    f.notice.text = subagentNotificationText(CHILD, "completed", "task", 'embedded\">\nB')
+    f.msgs[0]!.content = f.notice.text
+    await attachSubagentReceipts(f.deps)
+    expect(f.msgs[0]!.content).not.toContain("Retained:") // 两条候选，而非过滤旧来源。
+    for (let i = 2; i < DESCRIPTIONS_CAP; i++) f.ledger.observeContinuation(PARENT, CHILD, `filler-${i}`)
+    const before = f.ledger.eligibleChild(PARENT, CHILD)!
+    expect(before.descriptions.length).toBe(DESCRIPTIONS_CAP)
+    f.ledger.observeContinuation(PARENT, CHILD, "overflow")
+    expect(before.invalid).toBe("descriptions_limit")
+    expect(before.assistants.size).toBe(0)
+    expect(before.descriptions.length).toBe(0)
+    await attachSubagentReceipts(f.deps)
+    expect(f.msgs[0]!.content).not.toContain("Retained:")
+  })
+  test("assistant, text-part and UTF-8 byte limits release the entire evidence domain", () => {
+    const messages = receiptFixture()
+    const entry = messages.ledger.eligibleChild(PARENT, CHILD)!
+    for (let i = 1; i < ASSISTANTS_CAP; i++) messages.ledger.observeChildStart(CHILD, `m-${i}`)
+    expect(entry.assistants.size).toBe(ASSISTANTS_CAP)
+    messages.ledger.observeChildStart(CHILD, "one-too-many")
+    expect(entry.invalid).toBe("assistants_limit")
+    expect(entry.assistants.size).toBe(0)
+    expect(entry.bytes).toBe(0)
+    const parts = receiptFixture()
+    const partsEntry = parts.ledger.eligibleChild(PARENT, CHILD)!
+    for (let i = 1; i < TEXT_PARTS_CAP; i++) parts.ledger.observeChildText(CHILD, "a", i, "")
+    expect(partsEntry.parts).toBe(TEXT_PARTS_CAP)
+    parts.ledger.observeChildText(CHILD, "a", TEXT_PARTS_CAP, "")
+    expect(partsEntry.invalid).toBe("text_parts_limit")
+    expect(partsEntry.assistants.size).toBe(0)
+    const bytes = receiptFixture()
+    const bytesEntry = bytes.ledger.eligibleChild(PARENT, CHILD)!
+    bytes.ledger.observeChildText(CHILD, "a", 1, "x".repeat(CHILD_EVIDENCE_BYTES_CAP - bytesEntry.bytes))
+    expect(bytesEntry.bytes).toBe(CHILD_EVIDENCE_BYTES_CAP)
+    bytes.ledger.observeChildText(CHILD, "a", 2, "中")
+    expect(bytesEntry.invalid).toBe("evidence_bytes_limit")
+    expect(bytesEntry.assistants.size).toBe(0)
+    expect(bytesEntry.bytes).toBe(0)
+  })
+  test("input evidence never silently drops its oldest member", () => {
+    const f = receiptFixture()
+    const entry = f.ledger.eligibleChild(PARENT, CHILD)!
+    for (let i = 1; i < 16; i++) f.ledger.observeChildInput(CHILD, `input-${i}`)
+    expect(entry.inputIDs.length).toBe(16)
+    f.ledger.observeChildInput(CHILD, "overflow")
+    expect(entry.invalid).toBe("input_ids_limit")
+    expect(entry.inputIDs).toEqual([])
+    expect(entry.assistants.size).toBe(0)
+  })
+  test("eviction/deletion/reset cannot re-open old children; tombstones are bounded", () => {
+    for (const mode of ["eviction", "deleted", "reset"]) {
+      const f = receiptFixture()
+      if (mode === "eviction") for (let i = 0; i < 32; i++) f.ledger.observeCreated(PARENT, `new-${i}`)
+      if (mode === "deleted") f.ledger.forgetSession(CHILD)
+      if (mode === "reset") f.ledger.resetAll()
+      f.ledger.observeCreated(PARENT, CHILD)
+      f.ledger.observeDispatch(PARENT, CHILD, "task")
+      expect(f.ledger.eligibleChild(PARENT, CHILD)).toBeNull()
+    }
+    const ledger = new SubagentReceiptLedger()
+    for (let i = 0; i <= SEEN_CHILDREN_CAP; i++) ledger.observeCreated(PARENT, `child-${i}`)
+    ledger.observeCreated(PARENT, "fresh-after-limit")
+    ledger.observeDispatch(PARENT, "fresh-after-limit", "task")
+    expect(ledger.eligibleChild(PARENT, "fresh-after-limit")).toBeNull()
   })
 })

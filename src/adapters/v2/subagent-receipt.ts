@@ -11,8 +11,9 @@
 // (schema/session-event.ts:208-218;inbox.ts promote 逐行发布,inboxID==synthetic
 // inputID==通知消息 id)。仅 context 看见通知不构成账本已追平的证明。
 //
-// R8 域定义:有界来源域 = 有完整起点和已确认观察终点的来源前缀。起点 = 经 subagent
-// 工具调用观察到的「新建」子会话(input.sessionID 缺失);fork/恢复/导入/起点未知
+// R8 域定义:有界来源域 = 有完整起点和已确认观察终点的来源前缀。起点 = 现场
+// session.created(parentID)；随后由 subagent 工具的新建结果确认派发归属。
+// 不等工具返回才观察首输入；fork/恢复/导入/起点未知
 // 永不新关联。compaction/revert/覆盖缺口/容量淘汰 → 该子会话关联资格整体失效,
 // 不从剩余窗口自动恢复。订阅/处理异常 → 全部失效(R8 降级表)。
 //
@@ -30,18 +31,26 @@ export const SUBAGENT_NO_TEXT = "Subagent completed without a text response."
 export const receiptTail = (id: string): string =>
   `\n\nRetained: ${id}\nBefore relying on this result, read the original with board_get and check its version and limits; retention is not acceptance.`
 
-const idempotencyProbe = (id: string): string => `Retained: ${id}\nBefore relying on this result`
-
-// ---- 有界容量(R8.4:容量淘汰 = 对应资格整体失效,直接删除,不留残域) ----
-export const CHILDREN_CAP = 32 // 追踪子会话数(Map 插入序,超出删最旧)
-const DESCRIPTIONS_CAP = 8 // 同一子会话的派发描述代次(续跑新代次)
-const INPUT_IDS_CAP = 16 // 子会话观察到的输入消息 ID(session.inbox.enqueued)
+// ---- 有界证据。超限释放整个来源域，不剪掉旧证据后继续制造唯一性。 ----
+export const CHILDREN_CAP = 32
+export const DESCRIPTIONS_CAP = 8
+export const INPUT_IDS_CAP = 16
+export const ASSISTANTS_CAP = 256
+export const TEXT_PARTS_CAP = 512
+export const CHILD_EVIDENCE_BYTES_CAP = 256 * 1024
+export const SEEN_CHILDREN_CAP = 4096 // 有界墓碑；耗尽后本实例回执关闭，不重新开放旧来源域
+const ID_BYTES_CAP = 512
 const DELIVERED_PARENTS_CAP = 64 // delivered 账本父会话数
 const DELIVERED_PER_PARENT_CAP = 128 // 每父会话 inboxID 上限
 
 export type ChildObservation = {
   parentID: string
   childID: string
+  created: boolean
+  dispatched: boolean
+  revision: number
+  bytes: number
+  parts: number
   descriptions: string[]
   inputIDs: string[]
   assistants: Map<string, { ordinals: Map<number, string>; finish?: string }>
@@ -49,98 +58,161 @@ export type ChildObservation = {
 }
 
 /**
- * 子会话观察账本(R8 有界来源域)。只登记经 subagent 工具观察到的「新建」子会话;
- * 起点未知的子会话事件一律忽略(账本只更新已存在 entry)。
+ * Created 只建立临时观察域，不授予来源关联/发布权限。工具结果必须另行确认
+ * 同一父子的新建派发。二者任一缺失均不可关联；context 不补建观察起点。
  */
 export class SubagentReceiptLedger {
   private children = new Map<string, ChildObservation>()
-  private delivered = new Map<string, Set<string>>()
+  private delivered = new Map<string, Map<string, number>>()
+  private seenChildren = new Set<string>()
+  private serial = 0
+  private closed = false
+
+  private validID(id: string): boolean {
+    return Boolean(id) && Buffer.byteLength(id) <= ID_BYTES_CAP
+  }
+
+  private slot(parentID: string, childID: string): ChildObservation | null {
+    if (this.closed || !this.validID(parentID) || !this.validID(childID)) return null
+    const old = this.children.get(childID)
+    if (old) {
+      if (old.parentID !== parentID) this.invalidate(childID, "parentage_changed")
+      return old.invalid ? null : old
+    }
+    // 淘汰、删除或异常后的相同 childID，不能由迟到派发/重复 Created 恢复。
+    if (this.seenChildren.has(childID)) return null
+    if (this.seenChildren.size >= SEEN_CHILDREN_CAP) {
+      this.resetAll()
+      return null
+    }
+    this.seenChildren.add(childID)
+    const entry: ChildObservation = {
+      parentID, childID, created: false, dispatched: false,
+      revision: ++this.serial, bytes: Buffer.byteLength(parentID) + Buffer.byteLength(childID), parts: 0,
+      descriptions: [], inputIDs: [], assistants: new Map(),
+    }
+    this.children.set(childID, entry)
+    this.evictChildren()
+    return entry
+  }
+
+  observeCreated(parentID: string, childID: string): void {
+    const entry = this.slot(parentID, childID)
+    if (!entry || entry.created) return
+    entry.created = true
+    entry.revision = ++this.serial
+  }
+
+  private reserve(entry: ChildObservation, bytes: number): boolean {
+    if (entry.bytes + bytes > CHILD_EVIDENCE_BYTES_CAP) {
+      this.invalidate(entry.childID, "evidence_bytes_limit")
+      return false
+    }
+    entry.bytes += bytes
+    entry.revision = ++this.serial
+    return true
+  }
+
+  private description(entry: ChildObservation, description: string): void {
+    if (entry.descriptions.includes(description)) return
+    if (entry.descriptions.length >= DESCRIPTIONS_CAP) {
+      this.invalidate(entry.childID, "descriptions_limit")
+      return
+    }
+    if (this.reserve(entry, Buffer.byteLength(description))) entry.descriptions.push(description)
+  }
 
   /** 派发观察(tool execute.after,subagent 且 input.sessionID 缺失 → 新建子会话)。 */
   observeDispatch(parentID: string, childID: string, description: string): void {
-    if (!parentID || !childID || !description) return
-    const existing = this.children.get(childID)
-    if (existing) {
-      // 同 childID 归属到另一父会话 → 按归属不可证降级(删除旧档,按新观察重建)。
-      if (existing.parentID !== parentID) {
-        this.children.delete(childID)
-      } else {
-        if (!existing.invalid && !existing.descriptions.includes(description)) {
-          existing.descriptions.push(description)
-          if (existing.descriptions.length > DESCRIPTIONS_CAP) existing.descriptions.shift()
-        }
-        return
-      }
+    if (!description) return
+    const entry = this.slot(parentID, childID)
+    if (!entry) return
+    if (!entry.dispatched) {
+      entry.dispatched = true
+      entry.revision = ++this.serial
     }
-    this.children.set(childID, {
-      parentID,
-      childID,
-      descriptions: [description],
-      inputIDs: [],
-      assistants: new Map(),
-    })
-    this.evictChildren()
+    this.description(entry, description)
   }
 
   /** 续跑观察(tool execute.after,input.sessionID 指向已追踪子会话 → 新描述代次)。 */
   observeContinuation(parentID: string, childID: string, description: string): void {
     if (!parentID || !childID || !description) return
     const entry = this.children.get(childID)
-    if (!entry || entry.invalid || entry.parentID !== parentID) return
-    if (!entry.descriptions.includes(description)) {
-      entry.descriptions.push(description)
-      if (entry.descriptions.length > DESCRIPTIONS_CAP) entry.descriptions.shift()
-    }
+    if (!entry || entry.invalid || !entry.dispatched || entry.parentID !== parentID) return
+    this.description(entry, description)
   }
 
   /** 子会话输入观察(session.inbox.enqueued;steer 等不经 prompt hook 的输入由此覆盖)。 */
   observeChildInput(sessionID: string, inboxID: string): void {
     if (!sessionID || !inboxID) return
     const entry = this.children.get(sessionID)
-    if (!entry || entry.invalid) return
+    if (!entry || !entry.created || entry.invalid) return
     if (!entry.inputIDs.includes(inboxID)) {
-      entry.inputIDs.push(inboxID)
-      if (entry.inputIDs.length > INPUT_IDS_CAP) entry.inputIDs.shift()
+      if (entry.inputIDs.length >= INPUT_IDS_CAP || !this.validID(inboxID)) {
+        this.invalidate(sessionID, "input_ids_limit")
+        return
+      }
+      if (this.reserve(entry, Buffer.byteLength(inboxID))) entry.inputIDs.push(inboxID)
     }
   }
 
   /** 交付观察(session.inbox.delivered;父会话维度,按 inboxID==notificationID 关联)。 */
   observeDelivered(parentID: string, inboxID: string): void {
-    if (!parentID || !inboxID) return
+    if (this.closed || !this.validID(parentID) || !this.validID(inboxID)) return
     let set = this.delivered.get(parentID)
     if (!set) {
-      set = new Set()
+      set = new Map()
       this.delivered.set(parentID, set)
       this.evictDelivered()
     }
     if (!set.has(inboxID)) {
       if (set.size >= DELIVERED_PER_PARENT_CAP) {
-        const oldest = set.values().next().value
+        const oldest = set.keys().next().value
         if (oldest !== undefined) set.delete(oldest)
       }
-      set.add(inboxID)
+      set.set(inboxID, ++this.serial)
     }
+  }
+
+  deliveryVersion(parentID: string, inboxID: string): number | undefined {
+    return this.delivered.get(parentID)?.get(inboxID)
+  }
+
+  /** started/ended 均建立空正文 assistant；纯工具步骤也是完整来源域的一部分。 */
+  observeChildStart(sessionID: string, messageID: string): void {
+    const entry = this.children.get(sessionID)
+    if (!entry || !entry.created || entry.invalid || entry.assistants.has(messageID)) return
+    if (!this.validID(messageID) || entry.assistants.size >= ASSISTANTS_CAP) {
+      this.invalidate(sessionID, "assistants_limit")
+      return
+    }
+    if (this.reserve(entry, Buffer.byteLength(messageID))) entry.assistants.set(messageID, { ordinals: new Map() })
   }
 
   /** 子会话文本段观察(session.text.ended;ordinal 冲突 → 原文不稳定,整体失效)。 */
   observeChildText(sessionID: string, messageID: string, ordinal: number, text: string): void {
     if (!sessionID || !messageID) return
     const entry = this.children.get(sessionID)
-    if (!entry || entry.invalid) return
+    if (!entry || !entry.created || entry.invalid) return
     if (!Number.isInteger(ordinal) || ordinal < 0 || typeof text !== "string") {
-      entry.invalid = "malformed_event"
+      this.invalidate(sessionID, "malformed_event")
       return
     }
-    let obs = entry.assistants.get(messageID)
-    if (!obs) {
-      obs = { ordinals: new Map() }
-      entry.assistants.set(messageID, obs)
-    }
+    this.observeChildStart(sessionID, messageID)
+    const obs = entry.assistants.get(messageID)
+    if (!obs || entry.invalid) return
     const prev = obs.ordinals.get(ordinal)
     if (prev !== undefined && prev !== text) {
-      entry.invalid = "text_rewind"
+      this.invalidate(sessionID, "text_rewind")
       return
     }
+    if (prev !== undefined) return
+    if (entry.parts >= TEXT_PARTS_CAP) {
+      this.invalidate(sessionID, "text_parts_limit")
+      return
+    }
+    if (!this.reserve(entry, Buffer.byteLength(text))) return
+    entry.parts++
     obs.ordinals.set(ordinal, text)
   }
 
@@ -148,35 +220,54 @@ export class SubagentReceiptLedger {
   observeChildFinish(sessionID: string, messageID: string, finish: string): void {
     if (!sessionID || !messageID || !finish) return
     const entry = this.children.get(sessionID)
-    if (!entry || entry.invalid) return
+    if (!entry || !entry.created || entry.invalid) return
+    this.observeChildStart(sessionID, messageID)
     const obs = entry.assistants.get(messageID)
-    if (!obs) return
+    if (!obs || entry.invalid) return
     if (obs.finish !== undefined && obs.finish !== finish) {
-      entry.invalid = "finish_rewind"
+      this.invalidate(sessionID, "finish_rewind")
       return
     }
-    obs.finish = finish
+    if (obs.finish === undefined && this.reserve(entry, Buffer.byteLength(finish))) obs.finish = finish
   }
 
   /** 资格失效(compaction/revert/forked/覆盖缺口;不删已留存记录,仅禁止新关联)。 */
   invalidate(sessionID: string, reason: string): void {
     const entry = this.children.get(sessionID)
-    if (entry && !entry.invalid) entry.invalid = reason
+    if (entry && !entry.invalid) {
+      entry.invalid = reason
+      entry.revision = ++this.serial
+      entry.descriptions = []
+      entry.inputIDs = []
+      entry.assistants.clear()
+      entry.bytes = 0
+      entry.parts = 0
+    }
+    // 父会话变更只撤销其交付证明，不失效其他子会话的完整来源前缀。
+    this.delivered.delete(sessionID)
   }
 
   /** 会话删除(session.deleted):删该会话账目 + 其名下派发与其 delivered 集。 */
   forgetSession(sessionID: string): void {
+    this.invalidate(sessionID, "deleted")
     this.children.delete(sessionID)
     this.delivered.delete(sessionID)
     for (const [id, entry] of this.children) {
-      if (entry.parentID === sessionID) this.children.delete(id)
+      if (entry.parentID === sessionID) {
+        this.invalidate(id, "parent_deleted")
+        this.children.delete(id)
+      }
     }
   }
 
   /** 订阅/处理异常(R8:不以「没观察到事件」证明没变化 → 全部失效)。 */
   resetAll(): void {
+    for (const id of this.children.keys()) this.invalidate(id, "reset")
     this.children.clear()
     this.delivered.clear()
+    this.seenChildren.clear()
+    this.closed = true
+    ++this.serial
   }
 
   hasDelivered(parentID: string, inboxID: string): boolean {
@@ -185,7 +276,7 @@ export class SubagentReceiptLedger {
 
   eligibleChild(parentID: string, childID: string): ChildObservation | null {
     const entry = this.children.get(childID)
-    if (!entry || entry.invalid || entry.parentID !== parentID) return null
+    if (this.closed || !entry || !entry.created || !entry.dispatched || entry.invalid || entry.parentID !== parentID) return null
     return entry
   }
 
@@ -197,6 +288,7 @@ export class SubagentReceiptLedger {
     while (this.children.size > CHILDREN_CAP) {
       const oldest = this.children.keys().next().value
       if (oldest === undefined) break
+      this.invalidate(oldest, "capacity")
       this.children.delete(oldest)
     }
   }
@@ -319,7 +411,7 @@ export type ReceiptDeps = {
   log(line: Record<string, unknown>): void
 }
 
-type Candidate = { idx: number; msg: Record<string, unknown>; content: string }
+type Candidate = { idx: number; id: string; delivery: number; msg: Record<string, unknown>; content: string }
 
 export const attachSubagentReceipts = async (deps: ReceiptDeps): Promise<void> => {
   const { msgs, ledger, parentSessionID } = deps
@@ -331,8 +423,10 @@ export const attachSubagentReceipts = async (deps: ReceiptDeps): Promise<void> =
     const content = msg.content
     if (typeof content !== "string" || !content.startsWith('<subagent sessionID="')) continue
     const id = msg.id
-    if (typeof id !== "string" || !id || !ledger.hasDelivered(parentSessionID, id)) continue
-    candidates.push({ idx: i, msg, content })
+    if (typeof id !== "string" || !id) continue
+    const delivery = ledger.deliveryVersion(parentSessionID, id)
+    if (delivery === undefined) continue
+    candidates.push({ idx: i, id, delivery, msg, content })
   }
   if (candidates.length === 0) return
   let parentWires: WireMessage[] | null = null
@@ -362,8 +456,9 @@ const skip = (deps: ReceiptDeps, candidate: Candidate, reason: string): void => 
 const attachOne = async (deps: ReceiptDeps, candidate: Candidate, parentWires: WireMessage[]): Promise<void> => {
   const { ledger, parentSessionID } = deps
   // R*.2:以真实父会话 wire 回查通知,核验 synthetic 类型与 metadata(正文 ID 不单独构成证明)。
-  const notice = parentWires.find((m) => m?.id === candidate.msg.id)
-  if (!notice || notice.type !== "synthetic") {
+  const notices = parentWires.filter((m) => m?.id === candidate.id)
+  const notice = notices[0]
+  if (notices.length !== 1 || !notice || notice.type !== "synthetic" || notice.text !== candidate.content) {
     return skip(deps, candidate, "notice_not_verified")
   }
   const meta = (notice as { metadata?: unknown }).metadata as { source?: unknown; childID?: unknown; state?: unknown } | undefined
@@ -375,6 +470,7 @@ const attachOne = async (deps: ReceiptDeps, candidate: Candidate, parentWires: W
   // R8.1:起点必须在本插件观察期内(新建派发);起点未知 → 永不新关联。
   const entry = ledger.eligibleChild(parentSessionID, childID)
   if (!entry) return skip(deps, candidate, "child_not_observed")
+  const revision = entry.revision
   // R*.2:父子关系必须证明。
   let childParent: string | null = null
   try {
@@ -391,6 +487,11 @@ const attachOne = async (deps: ReceiptDeps, candidate: Candidate, parentWires: W
     childWires = null
   }
   if (!childWires) return skip(deps, candidate, "child_wire_unavailable")
+  // await 期间可能收到 revert/reset/淘汰或新来源事件，旧引用不再是有效证据。
+  const stillObserved = (): boolean =>
+    ledger.eligibleChild(parentSessionID, childID) === entry && entry.revision === revision &&
+    ledger.deliveryVersion(parentSessionID, candidate.id) === candidate.delivery
+  if (!stillObserved()) return skip(deps, candidate, "observation_changed")
   if (!childCoverageValid(childWires, entry)) {
     ledger.invalidate(childID, "coverage_gap")
     return skip(deps, candidate, "coverage_gap")
@@ -436,11 +537,19 @@ const attachOne = async (deps: ReceiptDeps, candidate: Candidate, parentWires: W
     readable = false
   }
   if (!readable) return skip(deps, candidate, "not_readable")
-  // 幂等:已带同记录回执 → 不重复。
-  if (candidate.content.includes(idempotencyProbe(bbId))) return skip(deps, candidate, "already_attached")
-  // R*.8:所有 await 后复核目标消息仍在 draft 且正文未变,再浅拷贝替换槽位。
+  // 重新核验持久通知的原文/metadata，不能用旧ID为另一份draft正文背书。
+  const latestParent = await deps.parentWire()
+  const latestNotices = latestParent?.filter((m) => m?.id === candidate.id)
+  const latest = latestNotices?.[0]
+  const latestMeta = (latest as { metadata?: typeof meta } | undefined)?.metadata
+  if (latestNotices?.length !== 1 || latest?.type !== "synthetic" || latest.text !== candidate.content ||
+      latestMeta?.source !== "subagent" || latestMeta.state !== "completed" || latestMeta.childID !== childID) {
+    return skip(deps, candidate, "notice_changed")
+  }
+  // R*.8:所有 await 后复核同一观察代次、交付证明、目标槽位与正文，再同步写回。
+  if (!stillObserved()) return skip(deps, candidate, "observation_changed")
   const current = deps.msgs[candidate.idx]
-  if (current !== candidate.msg || current?.content !== candidate.content) {
+  if (current !== candidate.msg || current.id !== candidate.id || current.role !== "user" || current.content !== candidate.content) {
     return skip(deps, candidate, "target_moved")
   }
   const replacement = { ...candidate.msg, content: candidate.content + receiptTail(bbId) }
