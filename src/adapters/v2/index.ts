@@ -14,6 +14,7 @@
 //   subagent/task 派发 sourceHandoff + malformedSha256 告警
 // 存储零迁移（§16.5）：dataDir 与账本格式与 v1 完全一致。
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { homedir } from "node:os"
 import type { Plugin } from "@opencode/plugin"
@@ -21,6 +22,7 @@ import type { ToolContext, ToolEditor } from "@opencode/plugin/promise/tool"
 import { openScopeById, openScopeForRoot, AGG_TRIGGER_VISIBLE, AGG_TRIGGER_SUM_DESC_BYTES, type Scope } from "../../storage"
 import { isIsolatedAgent, refPolicy, resolveAuthz } from "../../permissions"
 import { parseBbId } from "../../ids"
+import { replyKey } from "../../reply"
 import { aggregateCandidates } from "../../aggregate"
 import { decideAndPersist } from "../../nudge"
 import { defineBoardTools, type BoardToolDef } from "../../tools"
@@ -56,6 +58,11 @@ import {
   verifiedInput,
   type BoundaryMemo,
 } from "./messages"
+import {
+  SubagentReceiptLedger,
+  attachSubagentReceipts,
+  assistantPublicContentHash,
+} from "./subagent-receipt"
 import { HostSnapshot, toHostMessage, type WireMessage } from "./snapshot"
 
 type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不回退空串）
@@ -201,6 +208,8 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
     // 消息快照 + 交付证据账本 + 已留存记录（父会话可见性）。
     const snapshots = new HostSnapshot()
     const receipts = new ReceiptCheck()
+    // 原生后台子代理交付回执：子会话观察账本 + delivered 账本（DESIGN §16.7）。
+    const subagentLedger = new SubagentReceiptLedger()
     const editTokens = new Map<string, CaptureState>()
     const recentSources = new Map<string, string[]>()
     const remember = (session: string, id?: string): void => {
@@ -567,6 +576,70 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
       return st.confirmed.get(session) === currentInput && permissionAction(rules, "board_get", "*") === "allow"
     }
 
+    // ---- 原生后台子代理交付回执（DESIGN §11.9 冻结契约 + §16.7）----
+    // R*.6：来源身份确认后，按既有 captureFinal 留存键（replyKey final）查记录并核验
+    // origin/writer/内容哈希/输入 ID ∈ 账本观察域；任一不可证 → null（不补捕、不放宽）。
+    const retainedRecordFor = async (
+      childID: string,
+      messageID: string,
+      contentHash: string,
+      observedInputIDs: string[],
+    ): Promise<string | null> => {
+      try {
+        const resolved = await lookupScopeContext(childID, "")
+        if (!resolved) return null
+        const meta = resolved.scope.readMeta(resolved.streamId)
+        const hit = meta.idem[replyKey(childID, messageID, "final")]
+        if (!hit?.id) return null
+        const found = resolved.scope.getById(hit.id)
+        if (found.status !== "found") return null
+        const record = found.record
+        if (record.writer?.session_id !== childID || record.writer?.message_id !== messageID) return null
+        if (record.origin?.kind !== "host_final" || record.origin.text_sha256 !== contentHash) return null
+        const inputID = record.origin.input_message_id
+        if (typeof inputID !== "string" || !inputID || !observedInputIDs.includes(inputID)) return null
+        return hit.id
+      } catch {
+        return null
+      }
+    }
+    // R*.2/降级表：父会话对记录的读取权限 = refPolicy ok + 父 agent 的 board_get allow。
+    const parentCanReadReceipt = async (parentSessionID: string, parentAgent: string | null, bbId: string): Promise<boolean> => {
+      try {
+        const resolved = await lookupScopeContext(parentSessionID, "")
+        if (!resolved) return false
+        const parsed = parseBbId(bbId)
+        if (refPolicy(resolveAuthz(resolved.scope, { sessionId: parentSessionID, agent: parentAgent ?? "" }), parsed) !== "ok") return false
+        const profiles = await agentProfiles()
+        const profile = profiles.find((p) => p.id === (parentAgent ?? resolved.agent))
+        if (!profile) return false
+        const current = await sessionInfo(parentSessionID)
+        if (current?.id !== parentSessionID || (current.permissions !== undefined && !Array.isArray(current.permissions))) return false
+        const rules = [...profile.permission, ...toPermissionRules(current.permissions ?? [])]
+        return permissionAction(rules, "board_get", "*") === "allow"
+      } catch {
+        return false
+      }
+    }
+    const attachReceipts = (parentSessionID: string, parentAgent: string | null, msgs: Array<Record<string, unknown>>): Promise<void> =>
+      attachSubagentReceipts({
+        parentSessionID,
+        msgs,
+        ledger: subagentLedger,
+        parentWire: () => contextMessages(parentSessionID),
+        childWire: (sessionID) => contextMessages(sessionID),
+        childParentID: async (childID) => {
+          try {
+            return (await sessionInfo(childID))?.parentID ?? null
+          } catch {
+            return null
+          }
+        },
+        retainedRecord: retainedRecordFor,
+        parentCanRead: (bbId) => parentCanReadReceipt(parentSessionID, parentAgent, bbId),
+        log: (line) => st.log(line),
+      })
+
     // ---- 交付 / Council 桥（请求/响应 schema 与 v1 完全一致；键=项目目录）----
     // 消费方契约（integrations/omo-slim）：globalThis[BRIDGE]?.get?.(directory) → handler(request)。
     const deliveryHost = {
@@ -768,6 +841,14 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
           // 含 skip 恢复）；实际身份不得被旧缓存或迟到 created 压过。工具执行仍只查不建。
           const resolved = await registerScopeContext(sessionId, input.agent ?? "")
           if (!resolved) return
+          // 原生后台子代理交付回执（DESIGN §16.7）：在 nudge 管线之前独立执行，
+          // 只改本次请求 draft 的展示副本槽位；自己的 try/catch 只 log，不 degrade、
+          // 不因回执路径影响既有冻结管线（nudge 不会触碰带 string content 的通知槽位）。
+          try {
+            await attachReceipts(sessionId, resolved.agent, msgs as Array<Record<string, unknown>>)
+          } catch (err) {
+            st.log({ ev: "subagent_receipt_error", session: sessionId, notice: err instanceof Error ? err.message : String(err) })
+          }
           // §16.3-3/4：请求边界归一化（unknown 不造随机 ID；同边界重试复用键）。
           const norm = resolveRequestBoundary(sessionId, msgs, boundaryMemo)
           boundaryMemo = norm.memo
@@ -957,6 +1038,26 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
         )
         snapshots.linkParent(sessionID, input.messageID, st.runInput.get(sessionID))
         receipts.assistant(sessionID, input.messageID, st.runInput.get(sessionID))
+        // 原生后台子代理交付回执：派发观察（R8.1 起点 = 经 subagent 调用观察到的
+        // 「新建」子会话）。新建判定：宿主 execute.before 会删除空串 sessionID
+        // （subagent.ts execute.before）⇒ input.input.sessionID 缺失即新建；子会话 ID
+        // 取工具 Output result.output.sessionID（tool.ts:104-149）。前台 completed 与
+        // 后台 running 的工具调用都按 completed 观察；状态异常/字段缺失 → 不建档
+        // （起点未知降级，永不新关联）。续聊（sessionID 指向已追踪子会话）→ 新描述代次。
+        if (input.tool === "subagent" && input.status === "completed") {
+          const args = input.input as { sessionID?: unknown; description?: unknown } | null | undefined
+          const out = (input.result as { output?: unknown } | undefined)?.output as { sessionID?: unknown; status?: unknown } | undefined
+          const childID = typeof out?.sessionID === "string" && out.sessionID ? out.sessionID : null
+          const description = typeof args?.description === "string" && args.description ? args.description : null
+          if (childID && description) {
+            if (args?.sessionID === undefined || args?.sessionID === "") {
+              subagentLedger.observeDispatch(sessionID, childID, description)
+              st.log({ ev: "subagent_dispatch_observed", session: sessionID, call: input.id, child: childID })
+            } else {
+              subagentLedger.observeContinuation(sessionID, childID, description)
+            }
+          }
+        }
         if (!isEdit) return
         const started = input.id ? editTokens.get(`${sessionID}:${input.id}`) : undefined
         if (input.id) editTokens.delete(`${sessionID}:${input.id}`)
@@ -1037,11 +1138,15 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
               // R1：只观测，不写身份（唯一权威路径是 context 的 registerScopeContext）。
             } else if (event.type === "session.forked") {
               const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
-              if (sessionID) st.forked.add(sessionID)
+              if (sessionID) {
+                st.forked.add(sessionID)
+                subagentLedger.invalidate(sessionID, "forked")
+              }
             } else if (event.type === "session.deleted") {
               const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
               if (!sessionID) continue
               receipts.forget(sessionID)
+              subagentLedger.forgetSession(sessionID)
               recentSources.delete(sessionID)
               st.runInput.delete(sessionID)
               snapshots.forget(sessionID)
@@ -1055,6 +1160,8 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
               const text = typeof event.data?.text === "string" ? event.data.text : ""
               if (!sessionID || !assistantID || ordinal < 0) continue
               snapshots.observeAssistantText(sessionID, assistantID, ordinal, text)
+              // 回执账本：子会话文本段观察（ordinal 冲突 → 原文不稳定，整体失效）。
+              subagentLedger.observeChildText(sessionID, assistantID, ordinal, text)
               snapshots.linkParent(sessionID, assistantID, st.runInput.get(sessionID))
               receipts.assistant(sessionID, assistantID, st.runInput.get(sessionID))
             } else if (event.type === "session.step.failed") {
@@ -1069,6 +1176,8 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
               const finish = typeof event.data?.finish === "string" ? event.data.finish : ""
               if (!sessionID || !assistantID || !finish) continue
               snapshots.observeAssistantMeta(sessionID, assistantID, { finish })
+              // 回执账本：子会话步进完成观察（finish 未观察到 = 域不完整）。
+              subagentLedger.observeChildFinish(sessionID, assistantID, finish)
               snapshots.linkParent(sessionID, assistantID, st.runInput.get(sessionID))
               receipts.assistant(sessionID, assistantID, st.runInput.get(sessionID))
               if (finish !== "stop") continue
@@ -1088,13 +1197,36 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
               if (observation.status === "missing_handoff" || observation.status === "manual_version_check") {
                 st.log({ ev: "delivery_gap", session: sessionID, message_id: assistantID, ...observation, notice: TOAST_UNSUPPORTED_NOTE })
               }
+            } else if (event.type === "session.inbox.delivered") {
+              // 回执账本：交付观察（R8.3 已确认观察终点；inboxID==notificationID）。
+              const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
+              const inboxID = typeof event.data?.inboxID === "string" ? event.data.inboxID : ""
+              if (sessionID && inboxID) subagentLedger.observeDelivered(sessionID, inboxID)
+            } else if (event.type === "session.inbox.enqueued") {
+              // 回执账本：子会话输入观察（留存记录 origin.input_message_id 的成员资格域）。
+              const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
+              const inboxID = typeof event.data?.inboxID === "string" ? event.data.inboxID : ""
+              if (sessionID && inboxID) subagentLedger.observeChildInput(sessionID, inboxID)
+            } else if (event.type === "session.compaction.started" || event.type === "session.compaction.ended" || event.type === "session.compaction.failed") {
+              // R8.4：compaction → 该子会话新关联资格整体失效（不删已留存记录）。
+              const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
+              if (sessionID) subagentLedger.invalidate(sessionID, "compaction")
+            } else if (event.type === "session.revert.committed") {
+              // R8.4：revert 提交 → 该子会话新关联资格整体失效。
+              const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
+              if (sessionID) subagentLedger.invalidate(sessionID, "revert")
             }
           } catch (err) {
+            // R8 降级表：订阅/处理异常 → 不以「没观察到事件」证明没变化，回执账本整体失效。
+            subagentLedger.resetAll()
             st.degrade(err)
           }
         }
       } catch (err) {
-        if (!ac.signal.aborted) st.degrade(err)
+        if (!ac.signal.aborted) {
+          subagentLedger.resetAll()
+          st.degrade(err)
+        }
       }
     })()
 

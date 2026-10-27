@@ -704,6 +704,51 @@ orchestrator（或任何开始委派的 agent）的职责是**选择这些引用
 
 第一版不为每个 agent 建立不同的长 prompt：**公共工具契约以 11.6 四段工具描述（`board_put` / `board_get` / `board_index` / `task`）的角色规则为主载体，宿主角色桥接共同承载**，规则 → 载体映射见本节「运行时分发责任」表（**[第六轮修订]（方案 E：复审修正）（M2）** 不再枚举旧三工具面——缺来源发现与升级处理由 `board_index` description 承载；**[第六轮修订·复审修正]（M1）** 入口退役后 §10.2 仅承担聚合压力提醒，不再承担入口认知分发，原「委派 / 接收两种短文案」表述由工具描述角色规则取代；**[第八轮修订]（R0：规则所有权与配置版本化）** 原「公共工具描述已足够」口径过强，修正为「公共工具描述 + 角色桥接共同承载」——fixer 不可见 `task`（results.md:487 探针），其终结交付规则（含 blocked / no-change 显式与末行 ID）依赖 fixer_append.md 桥接，v3 电池 5/5 行为证据（results.md:489–501）；规则所有权索引见上方「规则所有权表」）；oracle 的额外要求主要属于审核任务的验收标准。
 
+### 11.9 原生后台子代理交付回执（BCP v2，冻结契约登记）**[第九轮裁决冻结]**
+
+> Oracle 八轮裁决冻结，本节为登记（非重设计）。实施：`src/adapters/v2/subagent-receipt.ts` + v2 接线（16.7）；测试 `test/subagent-receipt.test.ts`。
+
+**背景**：后台 subagent 完成时宿主在父会话插入 synthetic 持久消息（id=notificationID，metadata={source:"subagent",childID,agent,state}，正文=`<subagent sessionID="…" state="…" description="…">\n<子终稿渲染>\n</subagent>`）；该消息进入父模型 context 时不带任何留存回执。目标：当 BCP 能**证明**该通知与其子会话某条 assistant 消息的对应关系、且该消息已按既有 captureFinal 自动留存时，在本次请求的展示副本上追加两行回执；一切无法证明的情形**静默保留原文**，不加任何文案。宿主源码只读参考：tag v2.1.4（commit 68bc26b）。
+
+**R\*（R7 冻结）**：
+
+1. 首期仅处理 BCP v2 后台 context 中可回查的宿主 subagent 完成通知；不新增 OMO 代码、常驻描述、队列或唤醒机制。
+2. 通过真实父会话及通知消息 ID 回查原始消息，核验 synthetic 类型、metadata.source=subagent、完成状态、childID、父子关系及读取权限。正文中的 ID 不单独构成证明。
+3.（由 R8 域定义替换，见下）
+4. 按所支持宿主版本的原始渲染算法比对通知正文。在完整来源域内恰好一个消息精确匹配，才认定来源；零匹配、多匹配、覆盖或原文稳定性不明均不确认。固定无文本占位输出跳过。
+5. 墙钟时间只用于一致性检查，不得通过排除候选制造唯一性；跨会话 seq 不用于时间或因果裁决。冲突时不猜测、不设容忍窗口。
+6. 来源身份确认后，才检查终稿资格并按作者会话、输入 ID、消息 ID 及内容核验留存记录。未留存或不可补捕时不选择其他来源；不放宽既有发布、授权和当前轮捕获保护。
+7. 成功关联可按作用域、父会话、通知 ID 及部件身份缓存。缓存不能替代首次关联证明；展示时复核权限和目标内容。已证明的历史关联不因子会话续跑而改指新结果。
+8. 仅修改本次请求的展示副本，成功时追加完整记录 ID 和一行消费提示。缺证静默保留全文；异步检查后重新核验目标，保证幂等、不泄漏、不重复追加。
+
+**R8 域定义（替换第 3 条）**：有界来源域=**有完整起点和已确认观察终点的来源前缀**：
+
+1. 首期仅支持本插件连续观察期内**从空历史新建**的子会话；fork、恢复、导入、起点未知的会话不启用新关联。
+2. 从起点到覆盖目标通知交付的观察终点，必须完整覆盖宿主可能选取的来源消息（含非终稿）；记录来源身份及足以校验原始渲染的内容证据。
+3. 必须证明观察已越过目标通知的交付点（候选：宿主 `session.inbox.delivered` 事件，携带 sessionID+inboxID，/tmp/opencode/opencode-v2.1.4/packages/schema/src/session-event.ts:208-218，由 promote 发布 core/src/session/inbox.ts:467-495；实施中验证事件发布/消费顺序；不得拿不同会话 seq 比大小）。仅在 context 看见通知不构成账本已追平的证明。
+4. 关联完成前不得剪除仍可能是来源的消息。发生 compaction、revert、删除、覆盖缺口或容量淘汰时，首期直接使**该子会话的新关联资格失效**，不从剩余窗口自动恢复。
+5. context 用于回查通知和补全、核验来源，不单独建立完整性证明。已观察来源缺失或变化→静默降级。
+6. 在完整前缀中执行精确渲染比对；唯一命中后才查终稿资格和留存记录。其余沿用 R\* 的授权、补捕、缓存和展示边界。
+
+**降级清单（R8 表，全部=静默保留原文/失效资格）**：
+
+| 情形 | 处置 |
+| --- | --- |
+| 子会话非观察期新建（fork/恢复/导入/起点未知） | 永不新关联 |
+| 订阅中断、处理异常、事件积压未追平 | 不以「没观察到事件」证明没变化 |
+| 账本/快照容量淘汰、读取截断 | 该子会话覆盖证明整体失效，不得保留剩余候选继续判唯一 |
+| 待交付旧通知跨越 compaction/revert | 不得因父通知刚写入就认定来源新鲜 |
+| 已观察来源 ID 消失、原文变化、part 不完整 | 不删候选后重判唯一，整体失效 |
+| 父通知不在父 context 窗口、身份/权限核验失败 | 保留原展示 |
+| NO_TEXT（"Subagent completed without a text response."）占位输出 | 跳过 |
+
+**回执文本（冻结，两行，附在部件文本末尾，空行分隔）**：
+
+```text
+Retained: bb://<完整记录ID>
+Before relying on this result, read the original with board_get and check its version and limits; retention is not acceptance.
+```
+
 ## 12. 证据合同边界
 
 - 黑板**不能成为唯一 review evidence**：verdict / 发现 / manifest 可以存到板上，但目录摘要不等于 manifest，`source_refs` 的存在不等于已验证。
@@ -1035,3 +1080,16 @@ opencode v2（anomalyco；v2.0.0 已发布，OpenChamber v2-only）插件 API �
 - 不把 `ctx.storage` 当作 storage.ts 的替代，不随宿主大版本更换 dataDir。
 
 **[第八轮修订]（U2）验收改造**：两宿主验收电池须补 **T 分支（含 blocked / no-issues 的终结交付）**与**末返回前提交**（区别于事后补写）断言；跨流 / 全文检索与 capture 缺口验收随 §14.4「后继检索路线与扩围门禁」阶段 2 / 阶段 3 启用；不以现有测试数量（223 / 222）替代新契约；v1 / v2 双宿主**分开证明覆盖**（主表：§14.4 U2 A/B 电池）。
+
+### 16.7 v2 原生后台子代理交付回执（11.9 的接线登记）
+
+冻结语义见 §11.9；本节登记 v2 接线事实与边界，不重复裁决文本。
+
+- **新模块** `src/adapters/v2/subagent-receipt.ts`：子会话观察账本（children Map 有界 32 子会话，插入序淘汰=该子会话资格整体失效）+ 精确渲染比对纯函数 + 回执追加编排。**不兼任 snapshots**（snapshot.ts 仍是有界 64×32 缓存，不作完整性账本，§16.3 口径不变）。
+- **观察起点（R8.1）**：tool execute.after 中 `tool==="subagent"` 且派发输入 `sessionID` 缺失/空 且 `result.output.sessionID` 为非空 string → 记「新建子会话」（派发 description 代次一并入账，上限 8 代）；拿不到 sessionID 或状态异常 → 起点未知 → 永不新关联。宿主依据：packages/core/src/tool/plugin/subagent.ts（新建 ⇔ input.sessionID===undefined）；前台与 background（output.status==="running"）均产生观察。
+- **交付点证明（R8.3）**：事件循环消费 `session.inbox.delivered`（packages/schema/src/session-event.ts:208-218；promote 逐行发布，packages/core/src/session/inbox.ts:460-537）记 (父会话, inboxID)；inboxID==synthetic 消息 id==notificationID。draft 中通知 id 不在 delivered 账本 → 不关联（未追平不以「没观察到」证明没变化）。子会话输入经 `session.inbox.enqueued`（:222-230）入账（cap 16），供留存核验 `origin.input_message_id ∈ 已观察输入`。
+- **来源域覆盖（R8.2/R8.5）**：`session.text.ended`（逐 ordinal 文本，上限 64/消息）、`session.step.ended`（finish）逐条入账；关联时以 `ctx.session.context(child)` 全量对照：wire 含 compaction 类型消息 / 账本观察 assistant 集合与 wire 双向不相等 / 逐 ordinal 文本（含空串）不一致 / finish 已观察但不一致 → 该子会话资格整体失效。
+- **失效事件（R8.4）**：子会话侧 `session.compaction.started/ended/failed`、`session.revert.committed`、`session.forked`、`session.deleted`、账本容量淘汰 → 资格失效（不删已留存记录、不改历史回执、不从剩余窗口恢复）；订阅循环任何异常 → 既有 st.degrade 且**清空全部子会话账本与 delivered 账本**（积压未追平降级）。BCP 新消费 `session.revert.committed` 的职责**仅限**使该子会话未确认关联域失效+禁止失效域补捕/新关联；不做全局快照剪枝。
+- **匹配与留存核验（R\*.4/R\*.6）**：完整前缀内逐 assistant 渲染（非空 text parts `join("\n\n")`，空则 NO_TEXT，占位跳过；宿主来源资格=completed 且无 error）与通知正文逐字节全等——逐 description 代次复算外层模板（state/description 裸插值逐字节，subagent-completion.ts:31-45 算法）；恰好一条命中才查留存：`readMeta(streamId).idem[replyKey(childID,messageID,"final")]`（src/reply.ts:28 既有 idem 索引，**未新增存储形状**，16.5 零迁移）→ `getById` → 校验 `origin.kind==="host_final"`、`origin.text_sha256===sha256(publicReply 口径 join("\n"))`、writer 三元组相符、`origin.input_message_id ∈ 已观察子输入`；父侧读取权限=`refPolicy(resolveAuthz(...))==="ok"` 且 board_get `permissionAction==="allow"`。
+- **展示边界（R\*.8）**：仅 context hook 内修改本次请求 draft——按通知消息 id 定位（**不复用**「最后一条 user」定位），浅拷贝替换该槽位；幂等（已含 `Retained: <id>` 回执前缀 → 跳过）；每次 await 后复核目标槽位引用与正文未变；回执路径任何失败只 log 不 degrade、静默保留原文。唯一性按完整域裁决（多匹配/零匹配不确认），不以「宿主此刻会选谁」收窄候选——已证明的历史关联不因子会话续跑改指新结果（R\*.7）。
+- **明确不做**：不改 tools description/golden、无 OMO 集成代码（integrations/omo-slim 零改动）、不补捕历史、不放宽既有发布/授权/当前轮捕获保护、缓存不替代首次证明。
