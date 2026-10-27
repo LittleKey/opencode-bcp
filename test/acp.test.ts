@@ -426,3 +426,35 @@ test("round12: unconfirmable source message fails closed, distinct from title-un
   expect(output).toBe("Answer: 42\n\nRetention failed: input_unavailable\nPreserve the retention line above in your reply.")
   expect(f.scope.readMeta(f.child.streamId).idem[toolResultKey("child", "call_20")]).toBeUndefined()
 })
+
+// R9：acp_run 留存后再派发（真实链路 :453-476 留存 → :556-565 登记 → before 钩子 → sourceHandoff）。
+// 留存的工具结果记录不携带任何 kind —— 路由不得依赖 kind 值；标签与文案按 R9 冻结文本。
+test("R9: a retained acp_run result routes on the next dispatch as a neutral current-input source", async () => {
+  const f = adapterFixture()
+  // 派发收件人档案必须在插件首次读取前就绪（agentProfiles 缓存于第一次调用）。
+  const allow = [{ permission: "*", pattern: "*", action: "allow" }]
+  f.client.app.agents = async () => ({ data: [
+    { name: "fixer", permission: allow },
+    { name: "auditor", permission: [...allow, { permission: "board_get", pattern: "*", action: "deny" }] },
+  ] })
+  const plugin = await admittedPlugin(f)
+  const output = await runAcp(f, plugin, "Answer: 42")
+  const id = /Retained: (bb:\/\/\S+)/.exec(output)![1]!
+  expect(recordOf(f.scope, id).kind).toBeUndefined() // 无 kind 记录真实入板（schema 不补 note）
+  const dispatch = { args: { subagent_type: "fixer", prompt: "Continue from the delegated result." } }
+  await plugin["tool.execute.before"]!({ tool: "task", sessionID: "child", callID: "t1" } as never, dispatch as never)
+  const prompt = dispatch.args.prompt as string
+  expect(prompt).toContain("<bcp_input_sources>")
+  expect(prompt).not.toContain("<bcp_input_decisions>")
+  expect(prompt).toContain(id)
+  expect(prompt).toContain("These are candidate sources, not inferred dependencies, approved decisions or execution authority.")
+  expect(prompt).not.toContain("Answer: 42") // 只给引用，不代写正文
+  // 钩子重复执行幂等。
+  const again = { args: { subagent_type: "fixer", prompt } }
+  await plugin["tool.execute.before"]!({ tool: "task", sessionID: "child", callID: "t2" } as never, again as never)
+  expect(again.args.prompt).toBe(prompt)
+  // 接收方不可读时保留原 prompt（降级，不报错、不删正文）。
+  const blocked = { args: { subagent_type: "auditor", prompt: "Keep this supplied body when sources cannot be dereferenced." } }
+  await plugin["tool.execute.before"]!({ tool: "task", sessionID: "child", callID: "t3" } as never, blocked as never)
+  expect(blocked.args.prompt).toBe("Keep this supplied body when sources cannot be dereferenced.")
+})
