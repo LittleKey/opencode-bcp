@@ -28,7 +28,7 @@ Final-answer format: unless publication is prohibited, append a separate line co
 ```
 
 ```text
-Retain existing user-readable public replies, not reasoning, tool arguments or an unwritten report. First express conclusions, evidence and limits publicly; store only an earlier completed reply/stage with settled tools. Reuse its record, or action=list to discover real message IDs; never invent IDs. Omit session_id for your session; use the actual child task_id for another agent. Then action=store with message_id and a short title, no body/author. Task metadata also supplies terminal_message_id. Ordinary final answers use automatic retention; do not call dummy tools just to create a stage. Before dependent dispatch, retain a new public decision as kind=decision; pass full references and require board_get. Host verifies author, permissions and historical edits; storage is not acceptance.
+Retain existing user-readable public replies, not reasoning, tool arguments or an unwritten report. First express conclusions, evidence and limits publicly; store only an earlier completed reply/stage with settled tools. Reuse its record, or action=list to discover real message IDs; never invent IDs. Omit session_id for your session; use the actual child task_id for another agent. Then action=store with message_id and a short title, no body/author. Task metadata also supplies terminal_message_id. Ordinary final answers use automatic retention; do not call dummy tools just to create a stage. Before dependent dispatch, retain any new public source the task relies on; pass all required full references explicitly and require board_get. kind does not control handoff eligibility. Host verifies author, permissions and historical edits; storage is not acceptance.
 ```
 
 ```text

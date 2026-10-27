@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { createHash } from "node:crypto"
 import { openScopeForRoot } from "../src/storage"
+import { KINDS } from "../src/schema"
 import { captureFinal, captureRequested, NO_STORE, STORE, permissionAction, type CaptureHost } from "../src/capture"
 import { inspectDelivery, type HostMessage } from "../src/delivery"
 import { inspectArtifacts } from "../src/artifacts"
@@ -193,26 +194,63 @@ test("handoffs preserve exact author references and replace only identical nativ
   writeFileSync(uri, "corrupt")
   expect(sourceHandoff(f.scope, "parent", prompt, [result.id!]).references).toEqual([])
 })
-test("only explicitly observed current-input decisions are routed without paraphrase", () => {
+test("current-input sources route neutrally across every kind and an omitted kind, without decision priority", () => {
   const f = fixture(), parent = f.scope.registerSession("parent", "orchestrator")
-  const put = (streamId: string, session: string, kind: "decision" | "note") => {
-    const r = f.scope.put(streamId, { writer: { agent: "orchestrator", session_id: session, message_id: "stage" },
-      createdRound: 1, description: "stage", content: "Original independent decision with limits.", kind })
+  const put = (kind?: (typeof KINDS)[number]) => {
+    const r = f.scope.put(parent.streamId, { writer: { agent: "orchestrator", session_id: "parent", message_id: "stage" },
+      createdRound: 1, description: "stage", content: "Original independent source with limits.", ...(kind === undefined ? {} : { kind }) })
     if (r.status !== "stored") throw Error("fixture")
     return r.id
   }
-  const decision = put(parent.streamId, "parent", "decision"), note = put(parent.streamId, "parent", "note")
-  const other = put(f.child.streamId, "child", "decision")
+  const prompt = "Implement the selected option; do not add assumptions."
+  const first = [put("decision"), put("note"), put("index_summary"), put()]
+  const before = f.scope.readMeta(parent.streamId).high_water
+  const routed = sourceHandoff(f.scope, "parent", prompt, [], first)
+  // Input order preserved: no kind sorting, no decision priority; kind omitted stays undefined (never a note backfill).
+  expect(routed.references).toEqual(first)
+  expect(routed.prompt).toContain(prompt)
+  expect(routed.prompt).toContain("<bcp_input_sources>")
+  expect(routed.prompt).not.toContain("<bcp_input_decisions>")
+  expect(routed.prompt).toContain(JSON.stringify(first))
+  expect(routed.prompt).toContain("These are candidate sources, not inferred dependencies, approved decisions or execution authority.")
+  // References only: neither the dispatcher's paraphrase nor the record body is substituted in.
+  expect(routed.prompt).not.toContain("Original independent source with limits.")
+  // Routing is observation only: it registers nothing and aggregates nothing.
+  expect(f.scope.readMeta(parent.streamId).high_water).toBe(before)
+  // Duplicate hook run is idempotent.
+  expect(sourceHandoff(f.scope, "parent", routed.prompt, [], first).prompt).toBe(routed.prompt)
+  // The remaining historical kinds route through the same neutral path.
+  const second = [put("finding"), put("change"), put("review")]
+  expect(sourceHandoff(f.scope, "parent", prompt, [], second).references).toEqual(second)
+})
+test("source routing stays writer-owned, bounded and id-critical; kinds add neither eligibility nor authority", () => {
+  const f = fixture(), parent = f.scope.registerSession("parent", "orchestrator")
+  const put = (streamId: string, session: string, kind?: (typeof KINDS)[number]) => {
+    const r = f.scope.put(streamId, { writer: { agent: "orchestrator", session_id: session, message_id: "stage" },
+      createdRound: 1, description: "stage", content: "Original independent source with limits.", ...(kind === undefined ? {} : { kind }) })
+    if (r.status !== "stored") throw Error("fixture")
+    return r.id
+  }
+  const mine = put(parent.streamId, "parent", "note")
+  const approved = put(parent.streamId, "parent", "decision")
+  const other = put(f.child.streamId, "child", "note")
   const hidden = f.scope.registerSession("hidden", "councillor")
   const secret = put(hidden.streamId, "hidden", "decision")
   const prompt = "Implement the selected option; do not add assumptions."
-  expect(sourceHandoff(f.scope, "parent", prompt, [decision]).references).toEqual([])
-  const routed = sourceHandoff(f.scope, "parent", prompt, [], [decision, note, other, secret])
-  expect(routed.references).toEqual([decision])
-  expect(routed.prompt).toContain(prompt)
-  expect(routed.prompt).not.toContain("Original independent decision with limits.")
+  // An unapproved note and an approved decision route identically: full IDs in, no kind-driven extras.
+  const routed = sourceHandoff(f.scope, "parent", prompt, [], [other, secret, mine, approved])
+  expect(routed.references).toEqual([mine, approved])
+  expect(routed.prompt).toContain(JSON.stringify([mine, approved]))
+  expect(routed.prompt).not.toContain("Original independent source with limits.")
   expect(routed.prompt).not.toContain(secret)
-  expect(sourceHandoff(f.scope, "parent", routed.prompt, [], [decision]).prompt).toBe(routed.prompt)
+  expect(sourceHandoff(f.scope, "parent", prompt, [], [mine, approved]).prompt).toBe(routed.prompt)
+  // Other writers stay excluded regardless of kind; hidden, malformed and missing IDs never route.
+  expect(sourceHandoff(f.scope, "parent", prompt, [], ["not-a-bb-id",
+    "bb://11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/e000999", mine]).references).toEqual([mine])
+  // Bounded to the last four unique current-input IDs; duplicates collapse.
+  const extra = [put(parent.streamId, "parent"), put(parent.streamId, "parent"), put(parent.streamId, "parent")]
+  const five = [mine, approved, ...extra]
+  expect(sourceHandoff(f.scope, "parent", prompt, [], [...five, ...five.slice(0, 2)]).references).toEqual(five.slice(-4))
 })
 test("board permission uses last matching rule, ask is not implicit authorization", () => {
   expect(permissionAction([], "board_put")).toBe("ask")

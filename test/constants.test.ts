@@ -105,3 +105,13 @@ describe("认知契约常量 golden（DESIGN §11.6）", () => {
     expect(shape.description?.description).toContain("不替代正文")
   })
 })
+
+// R9：STORE 文案换句 + 输入来源标签中性化 —— 防旧文案/旧标签回归。
+test("R9: store contract sentence and input-source tag carry the neutral R9 wording", () => {
+  expect(STORE_DESCRIPTION).toContain("Before dependent dispatch, retain any new public source the task relies on; pass all required full references explicitly and require board_get. kind does not control handoff eligibility.")
+  expect(STORE_DESCRIPTION).not.toContain("retain a new public decision as kind=decision")
+  for (const file of ["src/handoff.ts", "src/message-store.ts", "src/constants.ts", "src/capture.ts", "src/receipt-check.ts", "src/tools.ts"]) {
+    expect(readFileSync(join(import.meta.dir, "..", file), "utf8"), file).not.toContain("<bcp_input_decisions>")
+    expect(readFileSync(join(import.meta.dir, "..", file), "utf8"), file).not.toContain("retain a new public decision as kind=decision")
+  }
+})
