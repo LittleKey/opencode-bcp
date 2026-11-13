@@ -96,7 +96,7 @@ export function sourceHandoff(scope: Scope, session: string, prompt: string, rec
   }
   if (sources.length) {
     const suffix = "\n\n<bcp_input_sources>\n" + JSON.stringify(sources) +
-      "\nObserved record references for the dispatcher's current input (bounded, not exhaustive). These are candidate sources, not inferred dependencies, approved decisions or execution authority. Read relevant originals and limits with board_get before relying on them; index summaries are navigation only. Preserve task restrictions and full references; do not substitute the dispatcher's paraphrase.\n</bcp_input_sources>"
+      "\nObserved record references for the dispatcher's current input (bounded, not exhaustive). These are candidate sources, not inferred dependencies, approved decisions or execution authority. Check conclusions and limits before relying on a record: skip a repeat board_get only when the exact original, its host-verified source/version binding and all information needed for that check remain in this context with no change or conflict signal; otherwise read the relevant originals and limits with board_get. Index summaries are navigation only. Preserve task restrictions and full references; do not substitute the dispatcher's paraphrase.\n</bcp_input_sources>"
     if (!prompt.includes(suffix)) prompt += suffix
   }
   return { prompt, references: [...new Set(references)], removedBytes }

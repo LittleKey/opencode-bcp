@@ -12,6 +12,11 @@ type Observation = { call: string; started_at?: number; observed_at: number; fil
 type Journal = { input: string; observations: Observation[]; overflow?: true }
 export type EditEvidence = { paths: string[]; bindings: { path: string; ref: string; native_edit: true }[]; errors: string[] }
 const file = (scope: Scope, stream: string, input: string) => join(scope.dir, "streams", stream, "edits", createHash("sha256").update(input).digest("hex") + ".json")
+// 最窄只读查询（v2 冷恢复连续性检查用）：该输入的 journal 文件是否已在盘上。
+// 不读内容、不改任何持久格式；IO 异常由调用方按保守语义处理。
+export function editEvidenceJournalExists(scope: Scope, stream: string, input: string): boolean {
+  return existsSync(file(scope, stream, input))
+}
 function read(scope: Scope, stream: string, input: string): Journal | undefined {
   const path = file(scope, stream, input)
   if (!existsSync(path)) return undefined

@@ -374,7 +374,7 @@ describe("tools", () => {
     const { tools } = stub(scope, streamId)
     await tools.board_put.execute(CTX, putArgs())
     const out = await tools.board_index.execute(CTX, {})
-    expect(out).toContain("（目录与摘要为检索提示；除非逐条 board.get，未读原文）")
+    expect(out).toContain("（目录与摘要仅供检索，不构成原文证据；依赖前按 board_get 规则核对相关原文）")
   })
 
   // tools-12

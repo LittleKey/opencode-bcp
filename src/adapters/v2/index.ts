@@ -47,7 +47,7 @@ import {
   type CaptureResult,
   type PermissionRule,
 } from "../../capture"
-import { beginEditObservation, invalidateEditEvidence, observeEdits, editEvidence } from "../../edit-evidence"
+import { beginEditObservation, invalidateEditEvidence, observeEdits, editEvidence, editEvidenceJournalExists } from "../../edit-evidence"
 import { messageStore, STORE_DESCRIPTION } from "../../message-store"
 import { COUNCIL_BRIDGE, inspectCouncilSource, type CouncilMessage, type CouncilRequest } from "../../council"
 import { ReceiptCheck } from "../../receipt-check"
@@ -64,6 +64,7 @@ import {
   assistantPublicContentHash,
 } from "./subagent-receipt"
 import { HostSnapshot, toHostMessage, type WireMessage } from "./snapshot"
+import { resolveEditInput } from "./edit-input"
 
 type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不回退空串）
 
@@ -210,7 +211,63 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
     const receipts = new ReceiptCheck()
     // 原生后台子代理交付回执：子会话观察账本 + delivered 账本（DESIGN §16.7）。
     const subagentLedger = new SubagentReceiptLedger()
-    const editTokens = new Map<string, CaptureState>()
+    // 编辑证据代币：只由“归属已证明”的 execute.before 签发（State 对象 + 原始观察域
+    // 身份快照）；execute.after 只一次性消费原代币，不以当时 current 补建或重查。
+    // 归属不可证（no-store 未知）时只记 volatile 负证据（unprovenEdits，仅用于拒绝，
+    // 不落任何持久形态，不越过 no-store 边界）；已核实原域的失败才允许持久 sentinel。
+    // 负证据单调：同 State 的不完整一经出现即保留到自然换 State（新输入）为止，
+    // 后续成功观察只追加覆盖、不清除（成功 B 不能洗白未归属的 A 修改）。
+    type EditToken = {
+      capture: NonNullable<CaptureState>
+      assistant: string
+      call: string
+      tool: string
+      scopeId: string
+      streamId: string
+      agent: string
+      input: string
+    }
+    const editTokens = new Map<string, EditToken>()
+    const unprovenEdits = new WeakSet<NonNullable<CaptureState>["state"]>()
+    // 本地观察契约（正证据资格）：仅当本实例能证明其对该输入的观察从 journal 空白
+    // 起点开始（第一次写 pending 前盘上无 journal）时才记入。冷恢复（重启后遇既有
+    // journal）不能当连续性证明——读侧据此拒绝该输入的新 native 绑定；已留存记录
+    // 不改、不补拍，且后续一次成功编辑不得恢复正证据。检查在第一次 pending 写前
+    // 建立；WeakSet 丢失即重新保守拒绝（检查本身可由持久 journal 状态确定性重导）。
+    const coveredInputs = new WeakSet<NonNullable<CaptureState>["state"]>()
+    // 统一同步原域谓词（P1-3）：State 对象引用 ∧ 确认输入 ∧ runInput ∧ 冻结
+    // scope/stream/agent ∧ skip taint。unknown context 只删 runInput 而 State 不变、
+    // 同输入重新登记原地改写缓存 agent、taint/skip 漂移都据此拒绝。before/after 的
+    // 每个 await 返回后与 observeEdits 的每个 current() 检查点都重跑本谓词，不以
+    // await 前算出的过期布尔判定。
+    const editDomainCurrent = (
+      session: string,
+      state: NonNullable<CaptureState>["state"],
+      input: string,
+      domain: { scopeId: string; streamId: string; agent: string },
+      resolved: { scope: Scope; streamId: string; agent: string | null } | null,
+    ): boolean =>
+      receipts.capture(session)?.state === state &&
+      st.confirmed.get(session) === input &&
+      st.runInput.get(session) === input &&
+      resolved !== null &&
+      resolved.scope.scopeId === domain.scopeId &&
+      resolved.streamId === domain.streamId &&
+      resolved.agent === domain.agent &&
+      !st.skipTainted.has(session) &&
+      !resolved.scope.isSessionSkipTainted(session) &&
+      !st.skipAgents.includes(domain.agent)
+    // fail-closed 收敛：volatile 负证据先落位且不因后续持久写失败而丢失；已核实原域
+    // 再尝试持久 sentinel（写失败只吞掉——读侧仍有 volatile 兜底拒绝）。
+    const failEditEvidence = (state: NonNullable<CaptureState>["state"], domain?: { scope: Scope; streamId: string; input: string }): void => {
+      unprovenEdits.add(state)
+      if (!domain) return
+      try {
+        invalidateEditEvidence(domain.scope, domain.streamId, domain.input)
+      } catch {
+        /* sentinel IO 失败：volatile 已在，读侧仍拒绝 */
+      }
+    }
     const recentSources = new Map<string, string[]>()
     const remember = (session: string, id?: string): void => {
       if (!id) return
@@ -315,12 +372,48 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
     const waitCompleted = async (session: string, id: string): Promise<void> => {
       // 完成时间由宿主写入消息；step.ended 可能先于 context 装配可见该消息——有界重试，
       // 读不到就让 captureFinal 以其自身 reason fail closed，绝不伪造完成时间。
+      // 每次尝试先刷新再判定：缓存里的 completed 可能来自更早的中间态 wire（编辑钩子
+      // 期间的 captureMessage/refresh 会把当时的 time.completed 盖进快照），终稿 wire
+      // 才是权威完成时间——"缓存已有值"不再跳过新鲜核对，只是有界次数内的等待。
       for (let attempt = 0; attempt < 4; attempt++) {
+        await contextMessages(session).then((list) => { if (list) snapshots.refresh(session, list) })
         const obs = snapshots.read(session, id)
         if (obs?.role === "assistant" && obs.completed !== undefined) return
         await new Promise((r) => setTimeout(r, 50))
-        await contextMessages(session).then((list) => { if (list) snapshots.refresh(session, list) })
       }
+    }
+
+    // ---- 留存读取入口（captureHost.message；before/after 编辑输入同用）----
+    // 与普通 readMessage 的差别：user/synthetic 输入不做"缓存即真相"假设——
+    // 宿主 prompt 钩子可串行改写 prompt，最终持久化的是钩子后的 wire 文本。因此
+    // 每次都以 fresh wire 为准并做保守并集：
+    //   · context 缺失 / 缺该行 / 重复行 / 类型冲突 → 一律 null（不准回落宽松缓存）；
+    //   · no-store 判定 = 新鲜原文 ∧ 单调隐私元数据（snapshot.noStore，见 snapshot.ts）
+    //     的并集——缓存已见的标记不得被更宽松的新鲜文本解除；
+    //   · 仅元数据可见（新鲜文本已宽松）→ null → capture 核给保守 unconfirmed，
+    //     不生成记录；新鲜原文确含标记 → 按原文忠实返回（capture 核拒绝留存）。
+    // assistant 终稿沿用 readMessage 语义（缺完成时间的有界重试保留）。
+    const captureMessage = async (session: string, id: string): Promise<HostMessage | null> => {
+      const cachedRole = snapshots.read(session, id)?.role
+      if (cachedRole === "assistant") return readMessage(session, id)
+      const list = await contextMessages(session)
+      if (!list) return null
+      snapshots.refresh(session, list)
+      const rows = list.filter((wire) => wire?.id === id)
+      if (rows.length !== 1) return null
+      const row = rows[0]!
+      // 宿主 context 行格式：wire 用 type（user/synthetic/assistant），message 形状用
+      // role（user/assistant）。两者都按字面精确核验，其余一律拒绝。
+      // （message 形状行不在 snapshot WireMessage 类型内，这里局部窄化读取。）
+      const raw = row as { role?: unknown }
+      const rowKind = typeof row.type === "string" ? row.type : typeof raw.role === "string" ? raw.role : undefined
+      if (rowKind !== "user" && rowKind !== "synthetic") return null
+      const text = typeof row.text === "string" ? row.text : undefined
+      if (text === undefined) return null
+      const obs = snapshots.read(session, id)
+      if (!obs || obs.role !== "user") return null
+      if ((text.includes(NO_STORE) || obs.noStore === true) && !text.includes(NO_STORE)) return null
+      return toHostMessage(session, obs)
     }
 
     const findRoot = async (sessionId: string): Promise<string | null> => {
@@ -491,16 +584,70 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
 
     const captureHost: CaptureHost = {
       resolve: (id) => lookupScopeContext(id, "").then((r) => (r ? { scope: r.scope, streamId: r.streamId, agent: r.agent } : null)),
-      message: readMessage,
+      message: captureMessage,
       current: (id, parent) => st.confirmed.get(id) === parent,
       edits: (id, parent) => receipts.edits(id, parent),
       evidence: async (id, parent, completed, access, stage) => {
+        // volatile 负证据：近期存在归属不可证的编辑调用时，该输入的编辑证据整体降级
+        // （只用于拒绝；标记随 State 单调保留，不因后续成功观察清除）。与持久哨兵
+        // （pending 行/.incomplete）叠加报告：volatile 只附加错误并强制清空绑定，
+        // 不掩盖盘上已有的持久负证据。
+        const unprovenError = "edit_evidence_attribution_unproven: a recent edit call could not be attributed to a confirmed input; do not substitute an earlier snapshot"
+        const continuityError = "edit_evidence_continuity_unproven: a previous instance may hold unobserved edit history for this input; do not substitute an earlier snapshot"
+        const coverageError = "edit_evidence_coverage_unproven: this historical input has no continuous edit-observation coverage in the current instance; new native bindings are not issued; do not substitute an earlier snapshot"
         const resolved = await lookupScopeContext(id, "")
-        if (!resolved) return { paths: [], bindings: [], errors: ["edit_evidence_author_unavailable"] }
+        if (!resolved) {
+          const lost = receipts.capture(id)
+          const unproven = Boolean(lost && lost.state.input === parent && unprovenEdits.has(lost.state))
+          return { paths: [], bindings: [], errors: unproven ? [unprovenError, "edit_evidence_author_unavailable"] : ["edit_evidence_author_unavailable"] }
+        }
+        // 资格判定闭包：每个 await 返回后重读当前 Receipt State 再判定（历史补存时当前
+        // 输入可能已切换——不得在异步证据准备前一次性计算后带出过时正证据）。判定规则：
+        //   · 目标输入=当前 State 输入：沿用 volatile/连续性两项检查（正证据=coveredInputs
+        //     空白起点覆盖）；
+        //   · 目标输入≠当前输入（手动补存历史输入）：本实例没有该输入的连续覆盖正证明，
+        //     找不到目标 State 不等于"没有负证据"——新 native 绑定一律不发，正文照常留存；
+        //     无 journal（该输入从未有编辑观察）不适用——没有可被替代的历史。IO 未知按
+        //     有历史保守处理。
+        const qualification = (): { negative: boolean; errors: string[] } => {
+          const now = receipts.capture(id)
+          if (!now) {
+            // 当前 State 不可读：同历史目标保守处理（IO 未知按有历史）。
+            let journalNoState = true
+            try {
+              journalNoState = editEvidenceJournalExists(resolved.scope, resolved.streamId, parent)
+            } catch {
+              /* IO 未知：保守视为已有历史 */
+            }
+            return journalNoState ? { negative: true, errors: [coverageError] } : { negative: false, errors: [] }
+          }
+          const sameInput = now.state.input === parent
+          if (sameInput && unprovenEdits.has(now.state)) return { negative: true, errors: [unprovenError] }
+          let journal = true
+          try {
+            journal = editEvidenceJournalExists(resolved.scope, resolved.streamId, parent)
+          } catch {
+            /* IO 未知：保守视为已有历史 */
+          }
+          if (sameInput) {
+            if (!coveredInputs.has(now.state) && journal) return { negative: true, errors: [continuityError] }
+            return { negative: false, errors: [] }
+          }
+          return journal ? { negative: true, errors: [coverageError] } : { negative: false, errors: [] }
+        }
+        let q = qualification()
         try {
-          return await editEvidence(resolved.scope, resolved.streamId, parent, completed, access, stage)
+          const evidence = await editEvidence(resolved.scope, resolved.streamId, parent, completed, access, stage)
+          // 返回边界复核：证据准备（工件读取/权限 ask）期间输入切换后，不得按切换前
+          // 的正资格返回绑定。
+          q = qualification()
+          if (!q.negative) return evidence
+          return { ...evidence, bindings: [], errors: [...evidence.errors, ...q.errors] }
         } catch (error) {
-          return { paths: receipts.edits(id, parent)?.paths ?? [], bindings: [], errors: [error instanceof Error ? error.message : String(error)] }
+          const errors = [error instanceof Error ? error.message : String(error)]
+          q = qualification()
+          if (q.negative) errors.push(...q.errors)
+          return { paths: receipts.edits(id, parent)?.paths ?? [], bindings: [], errors }
         }
       },
       // 来源/授权事实全部来自宿主面：agent profile（ctx.agent.list）+ 会话级规则
@@ -519,7 +666,13 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
         return {
           directory,
           ask: async ({ permission, patterns }) => {
-            if (patterns.some((pattern) => permissionAction(rules, permission, pattern) !== "allow"))
+            // 文件准备中途的会话权限复核：与整轮"每个 await 后重核"同一哲学——
+            // authorize 时刻的规则不假定在整个工件读取期间仍然成立（会话级 deny 可
+            // 随宿主状态出现）。会话不可得 → fail closed，不得沿用旧规则放行。
+            const nowRules = await sessionInfo(id)
+            if (!nowRules) throw Error("capture_source_permission_not_granted")
+            const fresh = [...profile.permission, ...toPermissionRules(nowRules.permissions ?? [])]
+            if (patterns.some((pattern) => permissionAction(fresh, permission, pattern) !== "allow"))
               throw Error("capture_source_permission_not_granted")
           },
         }
@@ -843,7 +996,7 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
           if (!resolved) return
           // 原生后台子代理交付回执（DESIGN §16.7）：在 nudge 管线之前独立执行，
           // 只改本次请求 draft 的展示副本槽位；自己的 try/catch 只 log，不 degrade、
-          // 不因回执路径影响既有冻结管线（nudge 不会触碰带 string content 的通知槽位）。
+          // 不因回执路径影响既有冻结管线（回执先于 nudge 执行，nudge 随后沿用既有冻结管线）。
           try {
             await attachReceipts(sessionId, resolved.agent, msgs as Array<Record<string, unknown>>)
           } catch (err) {
@@ -949,22 +1102,147 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
         const sessionID = input.sessionID
         if (!sessionID) return
         if (input.tool && EDIT_TOOLS.includes(input.tool)) {
-          // 编辑观察只跟随宿主确认的当前输入；authorInput 不可得/受限 → 不观察。
-          const started = receipts.capture(sessionID, input.messageID)
-          if (input.id && started) editTokens.set(`${sessionID}:${input.id}`, started)
-          if (editTokens.size > 128) {
-            const oldest = editTokens.keys().next().value
-            if (oldest !== undefined) editTokens.delete(oldest)
+          // 编辑证据归属（tool-only 修复）：execute.before 可能先于该 assistant 的任何
+          // 登记到达（每个 step 的新 assistant message 正是如此），旧代码以
+          // input.messageID 查 assistant 登记（receipts.capture 第二参只认已登记 id）
+          // → 无 pending、无代币，留存时旧快照冒充最新结果。现按宿主新鲜 wire 证明
+          // 归属：唯一精确 assistant 行 → 前向跳过 assistant 行 → 首个非 assistant 行
+          // 必须是当前已确认输入（id===State.input===st.confirmed；synthetic/边界/
+          // 缺失/重复拒绝）。顺序：固定 State → 归属证明 → no-store → 授权 →
+          // 登记 assistant → 写 pending journal → 最后签发原域代币；每个 await 后复核
+          // 观察域未变。失败必须影响证据完整性：已核实原域 → 持久显式失效；
+          // 归属不可证（no-store 未知）→ 只用于拒绝的 volatile 负证据。
+          const capture = receipts.capture(sessionID)
+          if (!input.id || !input.messageID || !capture) {
+            // 无已确认输入则无可归属；缺 call/assistant id 则无法证明或签发代币——
+            // 均按不可证处理。
+            if (capture) unprovenEdits.add(capture.state)
+            return
           }
-          if (!started) return
-          const resolved = await lookupScopeContext(sessionID, "")
-          if (!resolved?.agent) return
-          const authorInput = await readMessage(sessionID, started.state.input)
-          if (!authorInput || requestedNoStore(authorInput)) return
-          if (!(await captureHost.authorize(sessionID, resolved.agent, authorInput))) return
-          beginEditObservation(resolved.scope, resolved.streamId, started.state.input, input.id ?? "")
+          const entryState = capture.state
+          const entryInput = entryState.input
+          let resolved: Awaited<ReturnType<typeof lookupScopeContext>> = null
+          let domain: { scopeId: string; streamId: string; agent: string } | undefined
+          // 冻结时同时保留 Scope 对象引用：lookup 后续可能返回 null（taint/skip），
+          // 失效哨兵仍须落在已核实的原域 Scope 上，而不是丢给 volatile 了事。
+          let domainScope: Scope | undefined
+          // 统一同步原域谓词（P1-3）：域冻结前仅核对 State 三元组；冻结后走共享
+          // editDomainCurrent（含缓存入口当前字段、taint）。每个 await 返回后重跑，
+          // 不以 await 前的过期布尔判定。
+          const domainCurrent = (): boolean =>
+            domain
+              ? editDomainCurrent(sessionID, entryState, entryInput, domain, resolved)
+              : receipts.capture(sessionID)?.state === entryState &&
+                st.confirmed.get(sessionID) === entryInput &&
+                st.runInput.get(sessionID) === entryInput
+          // 异步复核：fresh lookup 返回后重跑同步谓词（lookup 返回缓存可变入口，
+          // 同输入重新登记会原地改写 agent，跳过名单/taint 漂移也会使其为 null）。
+          const domainStable = async (): Promise<boolean> => {
+            resolved = await lookupScopeContext(sessionID, "")
+            return domainCurrent()
+          }
+          // 归属不可证：标记当前观察域（over-cover 安全），只用于拒绝，不落盘。
+          const markUnproven = (): void => {
+            const now = receipts.capture(sessionID)?.state
+            if (now) unprovenEdits.add(now)
+          }
+          if (!domainCurrent()) {
+            markUnproven()
+            return
+          }
+          resolved = await lookupScopeContext(sessionID, "")
+          if (!resolved?.agent || !domainCurrent()) {
+            markUnproven()
+            return
+          }
+          domain = { scopeId: resolved.scope.scopeId, streamId: resolved.streamId, agent: resolved.agent }
+          domainScope = resolved.scope
+          const wire = await contextMessages(sessionID)
+          if (!(await domainStable())) {
+            markUnproven()
+            return
+          }
+          const attribution = resolveEditInput(wire, input.messageID, entryInput)
+          if (!attribution.ok) {
+            markUnproven()
+            return
+          }
+          // wire/hook assistant 行身份必须与 context 登记身份一致（agent 冲突即不可证）。
+          if (attribution.agent !== domain.agent) {
+            markUnproven()
+            return
+          }
+          if (typeof input.agent === "string" && input.agent && input.agent !== domain.agent) {
+            markUnproven()
+            return
+          }
+          // 编辑输入读取走统一留存入口（fresh wire + 单调并集；缺失/冲突 → null →
+          // 按归属不可证处理）。新鲜归属原文 userText 仍保留并参与下方 no-store 并集。
+          const authorInput = await captureMessage(sessionID, entryInput)
+          if (!(await domainStable())) {
+            markUnproven()
+            return
+          }
+          if (!authorInput) {
+            // no-store 无法核验 → 按归属不可证处理，不落持久形态。
+            markUnproven()
+            return
+          }
+          // P1-1：新鲜归属原文（wire）与已见缓存取保守并集——任一侧含 no-store 都
+          // 不落 journal/哨兵/工件；缓存已见 no-store 不得被更宽松的新鲜 wire 洗白。
+          if (requestedNoStore(authorInput) || attribution.userText.includes(NO_STORE)) return
+          try {
+            const granted = await captureHost.authorize(sessionID, domain.agent, authorInput)
+            // 授权后签发前最后一道复核：State 三元组 ∧ 冻结域 ∧ taint 任一漂移即拒绝。
+            if (!granted || !(await domainStable())) {
+              // 已核实原域的授权/身份失败：volatile 先保留，再持久显式失效；lookup
+              // 已不可解析（taint/skip → null）时哨兵仍落在冻结时的原域 Scope 上。
+              failEditEvidence(
+                entryState,
+                domainScope && domain ? { scope: domainScope, streamId: domain.streamId, input: entryInput } : undefined,
+              )
+              return
+            }
+            // P1-2 连续性：第一次 pending 写前建立覆盖起点证明——盘上无 journal 才是
+            // 本实例的空白起点；已有 journal（冷恢复）不得当作观察连续性证明，读侧
+            // 据此拒绝该输入的新 native 绑定。IO 未知按已有历史保守处理。
+            let blankStart = false
+            try {
+              blankStart = !editEvidenceJournalExists(resolved.scope, resolved.streamId, entryInput)
+            } catch {
+              blankStart = false
+            }
+            // 同步收尾（不再有 await）：登记已证 assistant → pending journal →
+            // 最后签发原域代币。负证据单调：不清除该 State 既有 volatile 标记。
+            receipts.assistant(sessionID, input.messageID, entryInput)
+            beginEditObservation(resolved.scope, resolved.streamId, entryInput, input.id)
+            if (blankStart) coveredInputs.add(entryState)
+            editTokens.set(`${sessionID}:${input.id}`, {
+              capture,
+              assistant: input.messageID,
+              call: input.id,
+              tool: input.tool,
+              scopeId: resolved.scope.scopeId,
+              streamId: resolved.streamId,
+              agent: attribution.agent,
+              input: entryInput,
+            })
+            if (editTokens.size > 128) {
+              const oldest = editTokens.keys().next().value
+              if (oldest !== undefined) editTokens.delete(oldest)
+            }
+          } catch (err) {
+            // pending journal 写失败（如 quota）或授权通道异常：原域已核实（非
+            // no-store）→ volatile 保留 + 持久显式不完整；sentinel 写失败也不丢
+            // volatile（旧快照不得因本次失败复活）。
+            failEditEvidence(
+              entryState,
+              domainScope && domain ? { scope: domainScope, streamId: domain.streamId, input: entryInput } : undefined,
+            )
+            st.degrade(err)
+          }
         } else if (input.tool && DELEGATE_TOOLS.includes(input.tool)) {
-          const args = input.input as { prompt?: unknown; task_id?: unknown; subagent_type?: unknown; agent?: unknown } | null
+          const args = input.input as { prompt?: unknown; sessionID?: unknown; task_id?: unknown; subagent_type?: unknown; agent?: unknown } | null
           if (!args || typeof args.prompt !== "string" || !args.prompt) return
           const kind = typeof args.subagent_type === "string" ? args.subagent_type : typeof args.agent === "string" ? args.agent : ""
           // Council 原文走独立桥，接收方不读板；不参与派发引用重写。
@@ -973,14 +1251,19 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
           if (autoCapture) {
             const resolved = await lookupScopeContext(sessionID, "")
             if (resolved) {
-              // 接收方身份：task_id 必须真实指向本会话子任务；否则按工具名查 agent profile。
-              const requested = typeof args.task_id === "string" && args.task_id ? args.task_id : undefined
+              // 接收方身份：按工具真实 schema 读续聊字段——原生 subagent 用 sessionID
+              // （宿主 v2.1.4），兼容 task 工具用其 task_id；其余工具不猜字段。
+              // 显式续聊不可证时（会话不存在、非本会话子会话、读取权限不可证）保留原
+              // prompt，不降格为 agent profile 路径重写。
+              const requestedField = input.tool === "subagent" ? args.sessionID : input.tool === "task" ? args.task_id : undefined
+              const requested = typeof requestedField === "string" && requestedField ? requestedField : undefined
               const recipient = requested && (await sessionInfo(requested))?.parentID === sessionID ? requested : undefined
               let readable = false
               try {
                 if (recipient) readable = await canReadResult(recipient)
-                else {
-                  // subagent_type/task agent 均为 Agent.ID → 按 AgentInfo.id 查 profile。
+                else if (!requested) {
+                  // 仅全新独立派发按 agent profile 判定；显式续聊不可证（会话不存在/
+                  // 非本会话子会话）→ readable 保持 false，原文保留，不降格重写。
                   const profile = (await agentProfiles()).find((p) => p.id === kind)
                   readable = Boolean(profile) && permissionAction(profile!.permission, "board_get", "*") === "allow"
                 }
@@ -1020,10 +1303,21 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
 
     await ctx.tool.hook("execute.after", async (hook) => {
       const input = hook as ToolHookInput
+      // catch 收敛所需事实：局部保留代币；不回查已删除的 map，不回退当前输入猜域。
+      let editToken: EditToken | undefined
       try {
         const sessionID = input.sessionID
-        if (!sessionID || !input.messageID) return
+        if (!sessionID) return
         const isEdit = Boolean(input.tool && EDIT_TOOLS.includes(input.tool))
+        if (!input.messageID) {
+          // 缺 assistant id 的编辑回调无法归属任何已证明观察域：显式负证据（只用于
+          // 拒绝），不让该输入的旧 journal 因“没有观察”冒充完整。
+          if (isEdit) {
+            const now = receipts.capture(sessionID)?.state
+            if (now) unprovenEdits.add(now)
+          }
+          return
+        }
         // 每个工具调用都补全 assistant 名下的调用痕迹（capture 的 publicReply 完整性依据）。
         snapshots.observeAssistantTool(
           sessionID,
@@ -1060,11 +1354,40 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
           }
         }
         if (!isEdit) return
-        const started = input.id ? editTokens.get(`${sessionID}:${input.id}`) : undefined
-        if (input.id) editTokens.delete(`${sessionID}:${input.id}`)
-        if (autoCapture && !started) return
+        // 只一次性消费原代币（局部保留供 catch）；call/tool/assistant 字段不符视同
+        // 无代币——不能补拍当前文件，也不能给迟到事件认领新输入。
+        const callKey = input.id ? `${sessionID}:${input.id}` : ""
+        const issued = callKey ? editTokens.get(callKey) : undefined
+        if (callKey) editTokens.delete(callKey)
+        const started = issued && issued.tool === input.tool && issued.assistant === input.messageID ? issued : undefined
+        editToken = started
+        if (autoCapture && !started) {
+          // 孤立/淘汰/字段不符的 after：no-store 未知 → 只用于拒绝的 volatile 负证据。
+          const now = receipts.capture(sessionID)?.state
+          if (now) unprovenEdits.add(now)
+          return
+        }
+        if (started && input.status !== "completed") {
+          // completed-only：error/取消可能部分写入——先保留 volatile 负证据（单调），
+          // 再在可复核原域落持久哨兵；原域复核失败也不丢 volatile，不以未完成调用
+          // 补拍，旧完成观察不得冒充错误之后的状态。
+          unprovenEdits.add(started.capture.state)
+          const errorResolved = await lookupScopeContext(sessionID, "")
+          if (errorResolved && errorResolved.scope.scopeId === started.scopeId && errorResolved.streamId === started.streamId) {
+            try {
+              invalidateEditEvidence(errorResolved.scope, errorResolved.streamId, started.input)
+            } catch {
+              /* sentinel 写失败：volatile 已在 */
+            }
+          }
+          return
+        }
         const resolved = await lookupScopeContext(sessionID, "")
-        if (!resolved) return
+        if (!resolved) {
+          // 持有代币却无法复核原域：显式负证据，不只 log（manual 模式无代币则无可标记）。
+          if (started) unprovenEdits.add(started.capture.state)
+          return
+        }
         // 路径事实：v2 edit/write 输入字段是 path（v1 语义 filePath）；patch 的输入只有
         // patchText，路径在 result.metadata.files[]（v2 patch 条目带 filePath，v2 edit 的
         // FileDiff.Info 条目带 file——两者都收，取不到即 unknownPath 走保守失效）。
@@ -1089,14 +1412,46 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
           const abs = toAbsolute(raw)
           for (const p of new Set([raw, ...(abs ? [abs] : [])])) paths.push(p)
         }
-        receipts.changed(sessionID, unknownPath ? [] : paths, started)
-        if (!started || !resolved?.agent) return
-        if (receipts.capture(sessionID, started.state.input)?.state !== started.state) return
-        const parent = started.state.input
-        const authorInput = await readMessage(sessionID, parent)
-        if (!authorInput || requestedNoStore(authorInput)) return
-        const access = await captureHost.authorize(sessionID, resolved.agent, authorInput)
-        if (!access) return
+        receipts.changed(sessionID, unknownPath ? [] : paths, started?.capture)
+        if (!started || !resolved?.agent) {
+          // 持有代币但路径域缺失：显式负证据（manual 模式无代币则无可标记）。
+          if (started) unprovenEdits.add(started.capture.state)
+          return
+        }
+        // 观察域栅栏（P1-3 统一谓词）：State 对象引用 ∧ confirmed ∧ runInput ∧ 冻结
+        // 原域 ∧ taint。unknown context 只删 runInput 而 State 不变——此处照样拒绝，
+        // 保持 pending，不把旧观察完成到未确认边界之后。capture 的 messageId 参数只
+        // 认 assistant 登记（代币签发时已登记该 assistant），不属于此栅栏的身份域——
+        // 以无参当前域比较 State 引用。
+        if (!editDomainCurrent(sessionID, started.capture.state, started.input, started, resolved)) return
+        const parent = started.capture.state.input
+        // 编辑输入读取走统一留存入口：after 不得仅凭旧缓存放行——fresh wire 缺行/
+        // 冲突/仅元数据可见 no-store → null → 显式负证据，行保持 pending。
+        const authorInput = await captureMessage(sessionID, parent)
+        if (!editDomainCurrent(sessionID, started.capture.state, started.input, started, resolved)) {
+          // await 期间原域漂移（换输入/unknown 边界/身份/taint）：volatile 负证据，
+          // 不完成旧观察。
+          unprovenEdits.add(started.capture.state)
+          return
+        }
+        if (!authorInput) {
+          // 代币输入原文不可得（读取失败）：显式负证据，不冒认。
+          unprovenEdits.add(started.capture.state)
+          return
+        }
+        if (requestedNoStore(authorInput)) return
+        const access = await captureHost.authorize(sessionID, started.agent, authorInput)
+        if (!access) {
+          // 已核实原域的授权失败：volatile 保留 + 持久显式失效。
+          failEditEvidence(started.capture.state, { scope: resolved.scope, streamId: resolved.streamId, input: started.input })
+          return
+        }
+        // 原域复核（P1-3 统一谓词，含 confirmed/runInput/taint）：authorize await
+        // 返回后重跑，不是入口一次性判定。
+        if (!editDomainCurrent(sessionID, started.capture.state, started.input, started, resolved)) {
+          unprovenEdits.add(started.capture.state)
+          return
+        }
         await observeEdits(
           resolved.scope,
           resolved.streamId,
@@ -1105,18 +1460,34 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
           paths,
           access,
           () => {
-            const current = receipts.capture(sessionID, parent)
-            return !started || (current?.state === started.state)
+            // 文件准备与提交的每个检查点重跑同一同步谓词：authorize/留存等异步期间
+            // 一旦换输入、unknown 边界删 runInput、会话遗忘、同输入重新登记改写身份
+            // 或 taint 漂移，拒绝写入证据。
+            return editDomainCurrent(sessionID, started.capture.state, started.input, started, resolved)
           },
           Date.now,
           unknownPath,
         )
       } catch (err) {
-        // 证据通道任何异常：显式失效待定观察（不留半份证据），事件循环继续。
+        // 证据通道任何异常：以 catch 前局部保留的代币事实收敛——持有代币（原域已在
+        // before 核实且非 no-store）→ volatile 先保留，再在 fresh 域一致时持久失效；
+        // 无代币/归属未知 → volatile 负证据。不回查已删除的代币 map，不回退
+        // st.confirmed 猜域（迟到事件不得借当前输入定域）。
         try {
-          const resolved = await lookupScopeContext(input.sessionID ?? "", "")
-          const started = input.id ? editTokens.get(`${input.sessionID}:${input.id}`) : undefined
-          if (resolved) invalidateEditEvidence(resolved.scope, resolved.streamId, started?.state.input ?? st.confirmed.get(input.sessionID ?? "") ?? "")
+          if (editToken) {
+            unprovenEdits.add(editToken.capture.state)
+            const resolved = await lookupScopeContext(input.sessionID ?? "", "")
+            if (resolved && resolved.scope.scopeId === editToken.scopeId && resolved.streamId === editToken.streamId) {
+              try {
+                invalidateEditEvidence(resolved.scope, resolved.streamId, editToken.input)
+              } catch {
+                /* sentinel 写失败：volatile 已在 */
+              }
+            }
+          } else {
+            const now = receipts.capture(input.sessionID ?? "")?.state
+            if (now) unprovenEdits.add(now)
+          }
         } catch {
           /* 已在降级路径 */
         }
@@ -1211,7 +1582,10 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
               // 回执账本：交付观察（R8.3 已确认观察终点；inboxID==notificationID）。
               const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
               const inboxID = typeof event.data?.inboxID === "string" ? event.data.inboxID : ""
-              if (sessionID && inboxID) subagentLedger.observeDelivered(sessionID, inboxID)
+              if (sessionID && inboxID) {
+                subagentLedger.observeDelivered(sessionID, inboxID)
+                st.log({ ev: "inbox_delivery_observed", session: sessionID, notice_id: inboxID })
+              }
             } else if (event.type === "session.inbox.enqueued") {
               // 回执账本：子会话输入观察（留存记录 origin.input_message_id 的成员资格域）。
               const sessionID = typeof event.data?.sessionID === "string" ? event.data.sessionID : ""
@@ -1235,6 +1609,8 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
             st.degrade(err)
           }
         }
+        // 订阅正常结束同样意味着后续事件不可观察，不能继续等待或关联。
+        if (!ac.signal.aborted) subagentLedger.resetAll()
       } catch (err) {
         if (!ac.signal.aborted) {
           subagentLedger.resetAll()
@@ -1245,6 +1621,7 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
 
     return () => {
       ac.abort()
+      subagentLedger.resetAll()
       // 桥注销：身份安全（见 registerBridge）——只移除仍指向本实例的目录键。
       for (const unregister of bridgeRegistrations) unregister()
     }

@@ -35,6 +35,7 @@ async function makeHost(sessions: Record<string, { id: string; parentID?: string
   let barrier: (() => void) | undefined
   const deliver = (ev: { type: string; data?: unknown }) => {
     if (ev.type === "test.barrier") barrier = (ev.data as { resolve: () => void }).resolve
+    if (ev.type === "test.subscription.closed") return { value: undefined, done: true }
     return { value: ev, done: false }
   }
   const emit = (type: string, data?: unknown): void => {
@@ -236,12 +237,12 @@ const runParentContext = async (h: Host, draft: Msg[]): Promise<void> => {
 describe("subagent delivery receipt: positive association (R*.4-8, R8.6)", () => {
   test("attaches the frozen two-line receipt to the matched notification only", async () => {
     const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
-    const { draft, bbId } = await seedWorld(h)
+    const { draft, bbId, noticeText } = await seedWorld(h)
     await runParentContext(h, draft)
     const content = draft[1]!.content as string
     expect(bbId.startsWith("bb://")).toBe(true)
     expect(content.endsWith(receiptTail(bbId))).toBe(true)
-    expect(content).toContain(`Retained: ${bbId}\nBefore relying on this result, read the original with board_get and check its version and limits; retention is not acceptance.`)
+    expect(content).toBe(`${noticeText}\n\nRetained: ${bbId}\nCheck this original and its evidence, version and limits before relying on it. If the exact host-bound original and all needed information remain in context with no change or conflict signal, inspect them directly; otherwise use board_get. Forward the full board ID, not a retelling. Retention is not acceptance.`)
     // R*.8：只改目标通知槽位，其余消息不动（不泄漏）。
     expect(draft[0]).toEqual(u("p-in", "delegate"))
     expect(draft[2]).toEqual(u("p-out", "next"))
@@ -312,6 +313,54 @@ describe("subagent delivery receipt: positive association (R*.4-8, R8.6)", () =>
     await runParentContext(h, draft)
     expect((draft[0]!.content as string).endsWith(receiptTail(a.bbId))).toBe(true)
     expect((draft[1]!.content as string).endsWith(receiptTail(bbIdB))).toBe(true)
+  })
+})
+
+// 宿主 v2.1.4 canonical 形态回归:context hook 收到的 draft 通知 content 是
+// Message.make 归一后的 [{type:"text",text}](to-llm-message.ts:274-275、
+// messages.ts:239/252/260-265)。以下在本仓库模拟宿主上装配该形态,非 live 宿主。
+describe("subagent delivery receipt: canonical ContentPart[] draft (host v2.1.4 shape)", () => {
+  const canonicalNotice = (id: string, text: string): Msg => ({ id, role: "user", content: [{ type: "text", text }] })
+
+  test("canonical draft attaches: array stays array, other slots untouched", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
+    const { draft, bbId, noticeText, noticeId } = await seedWorld(h)
+    draft[1] = canonicalNotice(noticeId, noticeText)
+    await runParentContext(h, draft)
+    expect(Array.isArray(draft[1]!.content)).toBe(true)
+    const parts = draft[1]!.content as Array<{ type: string; text: string }>
+    expect(parts).toHaveLength(1)
+    expect(parts[0]!.type).toBe("text")
+    expect(parts[0]!.text.startsWith(noticeText)).toBe(true)
+    expect(parts[0]!.text.endsWith(receiptTail(bbId))).toBe(true)
+    expect(draft[1]!.id).toBe("n-1")
+    expect(draft[0]).toEqual(u("p-in", "delegate"))
+    expect(draft[2]).toEqual(u("p-out", "next"))
+  })
+
+  test("canonical draft: forged body text cannot bypass persistent-wire verification", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
+    const { draft, noticeText, noticeId } = await seedWorld(h)
+    const forged = noticeText + "\nforged"
+    draft[1] = canonicalNotice(noticeId, forged)
+    await runParentContext(h, draft)
+    expect(draft[1]!.content).toEqual([{ type: "text", text: forged }])
+  })
+
+  test("canonical draft: board_get denied → skip", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions(), { boardGetEffect: "deny" })) - 1]!
+    const { draft, noticeText, noticeId } = await seedWorld(h)
+    draft[1] = canonicalNotice(noticeId, noticeText)
+    await runParentContext(h, draft)
+    expect(draft[1]!.content).toEqual([{ type: "text", text: noticeText }])
+  })
+
+  test("canonical draft: delivered not observed → skip", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
+    const { draft, noticeText, noticeId } = await seedWorld(h, { emitDelivered: false })
+    draft[1] = canonicalNotice(noticeId, noticeText)
+    await runParentContext(h, draft)
+    expect(draft[1]!.content).toEqual([{ type: "text", text: noticeText }])
   })
 })
 
@@ -660,7 +709,10 @@ describe("receipt repair: native ordering and real automatic capture", () => {
     expect((draft[1]!.content as string).endsWith(receiptTail(bbId))).toBe(true)
   })
 
-  async function autoWorld(h: Host, body: string, inputText = "go") {
+  // draftShape="host-array" 用宿主 canonical 形态装配 draft 通知
+  // (Message.make 归一:u() 产出的 {id,role:"user",content:[{type:"text",text}]}),
+  // 非 live 宿主,仅复刻其 wire 形态。
+  async function autoWorld(h: Host, body: string, inputText = "go", draftShape: "string" | "host-array" = "string") {
     await h.hooks.prompt!({ sessionID: PARENT, messageID: "p-in", prompt: { text: "delegate" } } as never)
     await h.context({ sessionID: PARENT, agent: "build", messages: [u("p-in", "delegate")] })
     h.emit("session.created", { sessionID: CHILD, parentID: PARENT })
@@ -695,9 +747,9 @@ describe("receipt repair: native ordering and real automatic capture", () => {
     ]
     h.emit("session.inbox.delivered", { sessionID: PARENT, inboxID: "n-auto" })
     await h.settle()
-    const draft = [u("p-in", "delegate"), draftNotice("n-auto", notice)]
+    const draft = [u("p-in", "delegate"), draftShape === "host-array" ? u("n-auto", notice) : draftNotice("n-auto", notice)]
     await runParentContext(h, draft)
-    return { scope, hit, draft, body, log: readFileSync(join(h.dataDir, "log/blackboard.log"), "utf8") }
+    return { scope, hit, draft, body, notice, log: readFileSync(join(h.dataDir, "log/blackboard.log"), "utf8") }
   }
 
   test("autoCapture:true + real store marker → captureFinal record → parent receipt (no manual put)", async () => {
@@ -725,17 +777,36 @@ describe("receipt repair: native ordering and real automatic capture", () => {
       expect(draft[1]!.content).not.toContain("Retained: bb://")
     }
   })
+  test("autoCapture:true + real store marker + host canonical draft → tail lands in the text part, array preserved", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions(), { autoCapture: true })) - 1]!
+    const { hit, draft, notice, log } = await autoWorld(h, 'Done.\n\n<!-- bcp:store description="canonical capture" -->', "go", "host-array")
+    expect(hit, log).toBeDefined()
+    expect(Array.isArray(draft[1]!.content)).toBe(true)
+    const parts = draft[1]!.content as Array<{ type: string; text: string }>
+    expect(parts).toHaveLength(1)
+    expect(parts[0]!.type).toBe("text")
+    expect(parts[0]!.text.startsWith(notice)).toBe(true)
+    expect(parts[0]!.text.endsWith(receiptTail(hit!.id))).toBe(true)
+    expect(draft[1]!.id).toBe("n-auto")
+    expect(draft[0]).toEqual(u("p-in", "delegate"))
+  })
+  test("autoCapture:true + host canonical draft + no-store input → no receipt, content untouched", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions(), { autoCapture: true })) - 1]!
+    const { hit, draft, notice } = await autoWorld(h, 'Done.\n\n<!-- bcp:store description="blocked" -->', "go <!-- bcp:no-store -->", "host-array")
+    expect(hit).toBeUndefined()
+    expect(draft[1]!.content).toEqual([{ type: "text", text: notice }])
+  })
 })
 
 // 直接控制 await 边界与资源预算；留存/权限本身的真实接线由上面的 adapter 电池验证。
-function receiptFixture() {
+function receiptFixture(delivered = true) {
   const ledger = new SubagentReceiptLedger()
   ledger.observeCreated(PARENT, CHILD)
   ledger.observeDispatch(PARENT, CHILD, "task")
   ledger.observeChildInput(CHILD, "c-in")
   ledger.observeChildText(CHILD, "a", 0, "A")
   ledger.observeChildFinish(CHILD, "a", "stop")
-  ledger.observeDelivered(PARENT, "n")
+  if (delivered) ledger.observeDelivered(PARENT, "n")
   const text = subagentNotificationText(CHILD, "completed", "task", "A")
   const msgs: Msg[] = [draftNotice("n", text)]
   const wire: Wire[] = [{ id: "a", type: "assistant", finish: "stop", time: { completed: 1 }, content: [{ type: "text", text: "A" }] }]
@@ -748,6 +819,97 @@ function receiptFixture() {
   }
   return { ledger, text, msgs, wire, notice, id, deps }
 }
+
+describe("first delivery synchronization", () => {
+  test("first context waits for the real delivered event and attaches before returning", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
+    const { draft, bbId, noticeId } = await seedWorld(h, { emitDelivered: false })
+    const original = SubagentReceiptLedger.prototype.waitForDelivery
+    let entered!: () => void
+    const waiting = new Promise<void>((resolve) => { entered = resolve })
+    SubagentReceiptLedger.prototype.waitForDelivery = function (...args) {
+      const result = original.apply(this, args)
+      entered()
+      return result
+    }
+    try {
+      const context = runParentContext(h, draft)
+      await waiting
+      h.emit("session.inbox.delivered", { sessionID: PARENT, inboxID: noticeId })
+      await context
+      expect(draft[1]!.content).toBeString()
+      expect(draft[1]!.content as string).toEndWith(receiptTail(bbId))
+    } finally {
+      SubagentReceiptLedger.prototype.waitForDelivery = original
+    }
+  })
+
+  test("timeouts are parallel and leave all drafts untouched", async () => {
+    const f = receiptFixture(false)
+    f.deps.msgs = Array.from({ length: 8 }, (_, i) => draftNotice(`n-${i}`, f.text)) as Array<Record<string, unknown>>
+    const start = performance.now()
+    await attachSubagentReceipts(f.deps)
+    expect(performance.now() - start).toBeLessThan(500)
+    expect(f.deps.msgs.every((msg) => msg.content === f.text)).toBe(true)
+  })
+
+  test("subscription closure wakes first context without a receipt", async () => {
+    const h = hosts[hosts.push(await makeHost(baseSessions())) - 1]!
+    const { draft, noticeText } = await seedWorld(h, { emitDelivered: false })
+    const original = SubagentReceiptLedger.prototype.waitForDelivery
+    let entered!: () => void
+    const waiting = new Promise<void>((resolve) => { entered = resolve })
+    SubagentReceiptLedger.prototype.waitForDelivery = function (...args) {
+      const result = original.apply(this, args)
+      entered()
+      return result
+    }
+    try {
+      const context = runParentContext(h, draft)
+      await waiting
+      h.emit("test.subscription.closed")
+      await context
+      expect(draft[1]!.content).toBe(noticeText)
+    } finally {
+      SubagentReceiptLedger.prototype.waitForDelivery = original
+    }
+  })
+
+  test("reset, deletion, invalidation and target mutation fail closed while waiting", async () => {
+    for (const action of ["reset", "delete-child", "delete-parent", "invalidate", "mutate"] as const) {
+      const f = receiptFixture(false)
+      const part = { type: "text", text: f.text }
+      f.msgs[0]!.content = [part]
+      const run = attachSubagentReceipts(f.deps)
+      if (action === "reset") f.ledger.resetAll()
+      if (action === "delete-child") f.ledger.forgetSession(CHILD)
+      if (action === "delete-parent") f.ledger.forgetSession(PARENT)
+      if (action === "invalidate") f.ledger.invalidate(CHILD, "coverage_gap")
+      if (action === "mutate") part.text = "changed"
+      f.ledger.observeDelivered(PARENT, "n")
+      await run
+      expect(f.msgs[0]!.content).toEqual([part])
+      expect(part.text).toBe(action === "mutate" ? "changed" : f.text)
+    }
+  })
+
+  test("delivery wake does not bypass ACL, uniqueness or coverage", async () => {
+    for (const mode of ["acl", "duplicate", "coverage"] as const) {
+      const f = receiptFixture(false)
+      if (mode === "acl") f.deps.parentCanRead = async () => false
+      if (mode === "duplicate") {
+        f.ledger.observeChildText(CHILD, "b", 0, "A")
+        f.ledger.observeChildFinish(CHILD, "b", "stop")
+        f.wire.push({ id: "b", type: "assistant", finish: "stop", time: { completed: 1 }, content: [{ type: "text", text: "A" }] })
+      }
+      if (mode === "coverage") f.wire.push({ id: "unobserved", type: "assistant", finish: "stop", time: { completed: 1 }, content: [] })
+      const run = attachSubagentReceipts(f.deps)
+      f.ledger.observeDelivered(PARENT, "n")
+      await run
+      expect(f.msgs[0]!.content).toBe(f.text)
+    }
+  })
+})
 
 describe("receipt repair: raw notification, race fences and bounded evidence", () => {
   test("persistent A + valid but different draft B never receives B's reference", async () => {
@@ -859,5 +1021,155 @@ describe("receipt repair: raw notification, race fences and bounded evidence", (
     ledger.observeCreated(PARENT, "fresh-after-limit")
     ledger.observeDispatch(PARENT, "fresh-after-limit", "task")
     expect(ledger.eligibleChild(PARENT, "fresh-after-limit")).toBeNull()
+  })
+})
+
+// canonical ContentPart[] 形态的写回栅栏与表示保持(直接控制 await 边界;
+// receiptFixture 为本地模拟,非 live 宿主)。canonical 形态 = 宿主 Message.make
+// 归一的单 text part 数组(messages.ts:252/260-265)。
+describe("receipt repair: canonical ContentPart[] fences and representation", () => {
+  const asParts = (content: unknown): Array<Record<string, unknown>> => content as Array<Record<string, unknown>>
+
+  test("attaches to canonical draft: array stays array, part metadata preserved, no in-place write", async () => {
+    const f = receiptFixture()
+    const meta = { cache: { control: "ephemeral" } }
+    const part = { type: "text", text: f.text, metadata: meta }
+    const arr = [part]
+    f.msgs[0]!.content = arr
+    await attachSubagentReceipts(f.deps)
+    const written = asParts(f.msgs[0]!.content)
+    expect(Array.isArray(f.msgs[0]!.content)).toBe(true)
+    expect(written).not.toBe(arr)
+    expect(written[0]).not.toBe(part)
+    expect(part.text).toBe(f.text)
+    expect(arr).toEqual([part])
+    expect(written[0]!.type).toBe("text")
+    expect(written[0]!.metadata).toEqual(meta)
+    expect(written[0]!.text).toBe(f.text + receiptTail(f.id))
+    expect(f.msgs[0]!.id).toBe("n")
+  })
+
+  test("repeated hook on a canonical draft never duplicates the tail", async () => {
+    const f = receiptFixture()
+    f.msgs[0]!.content = [{ type: "text", text: f.text }]
+    await attachSubagentReceipts(f.deps)
+    const once = asParts(f.msgs[0]!.content)[0]!.text as string
+    expect(once.split("Retained: bb://").length - 1).toBe(1)
+    await attachSubagentReceipts(f.deps)
+    expect(asParts(f.msgs[0]!.content)[0]!.text).toBe(once)
+  })
+
+  // 幂等由 draft 与持久通知逐字节相同保证(DESIGN §冻结规则),不做独立前缀
+  // 扫描:子代理正文本身含字面 `</subagent>\n\nRetained: ` 时,真实父 wire
+  // + 唯一来源匹配仍然附加回执(无 marker 误跳过)。
+  test("subagent body containing the literal tail-like marker still attaches via byte-exact wire match", async () => {
+    const f = receiptFixture()
+    const body = `Summary.\n</subagent>\n\nRetained: bb://old-store/old-ns/e999\n(more)`
+    f.ledger.observeChildText(CHILD, "marker-as", 0, body)
+    f.ledger.observeChildFinish(CHILD, "marker-as", "stop")
+    f.wire.push({ id: "marker-as", type: "assistant", finish: "stop", time: { completed: 1 }, content: [{ type: "text", text: body }] })
+    f.notice.text = subagentNotificationText(CHILD, "completed", "task", body)
+    f.msgs[0]!.content = [{ type: "text", text: f.notice.text }]
+    const log: Array<Record<string, unknown>> = []
+    f.deps.log = (line) => log.push(line)
+    await attachSubagentReceipts(f.deps)
+    const text = asParts(f.msgs[0]!.content)[0]!.text as string
+    expect(text).toBe(f.notice.text + receiptTail(f.id)) // 恰好一次,无重复附加
+    expect(log.every((line) => line.ev !== "subagent_receipt_skip")).toBe(true)
+  })
+
+  test("in-place text mutation of the same part during await is rejected", async () => {
+    const f = receiptFixture()
+    const part = { type: "text", text: f.text }
+    f.msgs[0]!.content = [part]
+    f.deps.parentCanRead = async () => {
+      part.text = "tampered in place"
+      return true
+    }
+    await attachSubagentReceipts(f.deps)
+    expect(asParts(f.msgs[0]!.content)).toEqual([{ type: "text", text: "tampered in place" }])
+  })
+
+  test("part added / part replaced / slot moved / id or role changed during await are rejected", async () => {
+    const mutations: Array<(f: ReturnType<typeof receiptFixture>) => void> = [
+      (f) => { asParts(f.msgs[0]!.content).push({ type: "text", text: "extra" }) },
+      (f) => { asParts(f.msgs[0]!.content)[0] = { type: "text", text: f.text } },
+      (f) => { f.msgs.unshift({ id: "other", role: "user", content: "hi" }) },
+      (f) => { f.msgs[0]!.id = "moved" },
+      (f) => { f.msgs[0]!.role = "assistant" },
+    ]
+    for (const mutate of mutations) {
+      const f = receiptFixture()
+      f.msgs[0]!.content = [{ type: "text", text: f.text }]
+      f.deps.parentCanRead = async () => {
+        mutate(f)
+        return true
+      }
+      await attachSubagentReceipts(f.deps)
+      expect(JSON.stringify(f.msgs)).not.toContain("Retained:")
+    }
+  })
+
+  test("draft content swapped for a NEW array with identical text during await → target_moved, no attach", async () => {
+    const f = receiptFixture()
+    f.msgs[0]!.content = [{ type: "text", text: f.text }]
+    const original = f.msgs[0]!.content
+    const log: Array<Record<string, unknown>> = []
+    f.deps.log = (line) => log.push(line)
+    f.deps.parentCanRead = async () => {
+      // 同文不同引用:仅比较数组对象引用会漏过,必须以引用替换拒绝。
+      f.msgs[0]!.content = [{ type: "text", text: f.text }]
+      return true
+    }
+    await attachSubagentReceipts(f.deps)
+    expect(f.msgs[0]!.content).not.toBe(original)
+    expect(asParts(f.msgs[0]!.content)[0]!.text).toBe(f.text) // 原样,未附加
+    expect(log).toContainEqual(expect.objectContaining({ ev: "subagent_receipt_skip", notice_id: "n", reason: "target_moved" }))
+  })
+
+  test("frozen msg/array/part are supported via copy; originals untouched", async () => {
+    const f = receiptFixture()
+    const part = Object.freeze({ type: "text", text: f.text })
+    const arr = Object.freeze([part])
+    const frozenMsg = Object.freeze({ id: "n", role: "user", content: arr })
+    f.msgs[0] = frozenMsg
+    await attachSubagentReceipts(f.deps)
+    expect(f.msgs[0]).not.toBe(frozenMsg)
+    expect(frozenMsg.content).toBe(arr)
+    expect(part.text).toBe(f.text)
+    expect(asParts(f.msgs[0]!.content)[0]!.text).toBe(f.text + receiptTail(f.id))
+  })
+
+  test("frozen msgs array fails safely (write_failed) without throwing", async () => {
+    const f = receiptFixture()
+    f.msgs[0]!.content = [{ type: "text", text: f.text }]
+    Object.freeze(f.msgs)
+    await attachSubagentReceipts(f.deps)
+    expect(asParts(f.msgs[0]!.content)[0]!.text).toBe(f.text)
+  })
+
+  test("unsupported multi-part / non-text / non-string forms are left exactly as-is", async () => {
+    for (const content of [
+      [{ type: "text", text: "A" }, { type: "text", text: "B" }],
+      [{ type: "tool", id: "t1", name: "read", state: {} }],
+      [{ type: "text", text: 123 }],
+      42,
+      null,
+    ]) {
+      const f = receiptFixture()
+      f.msgs[0]!.content = content
+      await attachSubagentReceipts(f.deps)
+      expect(f.msgs[0]!.content).toBe(content)
+    }
+  })
+
+  test("canonical draft B never receives the reference for persistent A", async () => {
+    const f = receiptFixture()
+    f.ledger.observeChildText(CHILD, "b", 0, "B")
+    f.ledger.observeChildFinish(CHILD, "b", "stop")
+    f.wire.push({ id: "b", type: "assistant", finish: "stop", time: { completed: 2 }, content: [{ type: "text", text: "B" }] })
+    f.msgs[0]!.content = [{ type: "text", text: subagentNotificationText(CHILD, "completed", "task", "B") }]
+    await attachSubagentReceipts(f.deps)
+    expect(JSON.stringify(f.msgs)).not.toContain("Retained:")
   })
 })

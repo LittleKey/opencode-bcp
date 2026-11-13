@@ -5,6 +5,11 @@
 // {id:notificationID,metadata:{source:"subagent",childID,agent,state},text:
 // `<subagent sessionID="${child}" state="${state}" description="${desc}">\n${text}\n</subagent>`}
 // (subagent-completion.ts:8-19/31-45 裸插值模板;state/description 无转义)。
+// context hook 收到的 draft 通知 content 是宿主 canonical ContentPart[]:
+// to-llm-message.ts:274-275 以 Message.make({id,role:"user",content:message.text})
+// 构造,messages.ts:239 content=Schema.Array(ContentPart)、:252/260-265 把 string
+// 归一为 [{type:"text",text}]。本模块兼容旧 string 形态与该 canonical 数组形态;
+// 多 part/非 text 等复杂形态静默跳过(合成消息本为单 text part)。
 // 宿主来源选取(subagent-job.ts:53-60):子会话 messages(desc,limit:20) 中 find
 // (type==="assistant" && time.completed!==undefined && error===undefined)——不限终稿。
 // 交付证明(R8.3):session.inbox.delivered{sessionID,inboxID}
@@ -29,7 +34,7 @@ export const SUBAGENT_NO_TEXT = "Subagent completed without a text response."
 
 // 回执两行(冻结文案,附在通知正文末尾,空行分隔)。
 export const receiptTail = (id: string): string =>
-  `\n\nRetained: ${id}\nBefore relying on this result, read the original with board_get and check its version and limits; retention is not acceptance.`
+  `\n\nRetained: ${id}\nCheck this original and its evidence, version and limits before relying on it. If the exact host-bound original and all needed information remain in context with no change or conflict signal, inspect them directly; otherwise use board_get. Forward the full board ID, not a retelling. Retention is not acceptance.`
 
 // ---- 有界证据。超限释放整个来源域，不剪掉旧证据后继续制造唯一性。 ----
 export const CHILDREN_CAP = 32
@@ -42,6 +47,8 @@ export const SEEN_CHILDREN_CAP = 4096 // 有界墓碑；耗尽后本实例回执
 const ID_BYTES_CAP = 512
 const DELIVERED_PARENTS_CAP = 64 // delivered 账本父会话数
 const DELIVERED_PER_PARENT_CAP = 128 // 每父会话 inboxID 上限
+const DELIVERY_WAITERS_CAP = 128
+const DELIVERY_WAIT_MS = 100
 
 export type ChildObservation = {
   parentID: string
@@ -67,6 +74,7 @@ export class SubagentReceiptLedger {
   private seenChildren = new Set<string>()
   private serial = 0
   private closed = false
+  private waiters = new Set<{ parentID: string; childID: string; inboxID: string; finish: (delivered: boolean) => void }>()
 
   private validID(id: string): boolean {
     return Boolean(id) && Buffer.byteLength(id) <= ID_BYTES_CAP
@@ -172,6 +180,24 @@ export class SubagentReceiptLedger {
       }
       set.set(inboxID, ++this.serial)
     }
+    for (const waiter of this.waiters) {
+      if (waiter.parentID === parentID && waiter.inboxID === inboxID) waiter.finish(true)
+    }
+  }
+
+  /** 仅等待事件消费，不将等待或 wire 视为交付证明。 */
+  waitForDelivery(parentID: string, childID: string, inboxID: string): Promise<boolean> {
+    if (this.deliveryVersion(parentID, inboxID) !== undefined) return Promise.resolve(true)
+    if (!this.eligibleChild(parentID, childID) || !this.validID(inboxID) || this.waiters.size >= DELIVERY_WAITERS_CAP) return Promise.resolve(false)
+    return new Promise((resolve) => {
+      const waiter = { parentID, childID, inboxID, finish: (delivered: boolean) => {
+        clearTimeout(timer)
+        this.waiters.delete(waiter)
+        resolve(delivered)
+      } }
+      const timer = setTimeout(() => waiter.finish(false), DELIVERY_WAIT_MS)
+      this.waiters.add(waiter)
+    })
   }
 
   deliveryVersion(parentID: string, inboxID: string): number | undefined {
@@ -233,6 +259,9 @@ export class SubagentReceiptLedger {
 
   /** 资格失效(compaction/revert/forked/覆盖缺口;不删已留存记录,仅禁止新关联)。 */
   invalidate(sessionID: string, reason: string): void {
+    for (const waiter of this.waiters) {
+      if (waiter.parentID === sessionID || waiter.childID === sessionID) waiter.finish(false)
+    }
     const entry = this.children.get(sessionID)
     if (entry && !entry.invalid) {
       entry.invalid = reason
@@ -262,6 +291,7 @@ export class SubagentReceiptLedger {
 
   /** 订阅/处理异常(R8:不以「没观察到事件」证明没变化 → 全部失效)。 */
   resetAll(): void {
+    for (const waiter of this.waiters) waiter.finish(false)
     for (const id of this.children.keys()) this.invalidate(id, "reset")
     this.children.clear()
     this.delivered.clear()
@@ -303,6 +333,32 @@ export class SubagentReceiptLedger {
 }
 
 // ---- 纯函数(宿主算法逐字复刻;禁止替换成近似匹配) ----
+
+/**
+ * 从 context hook 的 draft 通知 content 提取正文:旧 string 形态原样返回;
+ * 宿主 canonical 形态(messages.ts:260-265 string → [{type:"text",text}])
+ * 仅接受恰好一个 part 且 type==="text"、text 为 string;其余形态(多 part、
+ * 非 text part、text 非字符串、非 string 非 array)返回 null,静默跳过。
+ */
+export const noticeBodyText = (content: unknown): string | null => {
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) {
+    if (content.length !== 1) return null
+    const part = content[0] as { type?: unknown; text?: unknown } | undefined
+    if (!part || part.type !== "text" || typeof part.text !== "string") return null
+    return part.text
+  }
+  return null
+}
+
+/**
+ * 候选筛选时的 content 快照(R*.8 写回栅栏的起点):ref = content 本体
+ * (string 值或数组引用);数组形态逐 part 留引用;body = 提取正文。
+ */
+type ContentSnapshot = { ref: unknown; parts: unknown[] | null; body: string }
+
+const snapshotContent = (content: unknown, body: string): ContentSnapshot =>
+  Array.isArray(content) ? { ref: content, parts: content.slice(), body } : { ref: content, parts: null, body }
 
 /** 宿主渲染(subagent-completion.ts:10-12):非空 text parts join("\n\n") || NO_TEXT。 */
 export const renderSubagentText = (content: unknown): string => {
@@ -391,7 +447,10 @@ export const childCoverageValid = (wire: WireMessage[], entry: ChildObservation)
 
 export type ReceiptDeps = {
   parentSessionID: string
-  /** context hook 的 draft 消息(LLM 形;synthetic 通知 = {id,role:"user",content:字符串})。 */
+  /**
+   * context hook 的 draft 消息(LLM 形;synthetic 通知 content = 旧 string 或
+   * 宿主 canonical 单 text part 数组,见 noticeBodyText)。
+   */
   msgs: Array<Record<string, unknown>>
   ledger: SubagentReceiptLedger
   /** 父会话 wire 完整读(核验 synthetic 类型/metadata;失败 → 静默)。 */
@@ -411,23 +470,44 @@ export type ReceiptDeps = {
   log(line: Record<string, unknown>): void
 }
 
-type Candidate = { idx: number; id: string; delivery: number; msg: Record<string, unknown>; content: string }
+type Candidate = { idx: number; id: string; delivery: number; msg: Record<string, unknown>; snap: ContentSnapshot }
 
 export const attachSubagentReceipts = async (deps: ReceiptDeps): Promise<void> => {
   const { msgs, ledger, parentSessionID } = deps
-  // fast path:无任何 await 前完成候选筛选(绝大多数请求零开销)。
+  // fast path:无任何 await 前完成候选筛选与 content 快照(绝大多数请求零开销)。
   const candidates: Candidate[] = []
+  const pending: Array<Promise<void>> = []
   for (let i = 0; i < msgs.length; i++) {
     const msg = msgs[i]
     if (!msg || msg.role !== "user") continue
-    const content = msg.content
-    if (typeof content !== "string" || !content.startsWith('<subagent sessionID="')) continue
+    const body = noticeBodyText(msg.content)
+    if (body === null || !body.startsWith('<subagent sessionID="')) continue
     const id = msg.id
     if (typeof id !== "string" || !id) continue
     const delivery = ledger.deliveryVersion(parentSessionID, id)
-    if (delivery === undefined) continue
-    candidates.push({ idx: i, id, delivery, msg, content })
+    if (delivery === undefined) {
+      const prefix = '<subagent sessionID="'
+      const marker = '" state="completed" description="'
+      const end = body.indexOf(marker, prefix.length)
+      const childID = end > prefix.length && body.endsWith("\n</subagent>") && body.indexOf('\">\n', end + marker.length) >= 0
+        ? body.slice(prefix.length, end) : null
+      const entry = childID ? ledger.eligibleChild(parentSessionID, childID) : null
+      if (!childID || !entry) continue
+      const revision = entry.revision
+      const snap = snapshotContent(msg.content, body)
+      pending.push(ledger.waitForDelivery(parentSessionID, childID, id).then((observed) => {
+        const version = ledger.deliveryVersion(parentSessionID, id)
+        if (observed && version !== undefined && ledger.eligibleChild(parentSessionID, childID) === entry && entry.revision === revision) {
+          candidates.push({ idx: i, id, delivery: version, msg, snap })
+        } else {
+          deps.log({ ev: "subagent_receipt_skip", session: parentSessionID, notice_id: id, reason: "delivery_not_observed" })
+        }
+      }))
+      continue
+    }
+    candidates.push({ idx: i, id, delivery, msg, snap: snapshotContent(msg.content, body) })
   }
+  if (pending.length) await Promise.all(pending)
   if (candidates.length === 0) return
   let parentWires: WireMessage[] | null = null
   try {
@@ -456,9 +536,10 @@ const skip = (deps: ReceiptDeps, candidate: Candidate, reason: string): void => 
 const attachOne = async (deps: ReceiptDeps, candidate: Candidate, parentWires: WireMessage[]): Promise<void> => {
   const { ledger, parentSessionID } = deps
   // R*.2:以真实父会话 wire 回查通知,核验 synthetic 类型与 metadata(正文 ID 不单独构成证明)。
+  // 比对口径 = 提取正文(数组形态取 text part 文本),与持久 wire 逐字节全等。
   const notices = parentWires.filter((m) => m?.id === candidate.id)
   const notice = notices[0]
-  if (notices.length !== 1 || !notice || notice.type !== "synthetic" || notice.text !== candidate.content) {
+  if (notices.length !== 1 || !notice || notice.type !== "synthetic" || notice.text !== candidate.snap.body) {
     return skip(deps, candidate, "notice_not_verified")
   }
   const meta = (notice as { metadata?: unknown }).metadata as { source?: unknown; childID?: unknown; state?: unknown } | undefined
@@ -509,7 +590,7 @@ const attachOne = async (deps: ReceiptDeps, candidate: Candidate, parentWires: W
     const body = renderSubagentText(m.content)
     if (body === SUBAGENT_NO_TEXT) continue
     for (const description of entry.descriptions) {
-      if (subagentNotificationText(childID, "completed", description, body) === candidate.content) {
+      if (subagentNotificationText(childID, "completed", description, body) === candidate.snap.body) {
         matches.push(m)
         break
       }
@@ -542,21 +623,52 @@ const attachOne = async (deps: ReceiptDeps, candidate: Candidate, parentWires: W
   const latestNotices = latestParent?.filter((m) => m?.id === candidate.id)
   const latest = latestNotices?.[0]
   const latestMeta = (latest as { metadata?: typeof meta } | undefined)?.metadata
-  if (latestNotices?.length !== 1 || latest?.type !== "synthetic" || latest.text !== candidate.content ||
+  if (latestNotices?.length !== 1 || latest?.type !== "synthetic" || latest.text !== candidate.snap.body ||
       latestMeta?.source !== "subagent" || latestMeta.state !== "completed" || latestMeta.childID !== childID) {
     return skip(deps, candidate, "notice_changed")
   }
-  // R*.8:所有 await 后复核同一观察代次、交付证明、目标槽位与正文，再同步写回。
+  // R*.8:所有 await 后复核同一观察代次、交付证明与目标槽位,再同步写回。
   if (!stillObserved()) return skip(deps, candidate, "observation_changed")
-  const current = deps.msgs[candidate.idx]
-  if (current !== candidate.msg || current.id !== candidate.id || current.role !== "user" || current.content !== candidate.content) {
-    return skip(deps, candidate, "target_moved")
-  }
-  const replacement = { ...candidate.msg, content: candidate.content + receiptTail(bbId) }
+  if (!targetIntact(deps, candidate)) return skip(deps, candidate, "target_moved")
+  // 写回保持原 representation:string 仍 string,数组仍数组;不改动任何原
+  // 消息/数组/part——正文 part 浅拷贝改 text(保留其余字段如 metadata/cache),
+  // 其余 part 原引用复用,消息层浅拷贝替换槽位。
+  const tailed = candidate.snap.body + receiptTail(bbId)
+  const original = candidate.msg.content
+  // noticeBodyText 已保证数组形态恰为单 text part;写回即该 part 的浅拷贝。
+  const nextContent: unknown = typeof original === "string"
+    ? tailed
+    : [{ ...(original as Array<Record<string, unknown>>)[0]!, text: tailed }]
+  const replacement = { ...candidate.msg, content: nextContent }
   try {
     deps.msgs[candidate.idx] = replacement
   } catch (err) {
     return skip(deps, candidate, `write_failed:${err instanceof Error ? err.message : String(err)}`)
   }
   deps.log({ ev: "subagent_receipt_attached", session: parentSessionID, notice_id: candidate.msg.id, child: childID, message_id: messageID, record: bbId })
+}
+
+/**
+ * R*.8 写回栅栏(开始时快照+最终复核):只比较数组对象引用不够——同一数组/
+ * 同一 part 被 await 期间原地改写也必须拒绝。依次核验:
+ * - 槽位仍是原消息对象,且 id/role 未变;
+ * - content 本体未换(string 值或数组引用逐 === 比对;换数组即拒绝);
+ * - 数组形态:长度未变、每个 part 引用逐一相等(增删/替换 part 即拒绝),
+ *   并复提正文与快照逐字节相等(同一 part 内 text 原地改写即拒绝)。
+ */
+const targetIntact = (deps: ReceiptDeps, candidate: Candidate): boolean => {
+  const current = deps.msgs[candidate.idx]
+  const snap = candidate.snap
+  if (current !== candidate.msg) return false
+  if (current.id !== candidate.id || current.role !== "user") return false
+  if (current.content !== snap.ref) return false
+  if (snap.parts) {
+    const content = current.content
+    if (!Array.isArray(content) || content.length !== snap.parts.length) return false
+    for (let i = 0; i < snap.parts.length; i++) {
+      if (content[i] !== snap.parts[i]) return false
+    }
+    if (noticeBodyText(content) !== snap.body) return false
+  }
+  return true
 }
