@@ -1464,6 +1464,68 @@ var DIAGNOSTIC_TERMINALS = new Set(["error", "cancelled", "stopped"]);`,
 var DIAGNOSTIC_TERMINALS = new Set(["error", "cancelled", "stopped"]);`,
   },
   {
+    id: 'v2-untracked-receipt-origin',
+    purpose: 'Conservative producer-side identity for the v2 untracked terminal receipt: after the host-composed completed round takes its terminalTextOf text, re-derive exactly that boundary (latest user/synthetic input, last assistant above it) from the same transcript and attach bcpOrigin {inputMessageID, terminalMessageID} only when the boundary is a real (non-synthetic, non-compaction) user with a nonempty ID and the assistant is the very message an already-patched classifyTerminalEvidence({promptMessageID}) classifies as completed on the same transcript with text identical to the original and bcpOrigin IDs equal to the selected pair, plus parentID equal to that user, finite completion time, no abort finish and no error; any missing piece or mismatch only omits bcpOrigin and leaves round, text, output and timing untouched.',
+    modules: [IDX_307, SRV_307],
+    anchor: `      const text = terminalTextOf(transcript);
+      if (text)
+        round.text = text;
+      else if (state.outcome === "succeeded")
+        return {
+          live,
+          round: { verdict: "incomplete", startedAt: latestInputAt }
+        };
+    }`,
+    replacement: `      const text = terminalTextOf(transcript);
+      if (text)
+        round.text = text;
+      else if (state.outcome === "succeeded")
+        return {
+          live,
+          round: { verdict: "incomplete", startedAt: latestInputAt }
+        };
+      if (text && round.verdict === "completed") {
+        const entries = Array.isArray(transcript?.data) ? transcript.data : [];
+        const sourceOfEntry = (entry) => {
+          const source = entry?.info?.sourceType ?? entry?.info?.role;
+          return typeof source === "string" ? source : undefined;
+        };
+        const isCompactionEntry = (entry) => entry?.info?.summary === true || (Array.isArray(entry?.parts) ? entry.parts : []).some((part) => isRecord(part) && part.type === "compaction");
+        const idOfEntry = (entry) => typeof entry?.info?.id === "string" && entry.info.id.length > 0 ? entry.info.id : undefined;
+        let boundary = -1;
+        for (let index = entries.length - 1; index >= 0; index -= 1) {
+          const source = sourceOfEntry(entries[index]);
+          if (source === "user" || source === "synthetic") {
+            boundary = index;
+            break;
+          }
+        }
+        let terminal = -1;
+        for (let index = entries.length - 1; index > boundary; index -= 1) {
+          if (sourceOfEntry(entries[index]) === "assistant") {
+            terminal = index;
+            break;
+          }
+        }
+        const input = boundary >= 0 ? entries[boundary] : undefined;
+        const answer = terminal >= 0 ? entries[terminal] : undefined;
+        const inputID = idOfEntry(input);
+        const answerID = idOfEntry(answer);
+        if (inputID !== undefined && answerID !== undefined
+          && sourceOfEntry(input) === "user" && input.info.role === "user" && !isCompactionEntry(input)
+          && sourceOfEntry(answer) === "assistant" && !isCompactionEntry(answer)
+          && answer.info.parentID === inputID
+          && answer.info.finish !== "abort" && answer.info.finish !== "aborted"
+          && (answer.info.error === undefined || answer.info.error === null)
+          && isRecord(answer.info.time) && typeof answer.info.time.completed === "number" && Number.isFinite(answer.info.time.completed)) {
+          const classifier = classifyTerminalEvidence(transcript, { promptMessageID: inputID });
+          if (classifier?.verdict === "completed" && classifier.text === text && classifier.bcpOrigin?.inputMessageID === inputID && classifier.bcpOrigin?.terminalMessageID === answerID)
+            round.bcpOrigin = { inputMessageID: inputID, terminalMessageID: answerID };
+        }
+      }
+    }`,
+  },
+  {
     id: 'notify-delivery-metadata',
     purpose: 'Background terminal notifications carry verified delivery metadata; a failed post-await freshness comparison suppresses the notification before presentation and transport.',
     modules: [IDX_307, SRV_307],

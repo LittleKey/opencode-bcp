@@ -8,7 +8,7 @@ macOS 普通上游安装的构建、隔离试装与限制见 [MACOS-TRIAL.md](MA
 
 新 API：`OMO_307_MODULES[entry]` 是「包内相对路径 → SHA-256」的完整模块表；`patchOmo307(modules, entry)` 接受并返回 `Map<path, source>`，返回 `{modules, patches: [{id, path, purpose}]}`。它在改写前校验 key 集合与每个摘要完全一致；单包 `patchOmo` 对 3.0.7 单文件输入显式拒绝，并提示改用 `patchOmo307`。
 
-3.0.7 补丁集 = 39 个 patch ID：3.0.6 的 42 项中 37 项沿用、5 项退役；原 `native-terminal-reconcile` 头/尾重锚为 site A（前台 `handleToolExecuteBefore`），并新增 site B（`registerDelegatedLaunchFromStructured`，v2 包装可不经 A 到达）的头/尾两项。实际应用 index 36 次（23 项入口 + 13 项 chunk）、server 39 次（另加 `native-explicit-pin-retain`、`native-pin-instance-state`、`native-pin-instance-call` 三项 server-only 原生 pin）；index 无 no-op 填充，每项应用都改写真实字节。
+3.0.7 补丁集 = 40 个 patch ID：3.0.6 的 42 项中 37 项沿用、5 项退役；原 `native-terminal-reconcile` 头/尾重锚为 site A（前台 `handleToolExecuteBefore`），并新增 site B（`registerDelegatedLaunchFromStructured`，v2 包装可不经 A 到达）的头/尾两项；以上合计为本次修复前的 39 项基线，本次新增 `v2-untracked-receipt-origin`。实际应用 index 37 次（24 项入口 + 13 项 chunk）、server 40 次（另加 `native-explicit-pin-retain`、`native-pin-instance-state`、`native-pin-instance-call` 三项 server-only 原生 pin）；index 无 no-op 填充，每项应用都改写真实字节。
 
 退役 5 项及损失边界：
 
@@ -19,9 +19,11 @@ Site A/B 的尾部补丁在首次 reconcile 前经原 gate 捕获冻结基线，
 
 只读结果交付在元数据 await 后复用上游 `samePublication`/`sameObservationEpoch` 原语，连同 dispose、前后 token 存在、`terminalRevision` 稳定与 `isRetainedObservationBlocked` 组成完整围栏；失败走原 `runningResultRefusal` 拒绝路径，不新增 reconcile。
 
+新增 `v2-untracked-receipt-origin` 修复 v2 untracked 终态回执丢失 `bcpOrigin` 的问题：宿主已组装 completed round 后，在同一 transcript 重新定位最新输入边界（必须为真实 user、非 synthetic/compaction）及其上方最近的 assistant；仅当双方 ID 非空、assistant 的 `parentID` 指向该 user、完成时间有限、无 abort/error，且既有 classifier 以同一 `promptMessageID` 判为 completed、文本与已选终端文本完全一致、`bcpOrigin` 的 ID 对相同时，才补 `bcpOrigin {inputMessageID, terminalMessageID}`。任一条件不满足即不添加；通过时仅新增 `bcpOrigin`，round 的 verdict、text、time 与既有 refusal 不变；BCP 仍独立核验，不伪造 generation/terminalRevision，历史与 migrated 记录不改，多文本格式不一致时保守地不带身份。
+
 依赖与资源：jsdom（30.1.3）与 `@ast-grep/cli`（0.45.3）为两入口必需闭包根；server 另有 `jsonc-parser`（3.3.1）裸根，index 则把 plugin、jsonc-parser、zod 按模块 vendor 为相对导入。stock 技能资源由本构建器从包内 `src/skills` 复制；独立 `build-skills.mjs` 仍只 pin 3.0.1/3.0.3，不支持 3.0.7，stock 覆盖路径会拒绝该版本。
 
-产物与证据：`.slim/omo-3.0.7-compat/20261113-rereview1/index/`（2015 个文件，entry `59a7e7c00557052f98025b97a31f87487536ce79aed9f8eae8f4b677256a4e53`，manifest `ca9a6c1317a67d0f02c28cbe322aaf2fc2ee4a6e5629bf444b264c0b163c8958`，39 个闭包包）与 `.../server/`（1931 个文件，entry `acdf534a72e270577a60547df4d1f8b35bd998b5cc5ef8c2c1af14982a79e46f`，manifest `f7b933b6169c91793b23d67756347d8266eca3684057f9a54610dc7f5750349c`，40 个闭包包）。两入口均实际构建通过，全部输出文件独立重哈希零偏差；两入口各 15 个模块通过 `node --check`；`dryRun` 生成同样的 2015/1931 条记录但不写任何文件。3.0.6 两入口的补丁输出与改动前基线逐字节相同，旧版本未被改动。以上是项目内构建与静态检查：未全局安装或重载，未运行测试、真实宿主工作流或并发验证。Node 25.6.1 不在 jsdom 30.1.3 及部分依赖声明的引擎范围内，安装有 EBADENGINE；本机通过不构成受支持 runtime 的声明。
+产物与证据：`.slim/omo-v2-delivery-identity-fix-20261113/index/`（2015 个文件，entry `934ed02c58265b1551e908b72f0c06a3f7639364e9b216a3dbe4934bf350b0dd`，manifest `a6ff2566321187e7e344eff3000fda37f66c6a21c3b2992755052779d9a4204e`，39 个闭包包）与 `.../server/`（1931 个文件，entry `261546aec12e635e21c448a32cdb524564439d1e81884a6bc093fd4bc07ff857`，manifest `1803257824207c6561a2dc8602ed543a210b44e7e6008c9ff217d5355a654870`，40 个闭包包）。两入口均实际构建通过，全部输出文件独立重哈希零偏差；两入口各 15 个模块通过 `node --check`；`dryRun` 不写任何文件。3.0.6 两入口的补丁输出与改动前基线逐字节相同，旧版本未被改动。以上是项目内构建与静态检查：未全局安装或重载，未运行测试、真实宿主工作流或并发验证。Node 25.6.1 不在 jsdom 30.1.3 及部分依赖声明的引擎范围内，安装有 EBADENGINE；本机通过不构成受支持 runtime 的声明。
 
 ## 3.0.6 构建器支持（2026-10-25，补丁/构建/测试，未部署）
 
