@@ -1,6 +1,27 @@
-# OMO Slim 摘要锁定构建（2.2.25 / 3.0.1 / 3.0.3 / 3.0.4 / 3.0.5 / 3.0.6）
+# OMO Slim 摘要锁定构建（2.2.25 / 3.0.1 / 3.0.3 / 3.0.4 / 3.0.5 / 3.0.6 / 3.0.7）
 
 macOS 普通上游安装的构建、隔离试装与限制见 [MACOS-TRIAL.md](MACOS-TRIAL.md)。现有个人 Linux 升级事务不是通用跨机器安装器。
+
+## 3.0.7 构建器支持（2026-11-13，双入口构建与静态检查，未安装、未运行）
+
+构建器现支持 `version: '3.0.7'` 的 index/server 双入口。3.0.7 的上游 dist 由 Bun `--splitting` 拆成多模块 ESM：每个入口是 `dist/index.js` 或 `dist/server/index.js` 加其字面 import/re-export/动态 import 可达的 chunks，两个入口各 15 个模块。构建按模块锁定 SHA-256（入口摘要 index 为 `47ec8c7070c648c8860ab4becfb2391257cf833957c4b56ccf3cbaad5e6f5052`，server 为 `485f34ad29e4f9ffa0b2fd9c52dad3d8db401ff68394f40b6f6f93866cbf9237`）；未知摘要、模块集合与可达图不一致、非唯一锚点仍拒绝构建。补丁逐模块应用并保持上游原布局，不重新打包；`buildOmoIntegration({packageDir, sourceDir, outputDir, version, entry, dryRun})` 的参数、返回结构与 `dryRun` 语义不变，既有版本的补丁定义与构建路径保留。
+
+新 API：`OMO_307_MODULES[entry]` 是「包内相对路径 → SHA-256」的完整模块表；`patchOmo307(modules, entry)` 接受并返回 `Map<path, source>`，返回 `{modules, patches: [{id, path, purpose}]}`。它在改写前校验 key 集合与每个摘要完全一致；单包 `patchOmo` 对 3.0.7 单文件输入显式拒绝，并提示改用 `patchOmo307`。
+
+3.0.7 补丁集 = 39 个 patch ID：3.0.6 的 42 项中 37 项沿用、5 项退役；原 `native-terminal-reconcile` 头/尾重锚为 site A（前台 `handleToolExecuteBefore`），并新增 site B（`registerDelegatedLaunchFromStructured`，v2 包装可不经 A 到达）的头/尾两项。实际应用 index 36 次（23 项入口 + 13 项 chunk）、server 39 次（另加 `native-explicit-pin-retain`、`native-pin-instance-state`、`native-pin-instance-call` 三项 server-only 原生 pin）；index 无 no-op 填充，每项应用都改写真实字节。
+
+退役 5 项及损失边界：
+
+- `readonly-result-delivery`、`readonly-result-tracked-call`、`readonly-result-current-call`：上游删除 `readonlyTerminalResult` 回退，disposed 插件改为抛 `pluginDisposedMessage()`。其「dispose 时已完成 summary + 回执」的旧只读路径不再重建；这是该路径的损失边界，不以放宽匹配补偿。
+- `read-settlement-contrast`、`read-settlement-blocked`：3.0.7 由上游 gate 原生附着并消费读结算（`{kind: "blocked", retryAfter: entry.settled}`，`pendingRuntimeContrast` 线程化 + 自调度 reconcile），收窄后的 reconcile 循环不再消费 `retryAfter`，本地包装已无消费者。读结算自续跑归上游 gate。
+
+Site A/B 的尾部补丁在首次 reconcile 前经原 gate 捕获冻结基线，每次重观察前重新捕获并比较 `taskID`、`generation`、`baselineMessageID`、`promptMessageID`、`attemptRevision`、`attemptStartedAt`、`terminalRevision` 真实 token 字段（board 记录不含 `attemptRevision`，不以记录级比较替代）；仅 `stale` 可在既有最多两次重观察额度内重试，`deferred` 完全归 gate；activity/episode 漂移允许，捕获缺失即停止重观察。两处重观察在代次、running 状态与取消检查之外显式调用原 gate 的 `hasGivenUp(observed)`，已放弃的观察不再重试；精确调用确认与原 gate 的 currentness/CAS 均保留。
+
+只读结果交付在元数据 await 后复用上游 `samePublication`/`sameObservationEpoch` 原语，连同 dispose、前后 token 存在、`terminalRevision` 稳定与 `isRetainedObservationBlocked` 组成完整围栏；失败走原 `runningResultRefusal` 拒绝路径，不新增 reconcile。
+
+依赖与资源：jsdom（30.1.3）与 `@ast-grep/cli`（0.45.3）为两入口必需闭包根；server 另有 `jsonc-parser`（3.3.1）裸根，index 则把 plugin、jsonc-parser、zod 按模块 vendor 为相对导入。stock 技能资源由本构建器从包内 `src/skills` 复制；独立 `build-skills.mjs` 仍只 pin 3.0.1/3.0.3，不支持 3.0.7，stock 覆盖路径会拒绝该版本。
+
+产物与证据：`.slim/omo-3.0.7-compat/20261113-rereview1/index/`（2015 个文件，entry `59a7e7c00557052f98025b97a31f87487536ce79aed9f8eae8f4b677256a4e53`，manifest `ca9a6c1317a67d0f02c28cbe322aaf2fc2ee4a6e5629bf444b264c0b163c8958`，39 个闭包包）与 `.../server/`（1931 个文件，entry `acdf534a72e270577a60547df4d1f8b35bd998b5cc5ef8c2c1af14982a79e46f`，manifest `f7b933b6169c91793b23d67756347d8266eca3684057f9a54610dc7f5750349c`，40 个闭包包）。两入口均实际构建通过，全部输出文件独立重哈希零偏差；两入口各 15 个模块通过 `node --check`；`dryRun` 生成同样的 2015/1931 条记录但不写任何文件。3.0.6 两入口的补丁输出与改动前基线逐字节相同，旧版本未被改动。以上是项目内构建与静态检查：未全局安装或重载，未运行测试、真实宿主工作流或并发验证。Node 25.6.1 不在 jsdom 30.1.3 及部分依赖声明的引擎范围内，安装有 EBADENGINE；本机通过不构成受支持 runtime 的声明。
 
 ## 3.0.6 构建器支持（2026-10-25，补丁/构建/测试，未部署）
 

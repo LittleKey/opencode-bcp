@@ -17,6 +17,13 @@
  *   - js-yaml's optional `!!js/function` support: `_require("esprima")`
  *     (try/catch-guarded, inlined js-yaml).
  *
+ * 3.0.7 reuses the same walker with its own root tables (see
+ * CLOSURE_ROOT_SPECIFIERS_3_0_7): its dist is a Bun --splitting multi-module
+ * build, esprima is gone entirely (no inlined js-yaml / `!!js/function`
+ * loader), jsonc-parser is vendored on `index` and stays a bare root on
+ * `server`, and jsdom and @ast-grep/cli stay required (see the root-table
+ * comment).
+ *
  * The builder ships these as a copied `node_modules` closure so ordinary node
  * resolution keeps working after relocation — exact pinned versions copied
  * verbatim from the pinned cache, no import rewriting, no new packages, and
@@ -38,6 +45,25 @@ export const CLOSURE_ROOT_SPECIFIERS = {
 // of crashing). jsdom, @ast-grep/cli and jsonc-parser are required: their
 // absence silently disables webfetch/search or breaks the v2 import outright.
 export const OPTIONAL_CLOSURE_ROOTS = new Set(['esprima']);
+
+// 3.0.7 roots, derived from the actual callsites in the 3.0.7 dist. The only
+// non-literal dynamic load in the pinned graph is importJSDOM(), which computes
+// import(pathToFileURL(requireN.resolve("jsdom")).href) — a single-value
+// computed import whose sole target is the jsdom package main; the other
+// dynamic-require families are literal (requireN("@ast-grep/cli/package.json"),
+// static `from "jsonc-parser"` on server). esprima is gone: the 3.0.7 modules
+// carry no inlined js-yaml `!!js/function` loader. Both jsdom and
+// @ast-grep/cli are REQUIRED roots: upstream marks jsdom an optionalDependency
+// and guards its probe with try/catch, but webfetch depends on it, so a
+// workarea without jsdom fails the build explicitly instead of shipping a
+// degraded artifact; @ast-grep/cli's absence would push the runtime onto
+// upstream's network-download fallback. The only omissible 3.0.7 dependencies
+// are the @ast-grep/cli platform binaries for other platforms, which the
+// closure records in `missing` as optional-dependencies.
+export const CLOSURE_ROOT_SPECIFIERS_3_0_7 = {
+  index: ['jsdom', '@ast-grep/cli'],
+  server: ['jsonc-parser', 'jsdom', '@ast-grep/cli'],
+};
 
 const sha256Hex = bytes => createHash('sha256').update(bytes).digest('hex');
 const toPosix = value => value.split(sep).join('/');

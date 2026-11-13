@@ -10,16 +10,24 @@
  *                                         (3.0.1 keeps upstream Council byte-identical)
  *   outputDir/dist/index.js               patched v1 entry      (entry: "index")
  *   outputDir/dist/server/index.js        patched v2 entry      (entry: "server")
+ *   outputDir/dist/**                     3.0.7: entry + its reachable chunks
+ *                                         only (pinned per-module graph), other
+ *                                         versions: the single patched entry
  *   outputDir/vendor/**                   vendored runtime closure of the v1
- *                                         entry's external imports (3.0.1
- *                                         index only; see VENDOR_TARGETS_3_0_1_INDEX)
+ *                                         entry's external imports (index only;
+ *                                         see VENDOR_TARGETS_3_0_1_INDEX)
  *   outputDir/node_modules/**             copied dependency closure of the
  *                                         lazily-resolved runtime dependencies
- *                                         (3.0.1 only; see omo-closure.mjs)
+ *                                         (3.0.1 and 3.0.7; see omo-closure.mjs,
+ *                                         3.0.7 root tables there; jsdom and
+ *                                         @ast-grep/cli required on 3.0.7)
  *   outputDir/package.json + declared     pinned package metadata, skills,
- *                                         resources (3.0.1 only; skills,
+ *                                         resources (3.0.1 and 3.0.7; skills,
  *                                         schema, READMEs, LICENSE)
  *   outputDir/manifest.json               deterministic build manifest
+ *                                         (3.0.7 additionally records each
+ *                                         module's input/output digest and the
+ *                                         per-module patch records)
  */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -28,10 +36,10 @@ import {copyFile, mkdir, readFile, writeFile} from 'node:fs/promises';
 import {existsSync, readFileSync, readdirSync, statSync} from 'node:fs';
 import {dirname, join, relative, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {OMO_TARGETS, describeOmoPatches, patchOmo} from './omo-patch.mjs';
-import {CLOSURE_ROOT_SPECIFIERS, OPTIONAL_CLOSURE_ROOTS, computeDependencyClosure} from './omo-closure.mjs';
+import {OMO_307_MODULES, OMO_TARGETS, describeOmoPatches, patchOmo, patchOmo307} from './omo-patch.mjs';
+import {CLOSURE_ROOT_SPECIFIERS, CLOSURE_ROOT_SPECIFIERS_3_0_7, OPTIONAL_CLOSURE_ROOTS, computeDependencyClosure} from './omo-closure.mjs';
 
-export {CLOSURE_ROOT_SPECIFIERS, OMO_TARGETS, OPTIONAL_CLOSURE_ROOTS, computeDependencyClosure, describeOmoPatches};
+export {CLOSURE_ROOT_SPECIFIERS, CLOSURE_ROOT_SPECIFIERS_3_0_7, OMO_TARGETS, OPTIONAL_CLOSURE_ROOTS, computeDependencyClosure, describeOmoPatches};
 
 // Helper files copied per version. 3.0.1 ships only the generic delivery helper:
 // upstream Council stays byte-identical, so no council import is prepended and no
@@ -44,6 +52,7 @@ export const OMO_HELPER_FILES = {
   '3.0.4': ['omo-delivery.mjs'],
   '3.0.5': ['omo-delivery.mjs'],
   '3.0.6': ['omo-delivery.mjs'],
+  '3.0.7': ['omo-delivery.mjs'],
 };
 export const omoHelperFiles = version => {
   const files = OMO_HELPER_FILES[version];
@@ -328,15 +337,18 @@ function planPackageResources({packageDir, packageManifest}) {
 }
 
 /**
- * Vendor the 3.0.1 v1 entry's external imports into `outputDir/vendor` and
- * rewrite the bundle to relative specifiers. Vendored files whose own bare
- * imports name another vendored package (the plugin's `import { z } from
- * "zod"`) are rewritten to the vendored copy as well; any other bare import
- * fails the build. Returns the vendor manifest entries and the rewritten bundle.
+ * Vendor the exact runtime import closure of each entry in `targets` into
+ * `outputDir/vendor` and return the vendor manifest entries (with file
+ * records) plus the lookup tables needed to rewrite importers to the vendored
+ * copies. Vendored files whose own bare imports name another vendored package
+ * (the plugin's `import { z } from "zod"`) are rewritten to the vendored copy
+ * as well; any other bare import fails the build. The 3.0.1 v1 entry and the
+ * 3.0.7 index entry share this closure strategy — the same three package
+ * entry points (see VENDOR_TARGETS_3_0_1_INDEX), newer pinned versions.
  */
-function vendor3_0_1_IndexExternals({bundle, packageDir, outputDir}) {
+function buildVendorClosures({packageDir, outputDir, targets}) {
   const vendorRoot = join(outputDir, 'vendor');
-  const plans = VENDOR_TARGETS_3_0_1_INDEX.map(target => ({
+  const plans = targets.map(target => ({
     ...target,
     packageRoot: resolveVendorPackageRoot(packageDir, target.name),
   }));
@@ -427,6 +439,16 @@ function vendor3_0_1_IndexExternals({bundle, packageDir, outputDir}) {
       rewrites,
     });
   }
+  return {vendor, planByName, vendorRoot};
+}
+
+/**
+ * Vendor the 3.0.1 v1 entry's external imports into `outputDir/vendor` and
+ * rewrite the bundle to relative specifiers. Returns the vendor manifest
+ * entries and the rewritten bundle.
+ */
+function vendor3_0_1_IndexExternals({bundle, packageDir, outputDir}) {
+  const {vendor, planByName, vendorRoot} = buildVendorClosures({packageDir, outputDir, targets: VENDOR_TARGETS_3_0_1_INDEX});
   // rewrite the bundle's own bare imports to the vendored copies
   const bundleDir = dirname(join(outputDir, omoEntryRelativePath('index')));
   const rewriteTo = name => posixRelative(bundleDir, join(vendorRoot, name, planByName.get(name).entryPath));
@@ -452,6 +474,412 @@ function vendor3_0_1_IndexExternals({bundle, packageDir, outputDir}) {
   const zodStats = statsByName.get('zod');
   const zod = {strategy: 'vendored', resolved: rewriteTo('zod'), occurrences: zodStats.staticOccurrences, dynamicOccurrences: zodStats.dynamicOccurrences};
   return {bundle, vendor, zod};
+}
+
+// ---------------------------------------------------------------------------
+// 3.0.7: per-module pin + patch + verbatim-layout delivery.
+//
+// From 3.0.7 the upstream dist is a Bun --splitting multi-module ESM build:
+// the entry imports reachable chunks, chunks import chunks, and bare externals
+// (plugin/zod/jsonc-parser on `index`) appear in the chunks, not just the
+// entry. The single-bundle vendoring above cannot express that, so 3.0.7 is
+// built module-by-module instead of rebundled:
+//   1. omo-patch.mjs pins the exact entry-reachable module graph (the entry
+//      plus its reachable chunks, as enumerated by OMO_307_MODULES) with
+//      per-module SHA-256 digests.
+//   2. The builder re-reads each pinned module byte-exactly, walks its
+//      relative import graph (static imports, re-exports and dynamic literal
+//      import()s) and requires the pin set to equal the reachable set exactly.
+//   3. patchOmo307 patches the modules in place (same delivery/identity
+//      patches as older versions, now per module) and injects the
+//      module-relative helper imports itself.
+//   4. `index` only: the three external packages are vendored to ../vendor
+//      (same buildVendorClosures strategy as 3.0.1-3.0.6, newer pins) and
+//      every reachable module's bare imports are rewritten to the vendored
+//      copies. `server` bundles its internals and keeps jsonc-parser as a
+//      closure root instead.
+//   5. The dependency closure (omo-closure.mjs, 3.0.7 root tables) ships as a
+//      copied node_modules tree; jsdom and @ast-grep/cli are required roots —
+//      a workarea missing either fails the build explicitly (the only
+//      non-literal dynamic load in the graph, importJSDOM(), resolves and
+//      imports the jsdom package main).
+// The manifest records each module's input/output digest, the patch records,
+// helper importers, vendor rewrites per module and the closure inventory.
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk the relative import graph of the pinned 3.0.7 module set starting at
+ * `entryModule` and return the set of reachable module paths. Resolves
+ * extensionless specifiers the way node/Bun do (exact, +.js, /index.js) and
+ * rejects traversal outside the package root or imports landing outside the
+ * pinned set — the pin must be exactly the graph.
+ */
+function walkOmo307ModuleGraph(modules, entryModule, context) {
+  const syntheticRoot = '/omo307-walk-root';
+  const resolveSite = (modulePath, specifier) => {
+    const resolved = resolve(dirname(join(syntheticRoot, modulePath)), specifier);
+    const rel = toPosix(relative(syntheticRoot, resolved));
+    if (rel.startsWith('..')) {
+      throw new Error(context + ': module "' + modulePath + '" imports "' + specifier + '" which escapes the package root');
+    }
+    return rel;
+  };
+  const reachable = new Set([entryModule]);
+  const queue = [entryModule];
+  while (queue.length > 0) {
+    const modulePath = queue.pop();
+    const source = stripJsComments(modules.get(modulePath));
+    for (const match of source.matchAll(ESM_RELATIVE_SITE)) {
+      const specifier = match[2];
+      if (specifier.includes('${')) continue;
+      const rel = resolveSite(modulePath, specifier);
+      const target = [rel, rel + '.js', toPosix(join(rel, 'index.js'))].find(candidate => modules.has(candidate));
+      if (!target) {
+        throw new Error(context + ': module "' + modulePath + '" imports "' + specifier + '" which resolves to "' + rel + '" — not part of the pinned module set');
+      }
+      if (!reachable.has(target)) {
+        reachable.add(target);
+        queue.push(target);
+      }
+    }
+  }
+  return reachable;
+}
+
+/**
+ * The patcher injects module-relative helper imports into the patched
+ * modules; verify every shipped helper is actually imported by at least one
+ * module through a specifier that resolves to it, and return the importer
+ * map. A helper nothing imports would ship dead (or, worse, hint the patcher
+ * injected imports that node cannot resolve).
+ */
+function validateOmo307HelperImports(patchedModules, outputDir, helpers, context) {
+  const helperAbs = helpers.map(helper => resolve(join(outputDir, helper)));
+  const importedBy = new Map(helpers.map(helper => [helper, []]));
+  for (const modulePath of [...patchedModules.keys()].sort()) {
+    const source = stripJsComments(patchedModules.get(modulePath));
+    const moduleDir = dirname(join(outputDir, modulePath));
+    for (const match of source.matchAll(ESM_RELATIVE_SITE)) {
+      const specifier = match[2];
+      if (specifier.includes('${')) continue;
+      const resolved = resolve(moduleDir, specifier);
+      helpers.forEach((helper, index) => {
+        if (resolved === helperAbs[index] && !importedBy.get(helper).includes(modulePath)) {
+          importedBy.get(helper).push(modulePath);
+        }
+      });
+    }
+  }
+  for (const helper of helpers) {
+    if (importedBy.get(helper).length === 0) {
+      throw new Error(context + ': no patched module imports the helper with a resolving relative specifier: ' + helper);
+    }
+  }
+  return importedBy;
+}
+
+/**
+ * Vendor the 3.0.7 index entry's externals (plugin, jsonc-parser, zod — same
+ * VENDOR_TARGETS_3_0_1_INDEX entry points, newer pinned versions) and rewrite
+ * every reachable module's bare imports to relative specifiers into ../vendor.
+ * Unlike the single-bundle rewriter this handles each module from its own
+ * directory (chunks live in dist/chunks/, so their relative specifiers differ
+ * from the entry's) and counts dynamic import() separately. Every expected
+ * external must actually be rewritten somewhere; silent no-ops fail the build.
+ */
+function vendorOmo307IndexExternals({modules, modulePaths, packageDir, outputDir}) {
+  const {vendor, planByName, vendorRoot} = buildVendorClosures({packageDir, outputDir, targets: VENDOR_TARGETS_3_0_1_INDEX});
+  const names = ['@opencode-ai/plugin', 'jsonc-parser', 'zod'];
+  const rewritten = new Map(modules);
+  const externalModuleRewrites = [];
+  const totals = new Map(names.map(name => [name, {staticOccurrences: 0, dynamicOccurrences: 0}]));
+  for (const modulePath of modulePaths) {
+    let source = rewritten.get(modulePath);
+    const moduleDir = dirname(join(outputDir, modulePath));
+    const moduleRewrites = [];
+    for (const name of names) {
+      const target = posixRelative(moduleDir, join(vendorRoot, name, planByName.get(name).entryPath));
+      const patterns = [
+        ['from "' + name + '"', 'from "' + target + '"', 'static'],
+        ['import("' + name + '")', 'import("' + target + '")', 'dynamic'],
+        ['require("' + name + '")', 'require("' + target + '")', 'static'],
+      ];
+      let staticOccurrences = 0;
+      let dynamicOccurrences = 0;
+      for (const [before, after, kind] of patterns) {
+        const count = source.split(before).length - 1;
+        if (count === 0) continue;
+        source = source.replaceAll(before, after);
+        if (kind === 'dynamic') dynamicOccurrences += count;
+        else staticOccurrences += count;
+      }
+      if (staticOccurrences + dynamicOccurrences > 0) {
+        moduleRewrites.push({name, target, staticOccurrences, dynamicOccurrences});
+        totals.get(name).staticOccurrences += staticOccurrences;
+        totals.get(name).dynamicOccurrences += dynamicOccurrences;
+      }
+    }
+    if (moduleRewrites.length > 0) {
+      rewritten.set(modulePath, source);
+      externalModuleRewrites.push({module: modulePath, rewrites: moduleRewrites});
+    }
+  }
+  for (const name of names) {
+    const total = totals.get(name);
+    if (total.staticOccurrences + total.dynamicOccurrences === 0) {
+      throw new Error('expected bare imports of "' + name + '" across the 3.0.7 index modules, found none');
+    }
+  }
+  const zodStats = totals.get('zod');
+  const zod = {
+    strategy: 'vendored',
+    resolved: posixRelative(dirname(join(outputDir, omoEntryRelativePath('index'))), join(vendorRoot, 'zod', planByName.get('zod').entryPath)),
+    occurrences: zodStats.staticOccurrences,
+    dynamicOccurrences: zodStats.dynamicOccurrences,
+  };
+  return {modules: rewritten, vendor, zod, externalModuleRewrites};
+}
+
+/**
+ * Build the 3.0.7 artifact: pin-validated module graph -> shared patcher ->
+ * (index) per-module vendoring -> helper import validation -> specifier
+ * validation -> dependency closure -> verbatim-layout delivery with a
+ * per-module manifest. Signature, defaults and return shape match
+ * buildOmoIntegration; dryRun writes nothing.
+ */
+async function buildOmo307Integration({packageDir, sourceDir, outputDir, packageManifest, entry, dryRun, upstreamPath, upstreamDigest}) {
+  const context = 'OMO 3.0.7 ' + entry;
+  const entryModulePath = omoEntryRelativePath(entry);
+  const modulePins = OMO_307_MODULES[entry];
+  if (!modulePins || typeof modulePins !== 'object' || !modulePins[entryModulePath]) {
+    throw new Error(context + ': omo-patch.mjs pins no 3.0.7 module set for entry "' + entry + '"');
+  }
+  const omoTargetDigest = OMO_TARGETS['3.0.7']?.entries?.[entry];
+  if (omoTargetDigest !== modulePins[entryModulePath]) {
+    throw new Error(context + ': OMO_TARGETS["3.0.7"].entries.' + entry + ' (' + omoTargetDigest + ') does not match the pinned ' + entryModulePath + ' digest');
+  }
+
+  // Load the pinned module set byte-exactly; the per-module SHA is the copy
+  // authority — anything else in the package is ignored, and any drift from
+  // the pins fails the build here. Digests are captured before patching:
+  // patchOmo307 writes the patched sources back into this same Map.
+  const inputModules = new Map();
+  const inputDigests = new Map();
+  for (const modulePath of Object.keys(modulePins).sort()) {
+    let source;
+    try {
+      source = await readFile(join(packageDir, modulePath), 'utf8');
+    } catch (error) {
+      throw new Error(context + ': pinned module "' + modulePath + '" is missing from ' + packageDir + ' (' + (error?.code ?? error?.message ?? String(error)) + ')');
+    }
+    const digest = digestOf(source);
+    if (digest !== modulePins[modulePath]) {
+      throw new Error(context + ': module digest mismatch for ' + modulePath + ': expected ' + modulePins[modulePath] + ', got ' + digest);
+    }
+    inputModules.set(modulePath, source);
+    inputDigests.set(modulePath, digest);
+  }
+
+  // The pin set must be exactly the entry-reachable import graph — nothing
+  // unreachable (dead weight) and nothing reachable but unpinned (unverified).
+  const reachable = walkOmo307ModuleGraph(inputModules, entryModulePath, context);
+  const unreachablePins = Object.keys(modulePins).filter(modulePath => !reachable.has(modulePath));
+  const unpinnedReachable = [...reachable].filter(modulePath => !Object.hasOwn(modulePins, modulePath));
+  if (unreachablePins.length > 0 || unpinnedReachable.length > 0) {
+    throw new Error(context + ': pinned module set does not match the entry import graph'
+      + (unreachablePins.length > 0 ? '; pinned but unreachable: ' + unreachablePins.join(', ') : '')
+      + (unpinnedReachable.length > 0 ? '; reachable but unpinned: ' + unpinnedReachable.join(', ') : ''));
+  }
+
+  // Hand the exact pinned modules to the shared patcher and validate what
+  // comes back before trusting it.
+  const patched = await patchOmo307(inputModules, entry);
+  let patchedModules = patched?.modules;
+  if (!(patchedModules instanceof Map)) {
+    throw new Error(context + ': patchOmo307 must return {modules: Map, patches}, got modules: ' + (patchedModules === null ? 'null' : typeof patchedModules));
+  }
+  const patchedPaths = [...patchedModules.keys()].sort();
+  if (patchedPaths.length !== inputModules.size || patchedPaths.some(modulePath => !inputModules.has(modulePath))) {
+    throw new Error(context + ': patchOmo307 module key set diverges from the pinned input set: ' + patchedPaths.join(', '));
+  }
+  const patchReport = patched.patches;
+  if (!Array.isArray(patchReport)) {
+    throw new Error(context + ': patchOmo307 must return {modules: Map, patches: Array}, got patches: ' + (patchReport === null ? 'null' : typeof patchReport));
+  }
+  for (const record of patchReport) {
+    if (!record || typeof record.id !== 'string' || typeof record.path !== 'string' || typeof record.purpose !== 'string' || !inputModules.has(record.path)) {
+      throw new Error(context + ': invalid patch record (need {id, path, purpose} with path inside the pinned module set): ' + JSON.stringify(record));
+    }
+  }
+  // The shipped patch manifest must be exactly describeOmoPatches("3.0.7") —
+  // the descriptor is the authority; the patcher's report must prove every
+  // (id, path) application on this entry's module graph was actually applied,
+  // with no missing, duplicate or extra records and no hardcoded counts.
+  // describeOmoPatches describes the full cross-entry 3.0.7 set (the same
+  // patches are registered against dist/index.js and dist/server/index.js
+  // modules), so the expected list is scoped to the pinned entry graph; to
+  // keep that scoping airtight, any descriptor path outside the two pinned
+  // graphs is an explicit error instead of a silent entry-filter skip.
+  const patchDescriptor = describeOmoPatches('3.0.7');
+  const knownGraphPaths = new Set([...Object.keys(OMO_307_MODULES.index), ...Object.keys(OMO_307_MODULES.server)]);
+  const expectedApplications = patchDescriptor.flatMap(patch => {
+    if (!patch || typeof patch.id !== 'string' || !Array.isArray(patch.modules)) {
+      throw new Error(context + ': invalid describeOmoPatches("3.0.7") record (need {id, purpose, modules}): ' + JSON.stringify(patch));
+    }
+    return patch.modules.map(modulePath => {
+      if (!knownGraphPaths.has(modulePath)) {
+        throw new Error(context + ': describeOmoPatches("3.0.7") references "' + modulePath + '" outside the pinned 3.0.7 module graphs');
+      }
+      return patch.id + '\u0000' + modulePath;
+    });
+  }).filter(key => inputModules.has(key.split('\u0000')[1]));
+  const actualApplications = patchReport.map(record => record.id + '\u0000' + record.path);
+  const expectedSet = new Set(expectedApplications);
+  const actualSet = new Set(actualApplications);
+  const missingApplications = expectedApplications.filter(key => !actualSet.has(key));
+  const duplicateApplications = actualApplications.filter((key, index) => actualApplications.indexOf(key) !== index);
+  const extraApplications = actualApplications.filter(key => !expectedSet.has(key));
+  if (missingApplications.length > 0 || duplicateApplications.length > 0 || extraApplications.length > 0 || expectedApplications.length !== actualApplications.length) {
+    throw new Error(context + ': patch report diverges from describeOmoPatches("3.0.7")'
+      + (missingApplications.length > 0 ? '; missing: ' + [...new Set(missingApplications)].join(', ') : '')
+      + (duplicateApplications.length > 0 ? '; duplicate: ' + [...new Set(duplicateApplications)].join(', ') : '')
+      + (extraApplications.length > 0 ? '; extra: ' + [...new Set(extraApplications)].join(', ') : ''));
+  }
+
+  // index only: vendor the externals and rewrite bare imports per module.
+  let vendor = null;
+  let zod;
+  let externalModuleRewrites = null;
+  if (entry === 'index') {
+    const vendored = vendorOmo307IndexExternals({modules: patchedModules, modulePaths: patchedPaths, packageDir, outputDir});
+    patchedModules = vendored.modules;
+    vendor = vendored.vendor;
+    zod = vendored.zod;
+    externalModuleRewrites = vendored.externalModuleRewrites;
+  } else {
+    zod = {strategy: 'bundled', resolved: null, occurrences: 0};
+  }
+
+  // The patcher's injected helper imports must actually resolve from each
+  // importing module's directory.
+  const helpers = omoHelperFiles('3.0.7');
+  const importedBy = validateOmo307HelperImports(patchedModules, outputDir, helpers, context);
+
+  // Remaining bare specifiers must be closure roots (on index the vendored
+  // names must be gone entirely), and no absolute file:///home/ pins.
+  const roots = CLOSURE_ROOT_SPECIFIERS_3_0_7[entry];
+  for (const modulePath of patchedPaths) {
+    validateBundleSpecifiers({
+      bundle: patchedModules.get(modulePath),
+      allowedNames: new Set([...roots, ...(vendor ?? []).map(v => v.name)]),
+      context: context + ' module "' + modulePath + '"',
+    });
+  }
+  if (vendor) {
+    for (const modulePath of patchedPaths) {
+      const bare = bareExternalSpecifiers(patchedModules.get(modulePath));
+      if (bare.length > 0) {
+        throw new Error(context + ': module "' + modulePath + '" still carries bare module imports after vendoring: ' + [...new Set(bare)].join(', '));
+      }
+      const pinnedUrls = [...stripJsComments(patchedModules.get(modulePath)).matchAll(ANY_MODULE_SPECIFIER)]
+        .map(match => match[1] ?? match[2])
+        .filter(specifier => specifier.includes('file://') || specifier.includes('/home/'));
+      if (pinnedUrls.length > 0) {
+        throw new Error(context + ': module "' + modulePath + '" unexpectedly pins absolute import locations: ' + [...new Set(pinnedUrls)].join(', '));
+      }
+    }
+  }
+
+  const computed = computeDependencyClosure({packageDir, roots});
+  if (computed.requiredMissing.length > 0) {
+    throw new Error('required dependency closure unresolved from the pinned cache: ' + computed.requiredMissing.join(', '));
+  }
+  const resources = planPackageResources({packageDir, packageManifest});
+
+  const files = [];
+  if (vendor) {
+    for (const vendoredPackage of vendor) {
+      for (const record of vendoredPackage.fileRecords) {
+        files.push({path: record.path, content: record.content, digest: record.digest});
+      }
+    }
+  }
+  const helperManifest = [];
+  for (const helper of helpers) {
+    const content = await readFile(join(sourceDir, helper), 'utf8');
+    const digest = digestOf(content);
+    files.push({path: join(outputDir, helper), content, digest});
+    helperManifest.push({file: join(outputDir, helper), digest, importedBy: [...new Set(importedBy.get(helper))].sort()});
+  }
+  const moduleRecords = patchedPaths.map(modulePath => {
+    const content = patchedModules.get(modulePath);
+    const record = {
+      path: join(outputDir, modulePath),
+      inputDigest: inputDigests.get(modulePath),
+      outputDigest: digestOf(content),
+      bytes: Buffer.byteLength(content),
+    };
+    files.push({path: record.path, content, digest: record.outputDigest});
+    return record;
+  });
+  // Top-level closure packages ship verbatim (including their own nested
+  // node_modules); nested entries are contained in the parent copy and are
+  // only recorded in the manifest.
+  for (const pkg of computed.packages) {
+    if (!pkg.topLevel) continue;
+    for (const file of pkg.files) {
+      files.push({path: join(outputDir, 'node_modules', pkg.installPath, file.path), copyFrom: file.copyFrom, digest: file.digest});
+    }
+  }
+  for (const resource of resources) {
+    files.push({path: join(outputDir, resource.path), copyFrom: resource.copyFrom, digest: resource.digest});
+  }
+
+  const entryRecord = moduleRecords.find(record => record.path === join(outputDir, entryModulePath));
+  const buildManifest = {
+    name: 'oh-my-opencode-slim',
+    version: '3.0.7',
+    entry,
+    upstream: {path: upstreamPath, digest: upstreamDigest},
+    helpers: helperManifest,
+    bundle: {path: entryRecord.path, digest: entryRecord.outputDigest},
+    zod,
+    ...(vendor ? {vendor: vendor.map(v => ({name: v.name, kind: v.kind, entry: v.entry, resolvedFrom: v.resolvedFrom, files: v.files, rewrites: v.rewrites}))} : {}),
+    ...(externalModuleRewrites ? {externalModuleRewrites} : {}),
+    modules: moduleRecords.map(record => ({path: record.path, inputDigest: record.inputDigest, outputDigest: record.outputDigest, bytes: record.bytes})),
+    closure: {
+      strategy: 'copied-node-modules-closure',
+      cacheRoot: computed.cacheRoot,
+      roots,
+      packages: computed.packages.map(pkg => ({
+        name: pkg.name,
+        version: pkg.version,
+        engines: pkg.engines,
+        installPath: toPosix(join('node_modules', pkg.installPath)),
+        topLevel: pkg.topLevel,
+        ...(pkg.shippedVia ? {shippedVia: pkg.shippedVia} : {}),
+        ...(pkg.linked ? {linkedFrom: pkg.linked} : {}),
+        dependencies: pkg.dependencies,
+        peerDependencies: pkg.peerDependencies,
+        fileCount: pkg.fileCount,
+        totalBytes: pkg.totalBytes,
+        ...(pkg.topLevel ? {files: pkg.files.map(file => ({path: file.path, digest: file.digest, bytes: file.bytes}))} : {}),
+      })),
+      missing: computed.missing,
+      resources: resources.map(resource => ({path: resource.path, digest: resource.digest, bytes: resource.bytes})),
+    },
+    patches: patchDescriptor,
+  };
+  files.push({path: join(outputDir, 'manifest.json'), content: JSON.stringify(buildManifest, null, 2) + '\n', digest: digestOf(JSON.stringify(buildManifest, null, 2) + '\n')});
+
+  if (!dryRun) {
+    for (const file of files) {
+      await mkdir(dirname(file.path), {recursive: true});
+      if (file.copyFrom !== undefined) await copyFile(file.copyFrom, file.path);
+      else await writeFile(file.path, file.content);
+    }
+  }
+  return {manifest: buildManifest, files};
 }
 
 const posixRelative = (from, to) => {
@@ -498,6 +926,12 @@ export async function buildOmoIntegration({
   const expectedDigest = OMO_TARGETS[version].entries[entry];
   if (upstreamDigest !== expectedDigest) {
     throw new Error('Upstream ' + version + ' ' + entry + ' digest mismatch: expected ' + expectedDigest + ', got ' + upstreamDigest);
+  }
+
+  // 3.0.7 delivers a pinned, patcher-split module graph instead of one
+  // patched bundle; the shared single-bundle path below stays untouched.
+  if (version === '3.0.7') {
+    return buildOmo307Integration({packageDir, sourceDir, outputDir, packageManifest: manifest, entry, dryRun, upstreamPath, upstreamDigest});
   }
 
   let bundle = patchOmo(upstream, {version, entry});
