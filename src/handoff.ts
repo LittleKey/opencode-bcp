@@ -85,18 +85,18 @@ export function sourceHandoff(scope: Scope, session: string, prompt: string, rec
       "\nThese original read-only findings cite a file you authored. Read the records and their versions before revising; they are not proof about a newer file. Preserve their limits rather than relying on a dispatcher's restatement.\n</bcp_author_feedback>"
     if (!prompt.includes(suffix)) prompt += suffix
   }
-  const decisions: string[] = []
+  const sources: string[] = []
   for (const id of [...new Set(currentPublications)].slice(-4)) {
     let parsed: ReturnType<typeof parseBbId>
     try { parsed = parseBbId(id) } catch { continue }
     if (refPolicy(auth, parsed) !== "ok") continue
     const found = scope.getById(id)
-    if (found.status !== "found" || found.record.kind !== "decision" || found.record.writer.session_id !== session) continue
-    decisions.push(id); references.push(id)
+    if (found.status !== "found" || found.record.writer.session_id !== session) continue
+    sources.push(id); references.push(id)
   }
-  if (decisions.length) {
-    const suffix = "\n\n<bcp_input_decisions>\n" + JSON.stringify(decisions) +
-      "\nThe dispatcher published these decisions during the current input. Read the original decisions and limits before relying on them; relevance and acceptance are not inferred. Do not replace them with the dispatcher's paraphrase.\n</bcp_input_decisions>"
+  if (sources.length) {
+    const suffix = "\n\n<bcp_input_sources>\n" + JSON.stringify(sources) +
+      "\nObserved record references for the dispatcher's current input (bounded, not exhaustive). These are candidate sources, not inferred dependencies, approved decisions or execution authority. Check conclusions and limits before relying on a record: skip a repeat board_get only when the exact original, its host-verified source/version binding and all information needed for that check remain in this context with no change or conflict signal; otherwise read the relevant originals and limits with board_get. Index summaries are navigation only. Preserve task restrictions and full references; do not substitute the dispatcher's paraphrase.\n</bcp_input_sources>"
     if (!prompt.includes(suffix)) prompt += suffix
   }
   return { prompt, references: [...new Set(references)], removedBytes }

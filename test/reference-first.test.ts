@@ -118,7 +118,7 @@ test("source registration allows current-input reuse without claiming snapshot f
   expect(r.finish("s", "final", "u")?.status).toBe("missing_handoff")
   r.begin("s", "next"); expect(r.sources("s", "next")).toEqual([])
 })
-test("real adapter removes default put, registers retained decisions before dispatch, and preserves manual put", async () => {
+test("real adapter removes default put, registers retained sources before dispatch, and preserves manual put", async () => {
   const f = fixture()
   const allow = [{ permission: "*", pattern: "*", action: "allow" }]
   const client = { app: { agents: async () => ({ data: [
@@ -137,7 +137,9 @@ test("real adapter removes default put, registers retained decisions before disp
   const output = { args: { subagent_type: "fixer", prompt: "Implement from the governing decision." } }
   await plugin["tool.execute.before"]!({ tool: "task", sessionID: "s", callID: "next" }, output)
   expect(output.args.prompt).toContain(result.id)
-  expect(output.args.prompt).toContain("<bcp_input_decisions>")
+  expect(output.args.prompt).toContain("<bcp_input_sources>")
+  expect(output.args.prompt).not.toContain("<bcp_input_decisions>")
+  expect(output.args.prompt).toContain("These are candidate sources, not inferred dependencies, approved decisions or execution authority.")
   expect(output.args.prompt).not.toContain(f.stage.parts![0]!.text!)
   for (const subagent_type of ["blocked", "unknown", "council"]) {
     const original = "Keep this supplied body when sources cannot be dereferenced."

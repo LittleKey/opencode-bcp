@@ -310,10 +310,12 @@ describe("v2 adapter 接线（R2 FIFO 不驱逐已确认候选）", () => {
     const out = await h.tool("board_put", { sessionID: "ses_n1", agent: "build", messageID: "m1" }, { description: "during lost-evidence", content: "c" })
     expect(out.content).toContain("stored")
     const scope = h.scopeOf("ses_n1")!
-    const streamId = scope.resolveSession("ses_n1").streamId
-    const entriesDir = join(scope.dir, "streams", streamId, "entries")
-    const files = (existsSync(entriesDir) ? readdirSync(entriesDir) : []) as string[]
-    const rec = JSON.parse(readFileSync(join(entriesDir, files[0]!), "utf8")) as { description: string; created_round: number | null }
+    const id = out.content.match(/^record (bb:\/\/\S+) stored/m)?.[1]
+    expect(id).toBeDefined()
+    const found = scope.getById(id!)
+    expect(found.status).toBe("found")
+    if (found.status !== "found") throw new Error("stored record not found")
+    const rec = found.record
     expect(rec.description).toBe("during lost-evidence")
     expect(rec.created_round).toBeNull() // 不得继承旧 created_round
     // 之后已确认输入重新成为尾 user → 恢复既有身份（不伪造 q0 admission）

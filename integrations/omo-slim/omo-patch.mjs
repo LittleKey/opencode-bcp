@@ -47,6 +47,16 @@ export const OMO_TARGETS = {
       server: 'ff9082e851490e00dcd80cb093d2db2e615754f4b4e17a7b9ca388c53da02951',
     },
   },
+  '3.0.7': {
+    entries: {
+      // npm registry tarball oh-my-opencode-slim-3.0.7.tgz (exact-version pin,
+      // prep extraction verified by SHA-256 before patching). 3.0.7 moves to a
+      // multi-module dist layout: patching goes through patchOmo307() with the
+      // per-module OMO_307_MODULES pins, not the single-bundle patchOmo().
+      index: '47ec8c7070c648c8860ab4becfb2391257cf833957c4b56ccf3cbaad5e6f5052',
+      server: '485f34ad29e4f9ffa0b2fd9c52dad3d8db401ff68394f40b6f6f93866cbf9237',
+    },
+  },
 };
 
 export function omoTargetFor(digest) {
@@ -62,8 +72,12 @@ export function omoTargetFor(digest) {
 // these to the real relative location of the built output. 3.0.1 follows upstream
 // Council (2026-10-01 scope reduction): it prepends only the generic delivery
 // helper; the council helper is prepended on the 2.2.25 rollback path only.
+// 3.0.7 is multi-module: one specifier per patched entry module, in
+// [index entry, server entry] order (both get the delivery helper import).
 export const helperImportsFor = version =>
-  version === '2.2.25' ? ['../omo-delivery.mjs', '../omo-council.mjs'] : ['../omo-delivery.mjs'];
+  version === '2.2.25' ? ['../omo-delivery.mjs', '../omo-council.mjs']
+  : version === '3.0.7' ? ['../omo-delivery.mjs', '../../omo-delivery.mjs']
+  : ['../omo-delivery.mjs'];
 
 const DELIVERY_IMPORT =
   'import { deliveryMetadata, deliverySuffix, annotateDeliveryPart, presentDelivery } from "../omo-delivery.mjs";\n';
@@ -1220,12 +1234,753 @@ export const PATCHES_3_0_6 = [
   ...PATCHES_3_0_6_ADDITIONS,
 ];
 
+// ---------------------------------------------------------------------------
+// 3.0.7 module patcher. Upstream 3.0.7 switched the dist to a multi-module
+// layout: each entry (dist/index.js, dist/server/index.js) plus the literal
+// import/re-export/dynamic-import closure of chunks it reaches. Patching is
+// per-module: OMO_307_MODULES pins every module of each entry's closure by
+// SHA-256, patchOmo307() verifies the complete module set and every digest
+// before replacing anything, applies each patch exactly once per target
+// module, and preserves the package layout (no rebundling). Only the two
+// entry modules get the delivery helper import; the patched chunks use only
+// in-module symbols (toV1Transcript etc.).
+export const OMO_307_MODULES = {
+  index: {
+    'dist/index.js': '47ec8c7070c648c8860ab4becfb2391257cf833957c4b56ccf3cbaad5e6f5052',
+    'dist/chunks/marketplace-pc5v8kr0.js': '9e4ad1f7271ce225456bb40851ca6776e637425b8cc4fa4db5a69159ca2f30e0',
+    'dist/chunks/index-z19vm7mg.js': 'e19df353f80bffda3b11049a3fa8b8a5317a97448fdbc5496686336be923697a',
+    'dist/chunks/index-01tcrt5t.js': '46e7722c2507912857855b473d4af759f30398a1ef04490e2a7462dc28e1277b',
+    'dist/chunks/registry-runtime-pvx2nmh7.js': 'acc01380832d8e3926ee22a0c783b6764a479f7e39fe1052b35b9739e7d659ed',
+    'dist/chunks/index-nhpdw4tk.js': '912a02d0d9728d758ec4a37e889de93e27076eb37dc967a71c89c5b52d7fcad0',
+    'dist/chunks/service-c1qavjgs.js': '919277f1df13a851ee35ea580e1fe53a5b9a1e47f17b14519629061f0e8b1648',
+    'dist/chunks/updater-0f9am5gt.js': '9b9a4468c08ac60cb373a397d7a4db7d808f98358469114202e2b2e9c81b67da',
+    'dist/chunks/zip-extractor-yrks8cnt.js': '4cc4d827570b3675b9245bcde38813eacd9bd7e4f478c9c8c23676e4c2a0e9ed',
+    'dist/chunks/manager-14m7y84a.js': '6722ed0e141c6ae8303038016dc776be2b2dd025a646e4f6e84007d2729f8425',
+    'dist/chunks/index-g9w3d3y2.js': '946832e3ade7b2b86918beaf06fbd365fd0f360bd3ea9eb239e5bcc76e22660f',
+    'dist/chunks/index-t61zvtdb.js': 'e73975b3bfaef94feddf3c3c929a834abb4093f4b622f2362ce105d211c4cc24',
+    'dist/chunks/index-223r0y2b.js': '959aede99ef0276527701a868903c95e23a59203ccbaa6843283e086b1db248b',
+    'dist/chunks/history-mxtgc72x.js': '778067ea01456f96ca565c12f268f664441520d024fca3e9125c1d335f87b051',
+    'dist/chunks/interview-bridge-cx8r78bw.js': '856b23baa347112a168ab60f4a1aec31ccfc32113ddc443359cb4b04a29a0e46',
+  },
+  server: {
+    'dist/server/index.js': '485f34ad29e4f9ffa0b2fd9c52dad3d8db401ff68394f40b6f6f93866cbf9237',
+    'dist/server/chunks/marketplace-mr0hk4js.js': '5111503e0efab4528f119ff45a990b2ffe14c87d2ff5f6f1614e5a7d22ea56bd',
+    'dist/server/chunks/index-wsvbb4qp.js': 'c298c8e828eee887fa779f6482f649f26842b1bbe3b074ad2b4f5df94af34092',
+    'dist/server/chunks/registry-runtime-7p5pv2dy.js': '1b8b71ab286401e4689f4c04bb835b8fc6c8be4dfc4a1c7bd851dc39c0e17ddc',
+    'dist/server/chunks/index-0pcpsb56.js': 'ff6b92f01c80598f325f5ffe569904f7c8be7a6661f9d7e3ef960472504a934c',
+    'dist/server/chunks/service-2d0v189r.js': '5b93086bbd250e563f8d26ef04886cbba0d54c07648a8f0ee701362024bc5f00',
+    'dist/server/chunks/updater-znh7wsf2.js': 'f1da517de20c1676977d97b6ec217beed9cf9229f2a73cb8c06391035440a484',
+    'dist/server/chunks/zip-extractor-pab1707s.js': '9e98db20af7ec12906aa903b03dcf759f872ae3562f9a66d016c3735d9119e3e',
+    'dist/server/chunks/manager-8cgd7zv1.js': '9f07730e49575f3a890698b1cf6eb176f1f9e5f38b7f1a6ba2bdcb90b51a7024',
+    'dist/server/chunks/index-3g6fcd3f.js': '8990d5e5cba9b429f5a738c16d30fab8b6d21507425a692a696f5ba038fb0757',
+    'dist/server/chunks/index-8kttp83n.js': '08219e703edd27c350fb83950c20025669167fc637a559b4efd40d914ae8e08d',
+    'dist/server/chunks/index-s0vbebwq.js': '76e42fe50a52ec9067150f8ebb1a33e4b4ea8234e154fba8192926ed7c439c41',
+    'dist/server/chunks/history-bxfwpnw9.js': 'ca64715b024344e4c925f0aa52950d48076a569db3f64252a77beb066bec6cd8',
+    'dist/server/chunks/index-athscynt.js': '38ee08773ff1c122f7d7ce5f92d9b237a369ad7151915a1efd73bb072cd3782f',
+    'dist/server/chunks/interview-bridge-c2m8w0c6.js': 'ddb2f18ba6b99f6f9d424db488cd1f2487d3687054462784d65be1f1967045f7',
+  },
+};
+
+const IDX_307 = 'dist/index.js';
+const SRV_307 = 'dist/server/index.js';
+const ZCHUNK_307 = 'dist/chunks/index-z19vm7mg.js';
+const WCHUNK_307 = 'dist/server/chunks/index-wsvbb4qp.js';
+
+// 3.0.7 migrates the 42 effective 3.0.6 patches: 37 carried (some with
+// re-variations for the de-shadowed options/record scope or re-anchored onto
+// rewritten upstream sites), 5 retired with upstream paths that no longer
+// exist (readonly-result-delivery/tracked-call/current-call with the
+// readonlyTerminalResult fallback upstream removed — disposed plugins now
+// throw pluginDisposedMessage(); read-settlement-contrast/blocked per Oracle
+// ruling, because 3.0.7 natively attaches and consumes the read settlement
+// retryAfter), and native-terminal-reconcile was re-anchored plus split into
+// site A (foreground) and site B (structured launch registration, which the
+// v2 wrapper bypasses site A to reach) — each an equal head+tail pair under
+// the Oracle narrow stale-only re-observation strategy. Applications are
+// exact unique anchors per module — no fuzzy matching, no fallbacks, and no
+// no-op filler applications: every listed application transforms real bytes.
+const PATCHES_3_0_7 = [
+  // --- entry modules: dist/index.js + dist/server/index.js (de-shadowed in
+  // 3.0.7: both use plain options/record, so one unified text serves both).
+  {
+    id: 'hook-deps-wiring',
+    purpose: 'Pass the plugin directory into the task-session-manager hook.',
+    modules: [IDX_307, SRV_307],
+    anchor: `"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {
+      shouldManageSession:`,
+    replacement: `"tool.execute.before": (input, output) => handleToolExecuteBefore(input, output, {
+      directory: _ctx.directory,
+      shouldManageSession:`,
+  },
+  {
+    id: 'native-dispatch-now',
+    purpose: 'Record the dispatch time of a native foreground task call; its terminal observation window must start at dispatch, not after the already-completed assistant.',
+    modules: [IDX_307, SRV_307],
+    anchor: `lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,
+    releaseLease:`,
+    replacement: `lifecycleEpoch: deps.getLifecycleEpoch?.() ?? 0,
+    nativeCallStartedAt: Date.now(),
+    releaseLease:`,
+  },
+  {
+    id: 'register-launch-now',
+    purpose: 'Register the native launch with the dispatch-time clock so the terminal classifier attributes the new result to this run.',
+    modules: [IDX_307, SRV_307],
+    anchor: `return deps.backgroundJobBoard.registerLaunch({
+      taskID,
+      parentSessionID: pending.parentSessionId,`,
+    replacement: `return deps.backgroundJobBoard.registerLaunch({
+      taskID,
+      now: pending.nativeCallStartedAt,
+      parentSessionID: pending.parentSessionId,`,
+  },
+  {
+    id: 'native-terminal-reconcile',
+    purpose: 'Site A (foreground handleToolExecuteBefore) pair head: bind the native output signal so the paired loop can re-observe a superseded activity token through the SAME terminal gate (bounded ≤2), narrowed per Oracle ruling to stale from same-round activity/episode drift; deferred stays entirely with the gate. Re-anchored for 3.0.7 through callID: pending.callId to disambiguate the structured-launch reconcile call.',
+    modules: [IDX_307, SRV_307],
+    anchor: `await deps.terminalGate.reconcile(record, {
+        kind: "output",
+        status,
+        origin: {
+          kind: "native",
+          run: record,
+          callID: pending.callId,`,
+    replacement: `const nativeSignal = {
+        kind: "output",
+        status,
+        origin: {
+          kind: "native",
+          run: record,
+          callID: pending.callId,`,
+  },
+  {
+    id: 'native-terminal-reconcile-loop',
+    purpose: 'Site A pair tail: freeze the pre-reconcile observation via the original gate (deps.terminalGate.capture) and replay at most twice on stale only — each replay explicitly refuses when deps.terminalGate.hasGivenUp(observed) is set, then re-captures through the same gate and requires task, generation, baselineMessageID, promptMessageID, attemptRevision, attemptStartedAt and terminalRevision to equal the frozen baseline; activity/episode drift is allowed and deferred is left to the gate. A missing capture snapshot stops the replay, never substitutes defaults.',
+    modules: [IDX_307, SRV_307],
+    anchor: `callIDConfirmed: exactCallConfirmed
+        }
+      });
+      const current = deps.backgroundJobBoard.get(status.taskID);`,
+    replacement: `callIDConfirmed: exactCallConfirmed
+        }
+      };
+      const nativeBaseline = deps.terminalGate.capture(record);
+      let reconciliation = await deps.terminalGate.reconcile(record, nativeSignal);
+      for (let attempt = 0; nativeBaseline && reconciliation?.kind === "stale" && attempt < 2; attempt++) {
+        const observed = deps.backgroundJobBoard.get(record.taskID);
+        if (!exactCallConfirmed || observed?.generation !== record.generation || observed.state !== "running" || observed.cancellationRequested || deps.terminalGate.hasGivenUp(observed)) break;
+        const observation = deps.terminalGate.capture(observed);
+        if (!observation || observation.taskID !== nativeBaseline.taskID || observation.generation !== nativeBaseline.generation || observation.baselineMessageID !== nativeBaseline.baselineMessageID || observation.promptMessageID !== nativeBaseline.promptMessageID || observation.attemptRevision !== nativeBaseline.attemptRevision || observation.attemptStartedAt !== nativeBaseline.attemptStartedAt || observation.terminalRevision !== nativeBaseline.terminalRevision) break;
+        reconciliation = await deps.terminalGate.reconcile(observed, nativeSignal);
+      }
+      const current = deps.backgroundJobBoard.get(status.taskID);`,
+  },
+  {
+    id: 'native-terminal-reconcile-structured',
+    purpose: 'Site B (registerDelegatedLaunchFromStructured late-terminal registration) pair head: bind the structured launch output signal for the same stale-only re-observation; the v2 wrapper bypasses site A, so site B carries the identical strategy per Oracle ruling.',
+    modules: [IDX_307, SRV_307],
+    anchor: `    if (input.state !== "running") {
+      await deps.terminalGate.reconcile(record, {
+        kind: "output",
+        status: {
+          taskID: input.childTaskID,`,
+    replacement: `    if (input.state !== "running") {
+      const structuredSignal = {
+        kind: "output",
+        status: {
+          taskID: input.childTaskID,`,
+  },
+  {
+    id: 'native-terminal-reconcile-structured-loop',
+    purpose: 'Site B pair tail: freeze the pre-reconcile observation via the original gate (deps.terminalGate.capture) and replay at most twice on stale only — each replay explicitly refuses when deps.terminalGate.hasGivenUp(observed) is set (input.exactCallConfirmed gates entry), then re-captures through the same gate and requires task, generation, baselineMessageID, promptMessageID, attemptRevision, attemptStartedAt and terminalRevision to equal the frozen baseline; activity/episode drift is allowed and deferred is left to the gate. A missing capture snapshot stops the replay, never substitutes defaults.',
+    modules: [IDX_307, SRV_307],
+    anchor: `          callID: input.callID,
+          callIDConfirmed: input.exactCallConfirmed
+        }
+      });
+    }
+    return record;`,
+    replacement: `          callID: input.callID,
+          callIDConfirmed: input.exactCallConfirmed
+        }
+      };
+      const structuredBaseline = deps.terminalGate.capture(record);
+      let structuredReconciliation = await deps.terminalGate.reconcile(record, structuredSignal);
+      for (let attempt = 0; structuredBaseline && structuredReconciliation?.kind === "stale" && attempt < 2; attempt++) {
+        const observed = deps.backgroundJobBoard.get(record.taskID);
+        if (!input.exactCallConfirmed || observed?.generation !== record.generation || observed.state !== "running" || observed.cancellationRequested || deps.terminalGate.hasGivenUp(observed)) break;
+        const observation = deps.terminalGate.capture(observed);
+        if (!observation || observation.taskID !== structuredBaseline.taskID || observation.generation !== structuredBaseline.generation || observation.baselineMessageID !== structuredBaseline.baselineMessageID || observation.promptMessageID !== structuredBaseline.promptMessageID || observation.attemptRevision !== structuredBaseline.attemptRevision || observation.attemptStartedAt !== structuredBaseline.attemptStartedAt || observation.terminalRevision !== structuredBaseline.terminalRevision) break;
+        structuredReconciliation = await deps.terminalGate.reconcile(observed, structuredSignal);
+      }
+    }
+    return record;`,
+  },
+  {
+    id: 'foreground-delivery',
+    purpose: 'After OMO validates native call ownership and reconciles the terminal generation, attach verified delivery metadata and the reference receipt with a generation/terminal/activity CAS.',
+    modules: [IDX_307, SRV_307],
+    anchor: `const updated = current?.generation === record.generation ? current : undefined;
+      log("[task-session-manager] foreground task status registered",`,
+    replacement: `const updated = current?.generation === record.generation ? current : undefined;
+      log("[bcp-native-delivery] terminal observation", { taskID: record.taskID, generation: record.generation, verdict: reconciliation?.kind, diagnostic: updated?.lastStatusError });
+      if (updated) {
+        const metadata = await deliveryMetadata(deps.directory, updated);
+        const latest = deps.backgroundJobBoard.get(updated.taskID);
+        if (latest?.generation === updated.generation && latest.terminalRevision === updated.terminalRevision && latest.activityRevision === updated.activityRevision) {
+          output.metadata = { ...output.metadata, bcp_delivery: metadata };
+          output.output = presentRetainedChildDelivery(output.output, metadata, updated.parentSessionID);
+        }
+      }
+      log("[task-session-manager] foreground task status registered",`,
+  },
+  {
+    id: 'task-result-delivery',
+    purpose: 'Read-only result retrieval returns the verified receipt after existing ownership/terminal guards, with a full post-await freshness fence reusing the upstream final-guard primitives: dispose check, both gate.capture tokens present, samePublication(afterDelivery, current), sameObservationEpoch(pre, post), terminalRevision stability and gate.isRetainedObservationBlocked(afterDelivery) — so a relaunch lease acquired during the metadata await refuses via the upstream runningResultRefusal(idParam, taskID, true) path instead of delivering stale completed output; undefined tokens never pass. Re-anchored for 3.0.7 onto the readTaskResult tracked→untracked boundary (plain options scope).',
+    modules: [IDX_307, SRV_307],
+    anchor: `    return current.resultSummary;
+  }
+  const read = await readUntrackedEvidence({ input: options.input, readTimeoutMs: options.readTimeoutMs }, taskID, hostInfo);`,
+    replacement: `    const preMetadata = gate.capture(current);
+    const metadata = await deliveryMetadata(options.input.directory, current);
+    const afterDelivery = board.get(taskID);
+    const postMetadata = gate.capture(current);
+    if (options.isDisposed?.() || !preMetadata || !postMetadata || !afterDelivery || !samePublication(afterDelivery, current) || !sameObservationEpoch(preMetadata, postMetadata) || postMetadata.terminalRevision !== preMetadata.terminalRevision || gate.isRetainedObservationBlocked(afterDelivery))
+      return runningResultRefusal(idParam, taskID, true);
+    return presentDelivery(current.resultSummary, metadata) + deliverySuffix(metadata);
+  }
+  const read = await readUntrackedEvidence({ input: options.input, readTimeoutMs: options.readTimeoutMs }, taskID, hostInfo);`,
+  },
+  {
+    id: 'task-result-evidence-delivery',
+    purpose: 'Transcript-evidence fallback of task_result keeps the author text and appends the delivery metadata suffix.',
+    modules: [IDX_307, SRV_307],
+    anchor: `  return completedText;
+}
+var DIAGNOSTIC_TERMINALS = new Set(["error", "cancelled", "stopped"]);`,
+    replacement: `  const metadata = await deliveryMetadata(options.input.directory, { taskID, parentSessionID, state: "completed", bcpOrigin: evidence.bcpOrigin });
+  return completedText + deliverySuffix(metadata);
+}
+var DIAGNOSTIC_TERMINALS = new Set(["error", "cancelled", "stopped"]);`,
+  },
+  {
+    id: 'v2-untracked-receipt-origin',
+    purpose: 'Conservative producer-side identity for the v2 untracked terminal receipt: after the host-composed completed round takes its terminalTextOf text, re-derive exactly that boundary (latest user/synthetic input, last assistant above it) from the same transcript and attach bcpOrigin {inputMessageID, terminalMessageID} only when the boundary is a real (non-synthetic, non-compaction) user with a nonempty ID and the assistant is the very message an already-patched classifyTerminalEvidence({promptMessageID}) classifies as completed on the same transcript with text identical to the original and bcpOrigin IDs equal to the selected pair, plus parentID equal to that user, finite completion time, no abort finish and no error; any missing piece or mismatch only omits bcpOrigin and leaves round, text, output and timing untouched.',
+    modules: [IDX_307, SRV_307],
+    anchor: `      const text = terminalTextOf(transcript);
+      if (text)
+        round.text = text;
+      else if (state.outcome === "succeeded")
+        return {
+          live,
+          round: { verdict: "incomplete", startedAt: latestInputAt }
+        };
+    }`,
+    replacement: `      const text = terminalTextOf(transcript);
+      if (text)
+        round.text = text;
+      else if (state.outcome === "succeeded")
+        return {
+          live,
+          round: { verdict: "incomplete", startedAt: latestInputAt }
+        };
+      if (text && round.verdict === "completed") {
+        const entries = Array.isArray(transcript?.data) ? transcript.data : [];
+        const sourceOfEntry = (entry) => {
+          const source = entry?.info?.sourceType ?? entry?.info?.role;
+          return typeof source === "string" ? source : undefined;
+        };
+        const isCompactionEntry = (entry) => entry?.info?.summary === true || (Array.isArray(entry?.parts) ? entry.parts : []).some((part) => isRecord(part) && part.type === "compaction");
+        const idOfEntry = (entry) => typeof entry?.info?.id === "string" && entry.info.id.length > 0 ? entry.info.id : undefined;
+        let boundary = -1;
+        for (let index = entries.length - 1; index >= 0; index -= 1) {
+          const source = sourceOfEntry(entries[index]);
+          if (source === "user" || source === "synthetic") {
+            boundary = index;
+            break;
+          }
+        }
+        let terminal = -1;
+        for (let index = entries.length - 1; index > boundary; index -= 1) {
+          if (sourceOfEntry(entries[index]) === "assistant") {
+            terminal = index;
+            break;
+          }
+        }
+        const input = boundary >= 0 ? entries[boundary] : undefined;
+        const answer = terminal >= 0 ? entries[terminal] : undefined;
+        const inputID = idOfEntry(input);
+        const answerID = idOfEntry(answer);
+        if (inputID !== undefined && answerID !== undefined
+          && sourceOfEntry(input) === "user" && input.info.role === "user" && !isCompactionEntry(input)
+          && sourceOfEntry(answer) === "assistant" && !isCompactionEntry(answer)
+          && answer.info.parentID === inputID
+          && answer.info.finish !== "abort" && answer.info.finish !== "aborted"
+          && (answer.info.error === undefined || answer.info.error === null)
+          && isRecord(answer.info.time) && typeof answer.info.time.completed === "number" && Number.isFinite(answer.info.time.completed)) {
+          const classifier = classifyTerminalEvidence(transcript, { promptMessageID: inputID });
+          if (classifier?.verdict === "completed" && classifier.text === text && classifier.bcpOrigin?.inputMessageID === inputID && classifier.bcpOrigin?.terminalMessageID === answerID)
+            round.bcpOrigin = { inputMessageID: inputID, terminalMessageID: answerID };
+        }
+      }
+    }`,
+  },
+  {
+    id: 'notify-delivery-metadata',
+    purpose: 'Background terminal notifications carry verified delivery metadata; a failed post-await freshness comparison suppresses the notification before presentation and transport.',
+    modules: [IDX_307, SRV_307],
+    anchor: `const text = [
+        \`<task id="\${run.taskID}" state="\${state}">\`,`,
+    replacement: `const bcpMetadata = await deliveryMetadata(options.input.directory, record);
+      {
+        const latest = options.backgroundJobBoard.get(record.taskID);
+        if (!latest || latest.generation !== record.generation || latest.terminalRevision !== record.terminalRevision || latest.activityRevision !== record.activityRevision) {
+          const superseded = new Error("Execution changed while the terminal notification was inspected; its captured output is stale.");
+          superseded.bcpNotificationSuperseded = true;
+          throw superseded;
+        }
+      }
+      const text = [
+        \`<task id="\${run.taskID}" state="\${state}">\`,`,
+  },
+  {
+    id: 'notify-delivery-body',
+    purpose: 'Present the receipt in place of the author body and append the metadata suffix outside the task_result wrapper. Re-anchored for 3.0.7: upstream now falls back to TERMINAL_NOTIFICATIONS fallbackText.',
+    modules: [IDX_307, SRV_307],
+    anchor: `record.resultSummary ?? fallbackText,
+        \`</\${tag}>\`,
+        "</task>"`,
+    replacement: `presentDelivery(record.resultSummary ?? fallbackText, bcpMetadata),
+        \`</\${tag}>\`,
+        "</task>",
+        deliverySuffix(bcpMetadata)`,
+  },
+  {
+    id: 'injection-state-directory',
+    purpose: 'Give the synthetic injection lane the plugin directory for delivery annotation.',
+    modules: [IDX_307, SRV_307],
+    anchor: `const injectionState = {
+    backgroundJobBoard,`,
+    replacement: `const injectionState = {
+    bcpDirectory: _ctx.directory,
+    backgroundJobBoard,`,
+  },
+  {
+    id: 'synthetic-processed-annotate',
+    purpose: 'Annotate already-processed injected completions with delivery metadata behind the generation/observation-epoch/deletion fences.',
+    modules: [IDX_307, SRV_307],
+    anchor: `if (origin?.phase === "processed")
+    return;`,
+    replacement: `if (origin?.phase === "processed") {
+    if (existing && origin.generationAtObservation === existing.generation && (deletionEpoch === undefined || origin.lifecycleEpochAtObservation >= deletionEpoch))
+      await annotateDeliveryPart(state.bcpDirectory, part, existing, message.info?.sessionID, () => {
+        const latest = state.backgroundJobBoard.get(existing.taskID);
+        return latest?.generation === existing.generation && latest.terminalRevision === existing.terminalRevision && latest.activityRevision === existing.activityRevision;
+      });
+    return;
+  }`,
+  },
+  {
+    id: 'synthetic-remembered-annotate',
+    purpose: 'Annotate remembered injected completions with delivery metadata behind the same fences.',
+    modules: [IDX_307, SRV_307],
+    anchor: `if (hasRememberedInjectedCompletion(state, status.taskID, occurrenceId, provenanceKind, existing?.generation)) {
+    return;
+  }`,
+    replacement: `if (hasRememberedInjectedCompletion(state, status.taskID, occurrenceId, provenanceKind, existing?.generation)) {
+    const fence = state.injectedCompletionFences?.get(injectedCompletionKey(status.taskID, occurrenceId, provenanceKind));
+    if (existing && fence?.generation === existing.generation && (deletionEpoch === undefined || fence.lifecycleEpoch >= deletionEpoch))
+      await annotateDeliveryPart(state.bcpDirectory, part, existing, message.info?.sessionID, () => {
+        const latest = state.backgroundJobBoard.get(existing.taskID);
+        return latest?.generation === existing.generation && latest.terminalRevision === existing.terminalRevision && latest.activityRevision === existing.activityRevision;
+      });
+    return;
+  }`,
+  },
+  {
+    id: 'synthetic-updated-annotate',
+    purpose: 'Annotate freshly reconciled injected completions with delivery metadata and a current-record fence.',
+    modules: [IDX_307, SRV_307],
+    anchor: `  const updated = result.kind === "stale" ? undefined : result.record;
+  if (!updated)
+    return;
+  log("[task-session-manager] processed injected background completion", {`,
+    replacement: `  const updated = result.kind === "stale" ? undefined : result.record;
+  if (!updated)
+    return;
+  await annotateDeliveryPart(state.bcpDirectory, part, updated, message.info?.sessionID, () => {
+    const latest = state.backgroundJobBoard.get(updated.taskID);
+    return latest?.generation === updated.generation && latest.terminalRevision === updated.terminalRevision && latest.activityRevision === updated.activityRevision;
+  });
+  log("[task-session-manager] processed injected background completion", {`,
+  },
+  {
+    id: 'revive-unknown-delivery',
+    purpose: 'Revive admission-unknown output is annotated with delivery metadata for inspection.',
+    modules: [IDX_307, SRV_307],
+    anchor: `return renderReviveOutput(idParam, queueContinuation ? launched ?? current : current, true);`,
+    replacement: `return renderReviveOutput(idParam, queueContinuation ? launched ?? current : current, true, options.input.directory, options.backgroundJobBoard);`,
+  },
+  {
+    id: 'revive-latest-delivery',
+    purpose: 'Revive terminal output is annotated with delivery metadata for inspection.',
+    modules: [IDX_307, SRV_307],
+    anchor: `return renderReviveOutput(idParam, latest);`,
+    replacement: `return renderReviveOutput(idParam, latest, false, options.input.directory, options.backgroundJobBoard);`,
+  },
+  {
+    id: 'revive-render-signature',
+    purpose: 'renderReviveOutput accepts the plugin directory and board for verified inspection.',
+    modules: [IDX_307, SRV_307],
+    anchor: `function renderReviveOutput(idParam, record, admissionUnknown = false) {`,
+    replacement: `async function renderReviveOutput(idParam, record, admissionUnknown = false, directory, board) {`,
+  },
+  {
+    id: 'revive-render-delivery',
+    purpose: 'Revive output carries the verified receipt; a changed execution degrades to an explicit execution_changed suffix instead of stale text.',
+    modules: [IDX_307, SRV_307],
+    anchor: `return lines.join(\`
+\`);
+}
+function getCurrentReviveJob`,
+    replacement: `const metadata = await deliveryMetadata(directory, admissionUnknown ? { ...record, bcpOrigin: undefined } : record);
+  const latest = board?.get(record.taskID);
+  if (latest?.generation !== record.generation || latest.terminalRevision !== record.terminalRevision || latest.activityRevision !== record.activityRevision)
+    return lines.join("\\n") + deliverySuffix({ ...metadata, association: "unconfirmed", candidates: [], reason: "execution_changed" });
+  return presentDelivery(lines.join("\\n"), metadata) + deliverySuffix(metadata);
+}
+function getCurrentReviveJob`,
+  },
+  {
+    id: 'native-retained-child-delivery',
+    purpose: 'Validate the new retained-child suffix against the current owner and execution, compact only exact verified body bytes, and keep the upstream recovery marker authoritative at the tail.',
+    modules: [IDX_307, SRV_307],
+    anchor: `function formatChildRef(ref) {`,
+    replacement: `function presentRetainedChildDelivery(text, metadata, parentSessionID) {
+  const ref = readAuthoritativeChildRef(text);
+  if (!ref) return presentDelivery(text, metadata) + deliverySuffix(metadata);
+  const marker = "\\n" + formatChildRef(ref);
+  if (ref.parentSessionID !== parentSessionID || ref.sessionID !== metadata?.execution?.task_id ||
+      ref.agent !== metadata?.result_reference?.writer?.agent || !text.endsWith(marker)) return text;
+  const original = text.slice(0, -marker.length);
+  const close = original.endsWith("</task>") ? "</task>" : original.endsWith("</subagent>") ? "</subagent>" : undefined;
+  if (!close) return text;
+  const delivered = presentDelivery(original, metadata);
+  return delivered.slice(0, -close.length) + deliverySuffix(metadata) + "\\n" + close + marker;
+}
+function formatChildRef(ref) {`,
+  },
+  {
+    id: 'notify-suppressed-catch',
+    purpose: 'A failed post-await freshness comparison suppresses the terminal notification before presentation and transport without scheduling stale retries; lease release and pending-flag cleanup stay in the upstream finally block.',
+    modules: [IDX_307, SRV_307],
+    anchor: `    } catch (error) {
+      log("[revived-run-tracker] notification failed", {
+        taskID: run.taskID,
+        generation: run.generation,
+        parentSessionID: run.parentSessionID,
+        attempt,
+        timedOut: error instanceof NotificationTransportTimeoutError,
+        error: stringifyError(error)
+      });
+      scheduleNotificationRetry(run, record, notification);
+    } finally {`,
+    replacement: `    } catch (error) {
+      if (error?.bcpNotificationSuperseded) {
+        log("[revived-run-tracker] notification suppressed: execution changed during metadata inspection", {
+          taskID: run.taskID,
+          generation: run.generation,
+          parentSessionID: run.parentSessionID,
+          attempt
+        });
+      } else {
+        log("[revived-run-tracker] notification failed", {
+          taskID: run.taskID,
+          generation: run.generation,
+          parentSessionID: run.parentSessionID,
+          attempt,
+          timedOut: error instanceof NotificationTransportTimeoutError,
+          error: stringifyError(error)
+        });
+        scheduleNotificationRetry(run, record, notification);
+      }
+    } finally {`,
+  },
+  {
+    id: 'notify-currentness-activity',
+    purpose: 'Notification currentness includes the board activity revision, so an activity-only change invalidates the send-boundary check, the acceptance callback and the retry guard — no stale output is delivered, marked sent, or re-armed for retry.',
+    modules: [IDX_307, SRV_307],
+    anchor: `return !disposed && runs.get(run.taskID) === run && run.notification === notification && run.generation === record.generation && run.terminalRevision === record.terminalRevision && current?.generation === record.generation && current.terminalRevision === record.terminalRevision && run.terminalState === record.state && terminalOutcome(current) === record.state;`,
+    replacement: `return !disposed && runs.get(run.taskID) === run && run.notification === notification && run.generation === record.generation && run.terminalRevision === record.terminalRevision && current?.generation === record.generation && current.terminalRevision === record.terminalRevision && current?.activityRevision === record.activityRevision && run.terminalState === record.state && terminalOutcome(current) === record.state;`,
+  },
+  // --- transcript chunks: dist/chunks/index-z19vm7mg.js +
+  // dist/server/chunks/index-wsvbb4qp.js (3.0.7 moved the terminal-gate /
+  // transcript / shim machinery out of the flat entries into these chunks).
+  // Oracle ruling (bb://…/98b8f45b…/e000002): the read-settlement pair
+  // (read-settlement-contrast, read-settlement-blocked) is retired for 3.0.7
+  // — upstream now attaches the evidence-read settlement natively
+  // ({ kind: "blocked", retryAfter: entry.settled }, pendingRuntimeContrast
+  // threading + self-scheduled reconcile, entry-side snapshot.retryAfter
+  // consumer), and the narrowed reconcile loop below no longer consumes
+  // retryAfter. Old-version definitions stay untouched.
+  {
+    id: 'verdict-origin',
+    purpose: 'Carry the terminal classifier’s input/terminal message identity (bcpOrigin) through the completed verdict.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `return { verdict: "completed", text: evidence.text };`,
+    replacement: `return { verdict: "completed", text: evidence.text, bcpOrigin: evidence.bcpOrigin };`,
+  },
+  {
+    id: 'classifier-origin',
+    purpose: 'Record inputMessageID/terminalMessageID from the terminal assistant message so later receipts can be verified against host identity.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `return text.length > 0 ? { kind: "ready", text } : { kind: "textless" };`,
+    replacement: `return text.length > 0 ? { kind: "ready", text, bcpOrigin: { inputMessageID: last.info.parentID, terminalMessageID: last.info.id } } : { kind: "textless" };`,
+  },
+  {
+    id: 'shim-user-text-and-parentid',
+    purpose: 'Keep upstream 3.0.3 message mapping intact and bind an assistant without parentID to the preceding real user, without inventing an ID when the input is unavailable.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `var warnedListUnavailable = false;`,
+    replacement: `function toV1Transcript(messages2) {
+  const mapped = [];
+  let inputID;
+  for (const entry of messages2) {
+    const message = toV1Message(entry);
+    if (message.info.role === "user")
+      inputID = message.info.id;
+    else if (message.info.role === "assistant" && message.info.parentID === undefined && typeof inputID === "string")
+      message.info.parentID = inputID;
+    mapped.push(message);
+  }
+  return mapped;
+}
+var warnedListUnavailable = false;`,
+  },
+  {
+    id: 'shim-context-transcript-identity',
+    purpose: 'Bind each transcript message to its real run input through the ordered host context — the exact path fetchChildTranscript reads on real v2 hosts (client.session.messages is always shim-provided there, so a client.message.list fallback can never run).',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `              data: history.reverse().map(toV1Message),`,
+    replacement: `              data: toV1Transcript(history.reverse()),`,
+  },
+  {
+    id: 'shim-paged-transcript-identity',
+    purpose: 'Apply the same input binding to the paginated transcript path after the desc page is rebuilt ascending. Re-anchored for 3.0.7: upstream uses plain isRecord here.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `              data: page.data.slice().reverse().map((message) => toV1Message(isRecord(message) ? message : { type: "unknown" }))`,
+    replacement: `              data: toV1Transcript(page.data.slice().reverse().map((message) => isRecord(message) ? message : { type: "unknown" }))`,
+  },
+  {
+    id: 'commit-signature',
+    purpose: 'Thread bcpOrigin through the terminal-gate commit.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `function commit(token, state, text, lease, attribution = "event", hostOutcomeRead) {`,
+    replacement: `function commit(token, state, text, lease, attribution = "event", hostOutcomeRead, bcpOrigin) {`,
+  },
+  {
+    id: 'commit-store-origin',
+    purpose: 'Store bcpOrigin on the board record at commit time.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `resultSummary: text,
+      cancellationLease: lease,`,
+    replacement: `resultSummary: text,
+      bcpOrigin,
+      cancellationLease: lease,`,
+  },
+  {
+    id: 'commit-transcript-origin',
+    purpose: 'Commit transcript-attributed evidence with its message identity. Re-anchored for 3.0.7: the inspect commit now destructures transcriptOutcome(evidence) into state/text.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `      return commit(token, state, text, undefined, "transcript", terminalOutcome);`,
+    replacement: `      return commit(token, state, text, undefined, "transcript", terminalOutcome, evidence.bcpOrigin);`,
+  },
+  {
+    id: 'clear-origin-reconciled',
+    purpose: 'Drop stale bcpOrigin when a reconciled record is cleared.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `resultSummary: undefined,
+        lastStatusError: undefined,`,
+    replacement: `resultSummary: undefined,
+        bcpOrigin: undefined,
+        lastStatusError: undefined,`,
+  },
+  {
+    id: 'clear-origin-failed',
+    purpose: 'Drop stale bcpOrigin when a failed record is cleared.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `resultSummary: undefined,
+      lastStatusError:`,
+    replacement: `resultSummary: undefined,
+      bcpOrigin: undefined,
+      lastStatusError:`,
+  },
+  {
+    id: 'update-origin-merge',
+    purpose: 'Merge bcpOrigin on record updates so identity survives activity revisions.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `resultSummary: input.resultSummary ?? existing.resultSummary,
+      lastStatusError:`,
+    replacement: `resultSummary: input.resultSummary ?? existing.resultSummary,
+      bcpOrigin: input.bcpOrigin ?? existing.bcpOrigin,
+      lastStatusError:`,
+  },
+  {
+    id: 'commit-queued-transcript-origin',
+    purpose: 'Carry the exact queued prompt/terminal identity through the inspectQueuedAnswer commit, independently of the ordinary completion path. Re-anchored for 3.0.7: the queued commit now uses the destructured state/text.',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `    return commit(token, state, text, undefined, "transcript");`,
+    replacement: `    return commit(token, state, text, undefined, "transcript", undefined, evidence.bcpOrigin);`,
+  },
+  {
+    id: 'shim-context-tail-transcript-identity',
+    purpose: 'Bind each tail-sliced transcript message to its real run input through the ordered host context (3.0.6 split the context shim return).',
+    modules: [ZCHUNK_307, WCHUNK_307],
+    anchor: `            data: tail.map(toV1Message),`,
+    replacement: `            data: toV1Transcript(tail),`,
+  },
+  // --- agent pin trio: real patches in the server entry only (the setup
+  // instances and registry projection live there; the index closure needs no
+  // change, so these patches list no index application).
+  {
+    id: 'native-explicit-pin-retain',
+    purpose: 'Retain live nonempty native system/mode after the setup instance first writes its projection, without caching field values; cleared fields fall back to that projection. OMO model/variant/permissions and v1 bytes remain unchanged. Server entry only.',
+    modules: [SRV_307],
+    anchor: `function applyAgentToDraft(draft, name, v1, compiledPermissions) {
+  const model = parseModelRef(v1.model);
+  draft.update(name, (agent) => {
+    agent.id = name;
+    agent.name = name;
+    agent.mode = v1.mode ?? (name === "orchestrator" ? "primary" : "subagent");
+    agent.hidden = v1.hidden === true;
+    if (typeof v1.description === "string")
+      agent.description = v1.description;
+    if (typeof v1.color === "string")
+      agent.color = v1.color;
+    if (typeof v1.prompt === "string")
+      agent.system = v1.prompt;`,
+    replacement: `function applyAgentToDraft(draft, name, v1, compiledPermissions, nativeAgentWrites) {
+  const model = parseModelRef(v1.model);
+  draft.update(name, (agent) => {
+    const projectedSystem = typeof v1.prompt === "string" ? v1.prompt : undefined;
+    const projectedMode = v1.mode ?? (name === "orchestrator" ? "primary" : "subagent");
+    const written = nativeAgentWrites.has(name);
+    const nativeSystem = written && typeof agent.system === "string" && agent.system.length > 0 ? agent.system : undefined;
+    const nativeMode = written && typeof agent.mode === "string" && agent.mode.length > 0 ? agent.mode : undefined;
+    agent.id = name;
+    agent.name = name;
+    agent.mode = nativeMode ?? projectedMode;
+    agent.hidden = v1.hidden === true;
+    if (typeof v1.description === "string")
+      agent.description = v1.description;
+    if (typeof v1.color === "string")
+      agent.color = v1.color;
+    const explicitSystem = nativeSystem ?? projectedSystem;
+    if (explicitSystem !== undefined)
+      agent.system = explicitSystem;
+    nativeAgentWrites.add(name);`,
+  },
+  {
+    id: 'native-pin-instance-state',
+    purpose: 'Own first-write tracking inside each v2 setup instance; no module-global pin cache or cross-project state. Server entry only.',
+    modules: [SRV_307],
+    anchor: `      let finalizedRegistry;`,
+    replacement: `      const nativeAgentWrites = new Set();
+      let finalizedRegistry;`,
+  },
+  {
+    id: 'native-pin-instance-call',
+    purpose: 'Pass the setup-local first-write set to each registry projection write. Server entry only.',
+    modules: [SRV_307],
+    anchor: `          applyAgentToDraft(draft, name, cfg, registry.nativePolicies[name]?.rules);`,
+    replacement: `          applyAgentToDraft(draft, name, cfg, registry.nativePolicies[name]?.rules, nativeAgentWrites);`,
+  },
+];
+
+const OMO_307_ENTRY_MODULES = { index: IDX_307, server: SRV_307 };
+
+// Modules whose patched bodies reference the delivery helper. Only the two
+// entry modules do; the patched chunks use only in-module symbols.
+const OMO_307_HELPER_IMPORT_MODULES = new Set([IDX_307, SRV_307]);
+
+function omo307Applications(patch) {
+  return patch.applications ?? patch.modules.map(path => ({ path, anchor: patch.anchor, replacement: patch.replacement }));
+}
+
+/**
+ * Patch the OMO 3.0.7 multi-module dist. `modules` maps every module of the
+ * selected entry's reachable closure (package-relative POSIX paths) to its
+ * exact upstream source; keys must equal OMO_307_MODULES[entry]'s key set and
+ * every digest must match before any replacement happens. Returns the patched
+ * Map and the flat patch report [{id, path, purpose}].
+ */
+export function patchOmo307(modules, entry) {
+  const expected = OMO_307_MODULES[entry];
+  if (!expected) {
+    throw new Error('Unsupported OMO 3.0.7 entry: ' + entry + ' (expected index or server)');
+  }
+  if (!(modules instanceof Map)) {
+    throw new Error('patchOmo307 expects modules as a Map<packageRelativePath, source>, got ' + (modules === null ? 'null' : typeof modules));
+  }
+  const expectedKeys = Object.keys(expected);
+  const actualKeys = [...modules.keys()];
+  const missing = expectedKeys.filter(key => !modules.has(key));
+  const extra = actualKeys.filter(key => !expected[key]);
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error('OMO 3.0.7 ' + entry + ' module set mismatch; missing: [' + missing.join(', ') + '] unexpected: [' + extra.join(', ') + ']' +
+      ' — pass exactly the entry\'s reachable module closure as keyed by OMO_307_MODULES.' + entry);
+  }
+  // Phase 1: verify every digest before touching anything.
+  for (const key of expectedKeys) {
+    const source = modules.get(key);
+    assert.equal(typeof source, 'string', 'OMO 3.0.7 module ' + key + ' source must be a string');
+    const digest = createHash('sha256').update(source).digest('hex');
+    assert.equal(digest, expected[key], 'OMO 3.0.7 ' + entry + ' upstream digest mismatch for ' + key);
+  }
+  // Phase 2: compute all patched sources (anchor assertions happen here,
+  // before any writeback).
+  const patched = new Map();
+  const report = [];
+  for (const key of expectedKeys) {
+    patched.set(key, modules.get(key));
+  }
+  for (const key of expectedKeys) {
+    let source = patched.get(key);
+    function once(before, after) {
+      assert.equal(source.split(before).length, 2, 'OMO patch anchor is not unique in ' + key + ': ' + before.slice(0, 90));
+      source = source.replace(before, after);
+    }
+    for (const patch of PATCHES_3_0_7) {
+      for (const application of omo307Applications(patch)) {
+        if (application.path !== key) continue;
+        once(application.anchor, application.replacement);
+        report.push({ id: patch.id, path: key, purpose: patch.purpose });
+      }
+    }
+    if (OMO_307_HELPER_IMPORT_MODULES.has(key)) {
+      const depth = key.split('/').length - 1;
+      source = 'import { deliveryMetadata, deliverySuffix, annotateDeliveryPart, presentDelivery } from "' + '../'.repeat(depth) + 'omo-delivery.mjs";\n' + source;
+    }
+    patched.set(key, source);
+  }
+  // Phase 3: writeback.
+  for (const [key, source] of patched) {
+    modules.set(key, source);
+  }
+  return { modules, patches: report };
+}
+
 export function describeOmoPatches(version) {
   if (version === '3.0.1') return PATCHES_3_0_1.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.3') return PATCHES_3_0_3.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.4') return PATCHES_3_0_4.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.5') return PATCHES_3_0_5.map(({id, purpose}) => ({id, purpose}));
   if (version === '3.0.6') return PATCHES_3_0_6.map(({id, purpose}) => ({id, purpose}));
+  if (version === '3.0.7') return PATCHES_3_0_7.map(patch => ({
+    id: patch.id,
+    purpose: patch.purpose,
+    modules: [...new Set(omo307Applications(patch).map(application => application.path))],
+  }));
   if (version === '2.2.25') return [{id: 'legacy-2.2.25', purpose: 'Full 2.2.25 patch set (rollback-compatible legacy path).'}];
   throw new Error('Unsupported OMO version: ' + version);
 }
@@ -1254,6 +2009,11 @@ function patchOmo3(original, version, entry) {
 export function patchOmo(original, options = {}) {
   const digest = createHash('sha256').update(original).digest('hex');
   const detected = omoTargetFor(digest);
+  if (detected?.version === '3.0.7') {
+    throw new Error('OMO 3.0.7 moved to a multi-module dist layout and cannot be patched from a single bundle. ' +
+      'Build a Map of {packageRelativePath: source} holding exactly the reachable module closure of the ' + detected.entry +
+      ' entry (keys per OMO_307_MODULES.' + detected.entry + ') and call patchOmo307(modules, \'' + detected.entry + '\').');
+  }
   if (!detected) {
     throw new Error('Unsupported oh-my-opencode-slim source (sha256 ' + digest + '); supported: ' +
       Object.entries(OMO_TARGETS).map(([v, t]) => v + '(' + Object.keys(t.entries).join('/') + ')').join(', '));

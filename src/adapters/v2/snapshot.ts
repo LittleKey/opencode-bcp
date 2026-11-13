@@ -39,6 +39,10 @@ type Obs = {
   completed?: number
   error?: unknown
   parentID?: string // 适配层建立的输入关联（wire 无此字段）
+  // 单调隐私元数据（最窄）：任一来源（prompt 现场投递 / context wire）曾见 no-store
+  // 标记即置位，永不清除、永不被更宽松的后续文本覆盖——留存读取入口据此做保守并集，
+  // 防止"缓存已见 no-store 被新鲜宽松文本洗白"。有界缓存内生命周期，不跨会话持久。
+  noStore?: true
   tools: ToolObs[]
 }
 
@@ -50,6 +54,9 @@ const isWireAssistantContent = (part: unknown): part is { type: string; text?: u
 
 const num = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) ? value : undefined)
 const str = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined)
+// no-store 标记字面量（与 src/markers.ts 同源；snapshot 层只做单调置位，不做语义）。
+const NO_STORE_MARKER = "<!-- bcp:no-store -->"
+const mentionsNoStore = (text: unknown): boolean => typeof text === "string" && text.includes(NO_STORE_MARKER)
 
 /** 有界、按会话隔离的宿主消息观测缓存。 */
 export class HostSnapshot {
@@ -94,6 +101,7 @@ export class HostSnapshot {
     const obs = this.upsert(session, id, "user")
     if (text !== undefined) obs.text = text
     if (created !== undefined) obs.created = created
+    if (mentionsNoStore(text)) obs.noStore = true
   }
 
   /** session.text.ended：assistant 正文段（ordinal 保序）。 */
@@ -158,6 +166,7 @@ export class HostSnapshot {
         const obs = this.upsert(session, id, "user", wire.type === "synthetic")
         if (typeof wire.text === "string") obs.text = wire.text
         if (created !== undefined) obs.created = created
+        if (mentionsNoStore(wire.text)) obs.noStore = true
       } else if (wire.type === "assistant") {
         const obs = this.upsert(session, id, "assistant")
         if (typeof wire.agent === "string") obs.agent = wire.agent

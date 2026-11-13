@@ -228,13 +228,17 @@ describe("install.sh: --host selection", () => {
   })
 
   const liveV2Test = REAL_V2_BIN ? test : test.skip
-  liveV2Test("explicit real v2 binary parses 'opencode v2.0.20' and installs into the sandbox only", async () => {
+  liveV2Test("explicit real supported v2 binary reports its version and installs into the sandbox only", async () => {
     expect(existsSync(REAL_V2_BIN)).toBe(true)
     const sb = makeSandbox()
     try {
+      const probe = Bun.spawnSync([REAL_V2_BIN, "--version"], { env: sb.env(), stdout: "pipe", stderr: "pipe" })
+      expect(probe.exitCode).toBe(0)
+      const version = probe.stdout.toString().match(/\d+\.\d+\.\d+/)?.[0]
+      expect(version).toMatch(/^2\./)
       const r = await runScript(INSTALL, ["--project", sb.proj, "--host", REAL_V2_BIN], sb.env())
       expect(r.code).toBe(0)
-      expect(r.stdout).toContain("host: v2 2.0.20")
+      expect(r.stdout).toContain(`host: v2 ${version} via ${REAL_V2_BIN}\n`)
       expect(readFileSync(join(sb.proj, ".opencode", "plugin", "blackboard.ts"), "utf8")).toEqual(
         readFileSync(ensureBundle(), "utf8"),
       )
