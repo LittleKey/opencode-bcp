@@ -86,6 +86,32 @@ function verify(path: string, root: string, taskId: string): Meta | undefined {
   if (readdirSync(path).sort().join(",") !== ["meta.json", ...m.parts.map(p => p.file)].sort().join(",")) return
   return m
 }
+type IndexRow = { schema: "bcp.handoff-index.v1"; origin: StoredOrigin; observedAt: number; version: string; path: string }
+const manifestPath = (m: { origin: StoredOrigin; version: string }) => `${component(m.origin.sessionId)}/${originKey(m.origin)}/${m.version}/meta.json`
+const indexRow = (m: Pick<Meta, "origin" | "observedAt" | "version">): IndexRow => ({ schema: "bcp.handoff-index.v1", origin: stableStoredOrigin(m.origin), observedAt: m.observedAt, version: m.version, path: manifestPath(m) })
+const encodeRow = (row: IndexRow) => JSON.stringify(row)
+  .replace(/[<>&`\[\]()\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`) + "\n"
+// Only index bytes are scanned on valid ordinary saves, never historical bodies.
+// Unrelated crash-committed omissions may remain until their exact duplicate
+// is saved or an invalid/missing index triggers a verified full rebuild.
+function membership(index: string): Set<string> | undefined {
+  if (!existsSync(index)) return
+  const bytes = read(index)
+  const text = bytes.toString("utf8")
+  if (!Buffer.from(text).equals(bytes) || (text !== "" && !text.endsWith("\n"))) return
+  const paths = new Set<string>()
+  for (const line of text === "" ? [] : text.slice(0, -1).split("\n")) {
+    let row: IndexRow
+    try { row = JSON.parse(line) } catch { return }
+    if (!row || typeof row !== "object" || !keys(row, ["schema", "origin", "observedAt", "version", "path"]) ||
+      row.schema !== "bcp.handoff-index.v1" || !validStoredOrigin(row.origin) ||
+      !Number.isFinite(row.observedAt) || row.observedAt < 0 || typeof row.version !== "string" ||
+      !/^[a-f0-9]{64}$/.test(row.version) || row.path !== manifestPath(row) ||
+      line + "\n" !== encodeRow(indexRow(row)) || paths.has(row.path)) return
+    paths.add(row.path)
+  }
+  return paths
+}
 function rebuild(root: string, taskId: string, tmp: string) {
   const records: Meta[] = []
   for (const s of readdirSync(root)) {
@@ -102,15 +128,18 @@ function rebuild(root: string, taskId: string, tmp: string) {
     }
   }
    records.sort((a, b) => b.observedAt - a.observedAt || (JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0))
-  // Fenced JSONL, with markup/fence/control/bidi bytes encoded as JSON escapes.
-  // Readers can JSON.parse each line to recover the exact source identity.
-  const text = "# Saved handoff copies\n\n```jsonl\n" + records.map(m =>
-    JSON.stringify({ origin: m.origin, observedAt: m.observedAt, version: m.version, path: `${component(m.origin.sessionId)}/${originKey(m.origin)}/${m.version}/meta.json` })
-      .replace(/[<>&`\[\]()\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
-  ).join("\n") + "\n```\n"
-  const index = join(root, "index.md")
+   const text = records.map(m => encodeRow(indexRow(m))).join("")
+   const index = join(root, "index.jsonl")
   if (existsSync(index)) safe(index, "file")
   try { write(tmp, text); renameSync(tmp, index); syncDir(root) } finally { rmSync(tmp, { force: true }) }
+}
+function updateIndex(root: string, taskId: string, tmp: string, meta: Meta) {
+  const index = join(root, "index.jsonl")
+  const paths = membership(index)
+  if (!paths) { rebuild(root, taskId, tmp); return }
+  if (paths.has(manifestPath(meta))) return
+  const fd = openSync(index, C.O_WRONLY | C.O_APPEND | C.O_NOFOLLOW)
+  try { writeFileSync(fd, encodeRow(indexRow(meta)), "utf8"); fsyncSync(fd) } finally { closeSync(fd) }
 }
 
 /** Pure local persistence only. No retention/deletion/backfill or permission service.
@@ -146,7 +175,7 @@ export async function archiveHandoff(binding: HandoffBinding, record: HandoffRec
     lock, root, session, message, pending,
     ...parts.map(p => join(pending, p.file)), join(pending, "meta.json"),
     target, ...parts.map(p => join(target, p.file)), join(target, "meta.json"),
-    indexTmp, join(root, "index.md"),
+     indexTmp, join(root, "index.jsonl"),
   ]
   await options?.authorizeWrites?.(Object.freeze(writes))
   if (options?.signal?.aborted) return skip("cancelled")
@@ -188,6 +217,7 @@ export async function archiveHandoff(binding: HandoffBinding, record: HandoffRec
     // A received occurrence is immutable; different bytes are not a revision.
     // Pending directories are not committed records; every version-shaped
     // directory must validate before it can establish or confirm that identity.
+    let persisted = meta
     for (const entry of readdirSync(message)) {
       if (!/^[a-f0-9]{64}$/.test(entry)) {
         if (entry.startsWith(".pending-")) continue
@@ -196,7 +226,8 @@ export async function archiveHandoff(binding: HandoffBinding, record: HandoffRec
       const prior = verify(join(message, entry), root, binding.taskId)
       if (!prior) throw new Error("archive_message_invalid_record")
        if (JSON.stringify(stableStoredOrigin(prior.origin)) !== JSON.stringify(meta.origin)) throw new Error("archive_message_identity_conflict")
-      if (prior.version !== meta.version) throw new Error("archive_conflict")
+       if (prior.version !== meta.version) throw new Error("archive_conflict")
+       persisted = prior
     }
     let status: "stored" | "duplicate" = "stored"
     let indexStale = false
@@ -219,7 +250,7 @@ export async function archiveHandoff(binding: HandoffBinding, record: HandoffRec
       } finally { rmSync(tmp, { recursive: true, force: true }) }
     }
     const result = { status, path: join(target, "meta.json"), ...(parts.length === 1 ? { body: join(target, "body.txt") } : {}), version }
-    try { rebuild(root, binding.taskId, indexTmp) } catch { return { ...result, indexStale: true } }
+    try { updateIndex(root, binding.taskId, indexTmp, persisted) } catch { return { ...result, indexStale: true } }
     return indexStale ? { ...result, indexStale: true } : result
   } finally {
     if (fd !== undefined) { if (locked) libc.symbols.flock(fd, 8); closeSync(fd) }

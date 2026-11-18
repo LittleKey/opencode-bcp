@@ -30,7 +30,7 @@ test("exact UTF-8, meta/body paths, complete hash and observation-independent du
   expect((await archiveHandoff(binding, { ...record, observedAt: 999 })).status).toBe("duplicate")
   expect(readFileSync(stored.path!, "utf8")).toBe(before)
   expect(JSON.parse(before).schema).toBe("bcp.handoff.v1")
-  const index = readFileSync(join(root, "archive/index.md"), "utf8")
+  const index = readFileSync(join(root, "archive/index.jsonl"), "utf8")
   expect(index).not.toContain("description")
   expect(index).not.toContain("discussion")
   await expect(archiveHandoff(binding, { ...record, texts: [{ ordinal: 0, text: "revision" }] })).rejects.toThrow("archive_conflict")
@@ -60,8 +60,9 @@ test("historical submitted metadata remains navigable without permitting new wri
   const metadata = JSON.stringify({ ...meta, origin })
   writeFileSync(join(historical, "meta.json"), metadata)
   writeFileSync(join(historical, "body.txt"), record.texts[0]!.text)
+  rmSync(join(root, "archive/index.jsonl"))
   expect((await archiveHandoff(binding, record)).status).toBe("duplicate")
-  const index = readFileSync(join(root, "archive/index.md"), "utf8")
+  const index = readFileSync(join(root, "archive/index.jsonl"), "utf8")
   const entries = index.split("\n").filter(line => line.startsWith("{")).map(line => JSON.parse(line))
   expect(entries).toHaveLength(2)
   const entry = entries.find(entry => entry.origin.kind === "submitted-content")
@@ -93,7 +94,7 @@ test("multipart ordered manifest and concurrent calls serialize recheck", async 
   const meta = JSON.parse(readFileSync(results[0]!.path!, "utf8"))
   expect(meta.parts.map((p: { ordinal: number }) => p.ordinal)).toEqual([0, 2])
   expect(readFileSync(join(dirname(results[0]!.path!), "part-2.txt"), "utf8")).toBe("\n第二段")
-  expect(readFileSync(join(root, "archive/index.md"), "utf8").split("\n").filter(x => x.startsWith("{"))).toHaveLength(1)
+  expect(readFileSync(join(root, "archive/index.jsonl"), "utf8").split("\n").filter(x => x.startsWith("{"))).toHaveLength(1)
 })
 test("in-lock recheck denies before directories and precommit recheck removes staging", async () => {
   const { root, binding, record } = fixture()
@@ -155,14 +156,14 @@ test("OS lock serializes independent processes and preserves all records", async
     const error = await new Response(child.stderr).text()
     expect({ exit: await child.exited, error }).toEqual({ exit: 0, error: "" })
   }
-  expect(readFileSync(join(root, "archive/index.md"), "utf8").split("\n").filter(x => x.startsWith("{"))).toHaveLength(4)
+  expect(readFileSync(join(root, "archive/index.jsonl"), "utf8").split("\n").filter(x => x.startsWith("{"))).toHaveLength(4)
 })
-test("hostile identities stay in an encoded fenced source block", async () => {
+test("hostile identities stay escaped in canonical JSONL", async () => {
   const { root, binding, record } = fixture()
   const agent = '[x](https://evil.invalid)<img src=x>``` \u202e\u0001'
   expect((await archiveHandoff(binding, { ...record, origin: { ...record.origin, agent } })).status).toBe("stored")
-  const index = readFileSync(join(root, "archive/index.md"), "utf8")
-  expect(index.match(/```/g)).toHaveLength(2)
+  const index = readFileSync(join(root, "archive/index.jsonl"), "utf8")
+  expect(index).not.toContain("```")
   expect(index).not.toContain("<img")
   expect(index).not.toContain("[x](")
   expect(index).not.toContain("\u202e")
@@ -171,9 +172,9 @@ test("hostile identities stay in an encoded fenced source block", async () => {
 test("persistent root task identity rejects different tasks and legacy roots", async () => {
   const { root, binding, record } = fixture()
   await archiveHandoff(binding, record)
-  const before = readFileSync(join(root, "archive/index.md"), "utf8")
+  const before = readFileSync(join(root, "archive/index.jsonl"), "utf8")
   await expect(archiveHandoff({ ...binding, taskId: "other" }, record)).rejects.toThrow("archive_task_root_conflict")
-  expect(readFileSync(join(root, "archive/index.md"), "utf8")).toBe(before)
+  expect(readFileSync(join(root, "archive/index.jsonl"), "utf8")).toBe(before)
   for (const bound of [false, true]) {
     const f = fixture()
     mkdirSync(join(f.root, "archive"))
@@ -186,17 +187,21 @@ test("persistent root task identity rejects different tasks and legacy roots", a
 test("post-publication index failure reports stored/indexStale and retries repair", async () => {
   const { root, binding, record } = fixture()
   await archiveHandoff(binding, record)
-  rmSync(join(root, "archive/index.md"))
-  mkdirSync(join(root, "archive/index.md"))
+  rmSync(join(root, "archive/index.jsonl"))
+  mkdirSync(join(root, "archive/index.jsonl"))
   const next = { ...record, origin: { ...record.origin, messageId: "second" } }
   const result = await archiveHandoff(binding, next)
   expect(result.status).toBe("stored")
   expect(result.indexStale).toBe(true)
   expect(readFileSync(result.body!, "utf8")).toBe(record.texts[0]!.text)
-  rmSync(join(root, "archive/index.md"), { recursive: true })
+  rmSync(join(root, "archive/index.jsonl"), { recursive: true })
   const retry = await archiveHandoff(binding, next)
   expect(retry.status).toBe("duplicate")
   expect(retry.indexStale).toBeUndefined()
+  const repaired = readFileSync(join(root, "archive/index.jsonl"), "utf8")
+  expect(repaired.trimEnd().split("\n")).toHaveLength(2)
+  await archiveHandoff(binding, { ...next, observedAt: 999 })
+  expect(readFileSync(join(root, "archive/index.jsonl"), "utf8")).toBe(repaired)
 })
 test("permanent lock syscall failure is bounded and successful retry works", async () => {
   let calls = 0
@@ -205,6 +210,58 @@ test("permanent lock syscall failure is bounded and successful retry works", asy
   let retries = 0
   await acquireLock(() => retries++ < 1 ? -1 : 0, 100)
   expect(retries).toBe(2)
+})
+test("append preserves prefix, duplicates preserve bytes, and missing membership uses original observation", async () => {
+  const { root, binding, record } = fixture()
+  await archiveHandoff(binding, record)
+  const index = join(root, "archive/index.jsonl")
+  const first = readFileSync(index, "utf8")
+  const next = { ...record, origin: { ...record.origin, messageId: "next" } }
+  await archiveHandoff(binding, next)
+  const both = readFileSync(index, "utf8")
+  expect(both.startsWith(first)).toBe(true)
+  expect(both.trimEnd().split("\n")).toHaveLength(2)
+  await archiveHandoff(binding, { ...next, observedAt: 999 })
+  expect(readFileSync(index, "utf8")).toBe(both)
+  writeFileSync(index, first)
+  await archiveHandoff(binding, { ...next, observedAt: 999 })
+  expect(readFileSync(index, "utf8")).toBe(both)
+})
+test("invalid indexes rebuild verified records while legacy markdown stays frozen", async () => {
+  const { root, binding, record } = fixture()
+  await archiveHandoff(binding, record)
+  const index = join(root, "archive/index.jsonl")
+  const original = readFileSync(index, "utf8")
+  const legacy = join(root, "archive/index.md")
+  writeFileSync(legacy, "frozen legacy\n")
+  for (const bad of ["{bad}\n", original.slice(0, -1), original + original, original.replace("bcp.handoff-index.v1", "unknown")]) {
+    writeFileSync(index, bad)
+    expect((await archiveHandoff(binding, { ...record, observedAt: 999 })).indexStale).toBeUndefined()
+    expect(readFileSync(index, "utf8")).toBe(original)
+  }
+  rmSync(index)
+  await archiveHandoff(binding, record)
+  expect(readFileSync(index, "utf8")).toBe(original)
+  expect(readFileSync(legacy, "utf8")).toBe("frozen legacy\n")
+})
+test("valid incomplete index does not scan unrelated bodies; exact retry repairs omission", async () => {
+  const { root, binding, record } = fixture()
+  const first = await archiveHandoff(binding, record)
+  const index = join(root, "archive/index.jsonl")
+  writeFileSync(index, "")
+  const next = { ...record, origin: { ...record.origin, messageId: "next" } }
+  // A valid index is not a complete database: ordinary saves leave crash omissions.
+  const body = readFileSync(first.body!)
+  rmSync(first.body!)
+  symlinkSync(first.path!, first.body!)
+  expect((await archiveHandoff(binding, next)).indexStale).toBeUndefined()
+  expect(readFileSync(index, "utf8").trimEnd().split("\n")).toHaveLength(1)
+  rmSync(first.body!)
+  writeFileSync(first.body!, body)
+  await archiveHandoff(binding, { ...record, observedAt: 999 })
+  const rows = readFileSync(index, "utf8").trimEnd().split("\n").map(line => JSON.parse(line))
+  expect(rows).toHaveLength(2)
+  expect(rows.find(row => row.origin.messageId === record.origin.messageId).observedAt).toBe(123)
 })
 test("write authorization rejects before even creating the lock", async () => {
   const { root, binding, record } = fixture()
@@ -249,7 +306,8 @@ test("authorization enumerates the actual final and unique staging/index paths",
   expect(authorized).toContain(join(dirname(result.path!), "part-2.txt"))
   const indexTemp = authorized.find(p => /\/\.index-[^/]+$/.test(p))!
   expect(indexTemp).toBeDefined()
-  expect(authorized).toContain(join(root, "archive/index.md"))
+  expect(authorized).toContain(join(root, "archive/index.jsonl"))
+  expect(authorized).not.toContain(join(root, "archive/index.md"))
   expect(readdirSync(join(root, "archive")).filter(p => p.startsWith(".index-"))).toEqual([])
   expect(authorized).toHaveLength(14)
 })

@@ -33,6 +33,11 @@ rechecks it before writing; a change during the operation denies that save.
   `projectId`, and `directory`, with explicit `allowArchive: true` and
   `sharedReadersApproved: true`. The task root must already exist inside that
   worktree at `.opencode/work/<taskId>`.
+  Allocate the root once for a logical task and reuse it across runs in the same
+  worktree. If a child needs to save its own reply, configure a separate caller
+  entry with that same `taskId` and `taskRoot`; do not reuse the parent's caller
+  ID or replace its grant. The options must contain only one matching scope per
+  caller. Change the binding explicitly when that caller moves to another task.
 - `policyFile` names a canonical absolute, owner-private JSON file outside the
   project. The `bcp.operator-handoff-policy.v1` document grants exact matches
   on `taskId`, `taskRoot`, `callerSessionId`, `agent` and `sourceSessionId`.
@@ -62,6 +67,8 @@ the same task. Parallel agents share that task root via normal dispatch.
   or explicit version snapshots rather than overwriting them.
 - `archive/`: BCP-only copies, metadata and derived index. The layout helper
   returns this path but does not create it or its lock: the core owns creation.
+  Copies are nested by encoded **source** session, not by the saving caller.
+  A main session may handle multiple tasks; a session ID is not a task ID.
 - `scratch/<run-id>/`: isolated disposable logs and large temporary outputs.
 - Formal deliverables stay in existing version-controlled project locations.
 
@@ -114,9 +121,23 @@ Navigation contains source/version, not descriptions, previews or title
 fallback. Agents do not repair archive bodies or indexes. No new author
 tags/output protocol are required.
 
-Publication must be no-clobber with a fixed-inode task lock, policy/identity
-rechecks and derived atomic index replacement. An index may lag committed
-records; do not claim multi-file transactions or power-loss durability.
+Publication is no-clobber, with a fixed-inode task lock and policy/identity
+rechecks. `archive/index.jsonl` is a derived task-level index. Normal saves
+append a single complete line; a retry of an already indexed copy leaves it
+unchanged. Line order is index insertion order, not a guarantee of newest first.
+Existing `index.md` files remain historical snapshots; the first authorized
+save to an old root builds the new index from verified manifests and bodies.
+Existing record paths do not move.
+
+Only read complete newline-terminated rows. The index exposes source IDs and
+paths: readers of the shared index must be approved for that metadata, and an
+index entry does not grant access to the body. A failed index update after
+publication can return `index_stale` with a valid copy path. A syntactically
+valid index can still omit a record after interruption; retrying that exact
+copy can fill its entry. An unrelated save is not a full reconciliation.
+Missing or damaged indexes can be rebuilt from verified records; the index
+is not evidence that an unlisted copy is absent. Do not claim multi-file
+transactions or power-loss durability.
 Deletion/revocation/replay safety and real host/request non-interference require
 separate verification; do not infer them from a successful build or fixture.
 The parent reconciles core/adapter contracts and final validation. Synthetic
