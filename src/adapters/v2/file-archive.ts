@@ -99,7 +99,12 @@ const description = "Save an authorized own-session or direct-child stored assis
 export const FileArchiveV2Plugin: Plugin.Plugin = {
   id: "opencode-bcp-file-archive",
   setup: async ctx => {
-    const raw: unknown = ctx.options
+    const configured: unknown = ctx.options
+    // Only a trusted package entry can supply this function. Tool arguments
+    // and plain plugin JSON cannot select a loader or its configuration path.
+    const load = object(configured) && typeof configured.loadOperatorOptions === "function"
+      ? configured.loadOperatorOptions as () => Promise<unknown>
+      : undefined
     // A stable schema even when unconfigured/revoked; execute fails closed.
     await ctx.tool.transform(editor => {
       editor.add({
@@ -107,12 +112,8 @@ export const FileArchiveV2Plugin: Plugin.Plugin = {
         execute: async (input: unknown, tctx: ToolContext) => {
           const parsed = saveInput.safeParse(input)
           if (!parsed.success) return { content: JSON.stringify({ status: "denied", reason: "invalid_input" }) }
-          if (!object(raw) || raw.enabled !== true || !object(raw.connection) ||
-            !Array.isArray(raw.taskScopes) || raw.taskScopes.length > 128 ||
-            (typeof raw.policy !== "function" && typeof raw.policyFile !== "string") ||
-            typeof ctx.permission?.assert !== "function")
+          if (typeof ctx.permission?.assert !== "function")
             return { content: JSON.stringify({ status: "denied", reason: "trusted_configuration_required" }) }
-          const options = raw as unknown as FileArchiveOptions
           const ac = new AbortController()
           const abort = () => ac.abort()
           tctx.signal.addEventListener("abort", abort, { once: true })
@@ -140,6 +141,19 @@ export const FileArchiveV2Plugin: Plugin.Plugin = {
             finally { timer = setTimeout(abort, 5000) }
           }
           try {
+            const readOptions = async () => {
+              signal.throwIfAborted()
+              return load ? await bounded(Promise.resolve().then(load)) : configured
+            }
+            const raw = await readOptions()
+            if (!object(raw) || raw.enabled !== true || !object(raw.connection) ||
+              !Array.isArray(raw.taskScopes) || raw.taskScopes.length > 128 ||
+              (typeof raw.policyFile !== "string" && (load || typeof raw.policy !== "function")))
+              return { content: JSON.stringify({ status: "denied", reason: "trusted_configuration_required" }) }
+            const options = raw as unknown as FileArchiveOptions
+            // The installer supplies a fresh JSON object each time. Refuse to
+            // publish if the operator removed or changed its authority.
+            const operatorPin = load ? JSON.stringify(raw) : undefined
             const url = new URL(options.connection.baseUrl)
             if (!["127.0.0.1", "[::1]"].includes(url.hostname) ||
               url.protocol !== "http:" || url.username || url.password || url.search || url.hash ||
@@ -163,6 +177,7 @@ export const FileArchiveV2Plugin: Plugin.Plugin = {
             const sourceSessionId = parsed.data.sessionId
             const authority = async (prompt = false) => {
               signal.throwIfAborted()
+              if (load && JSON.stringify(await readOptions()) !== operatorPin) return fail("denied")
               if (options.enabled !== true || !options.taskScopes.some(s =>
                 JSON.stringify(s) === JSON.stringify(scope))) return fail("denied")
               const server = await client.server.info(req)

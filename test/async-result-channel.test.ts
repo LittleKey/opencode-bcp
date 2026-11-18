@@ -1,8 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
 import { OpenCode, type SessionMessageGetInput, type MessageListInput, type SessionMessageAssistant } from '@opencode/client';
 
 // Contract harness: real public SDK serializer, synthetic HTTP store and dispatch.
@@ -94,41 +92,4 @@ test('async acquisition: real SDK HTTP reads + explicit tool-shaped retrieval (s
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
-});
-
-test('pinned OMO actual notification render and promptParent transport (SDK call boundary only)', async () => {
-  const root = process.env.OMO_307_PACKAGE;
-  assert.ok(root, 'Set OMO_307_PACKAGE to the existing pinned stock package');
-  const source = readFileSync(`${root}/dist/server/index.js`, 'utf8');
-  const start = source.indexOf('const text = [\n        `<task id="${run.taskID}" state="${state}">`,');
-  const stop = source.indexOf(';', source.indexOf('].join(', start));
-  assert.ok(start >= 0 && stop > start);
-  const childBody = 'child body\n' + '字'.repeat(40_000);
-  const notificationBody: string = vm.runInNewContext(source.slice(start, stop + 1) + '\ntext;', {
-    run: { taskID: 'synthetic' }, state: 'completed', record: { resultSummary: childBody },
-    fallbackText: 'fallback', tag: 'task_result', summary: 'completed',
-  });
-  assert.ok(notificationBody.includes(childBody));
-  assert.notEqual(notificationBody, childBody);
-  assert.ok(Buffer.byteLength(notificationBody) > 65_536);
-  const promptStart = source.indexOf('  function promptParent(');
-  const promptStop = source.indexOf('  async function sendFallbackNotice(', promptStart);
-  assert.ok(promptStart >= 0 && promptStop > promptStart);
-  const calls: unknown[] = [];
-  const prompt = vm.runInNewContext(source.slice(promptStart, promptStop) + '\npromptParent;', {
-    options: { input: { directory: '/synthetic' } },
-    getClient: () => ({ session: { promptAsync: async (request: unknown) => { calls.push(request); } } }),
-    createInternalAgentTextPart: (text: string, metadata: unknown) => ({ type: 'text', synthetic: true, text, metadata }),
-  });
-  prompt(parent, undefined, notificationBody, { revision: 1 });
-  prompt(parent, undefined, notificationBody, { revision: 2 });
-  await Promise.resolve();
-  const serialized = JSON.parse(JSON.stringify(calls));
-  assert.equal(serialized.length, 2);
-  for (const request of serialized) {
-    assert.equal(request.delivery, 'queue');
-    assert.equal(request.modelSelection, 'inherit');
-    assert.equal(request.body.parts[0].text, notificationBody);
-  }
-  // No claim about guest display truncation or live host storage/queue delivery.
 });

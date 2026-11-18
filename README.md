@@ -12,10 +12,10 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 | 宿主 | 状态 |
 |---|---|
-| opencode 1.x（v1 插件 API） | 2.0.0 组合已安装到生产配置，声明最低 1.18.29。实际宿主现为 1.18.35：2026-10-09 随 OMO 3.0.3 升级在该二进制重做隔离检查并完成生产进程核验（见 [OMO 3.0.3 记录](integrations/omo-slim/README.md)）。v2.0.0 验收时点为 1.18.33：独立新进程核对配置、文件模式及认证来源，通过服务端 API 完成一次实际模型冒烟。见 [v2.0.0 验收](harness/acceptance/v2.0.0.md) |
+| opencode 1.x（v1 插件 API） | 旧 Blackboard 入口的历史最低版本声明为 1.18.29；见 [2.0.0 验收](harness/acceptance/v2.0.0.md)。此记录不适用于新的 V2 快照入口。 |
 | opencode 2.0.20+（v2 插件 API） | 与 v1 共用同一 dual-entry 构建产物。2.0.20 的作者—评审—返修闭环、HTTP/SSE 隐私和安装回滚验证通过；生产 CLI 未迁移到 v2。双宿主闭环各 27 项检查使用脚本响应，核心 426 项测试通过；不据此宣称自然模型质量。见 [v2.0.0 验收](harness/acceptance/v2.0.0.md) |
 
-「独立插件」与「已验证集成」是两种不同的承诺：前者在默认 v1/v2 提供四工具及最终正文留存，后者额外固定 OMO 的终态、通知和引用交付接线。工具可见、安装成功或记录存在均不等于完整行为通过。2.0.0 发布复审已通过，实际范围与剩余限制以验收记录为准；独立 CLI `run` 的额外真实模型探针未通过，服务端 API 探针通过。OMO 集成与安装边界见 [INSTALL.md](INSTALL.md)。
+旧版验收记录仅供追溯。BCP 不再维护 OMO 补丁、投递桥或 Council 桥。工具可见、安装成功或记录存在均不等于完整行为通过；当前安装入口见 [INSTALL.md](INSTALL.md)。
 
 设计契约见 [DESIGN.md](DESIGN.md)；当前 [v1.17 公开来源规则](docs/public-source-v1.17.md)要求先有用户可读的公开正文，再按真实消息 ID 留存。隐藏推理、工具参数、尚未写出的报告和纯协议标记都不能充当正文。默认 v1 不再暴露 `board_put`。已有记录直接复用；尚未留存的原消息通过 `board_store` 留存后，只传完整引用和新增要求。宿主保留真实作者与原编辑版本，接收者核对原文。历史验收只适用于其标注版本，既有冻结配置的 82 项检查见 [v1.14 验收](harness/acceptance/v1.14.0.md)。
 
@@ -25,7 +25,7 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 查找具体细节或目录较大时，使用 `board_index({query: "cancelled 优先"})` 搜索公开正文和工件路径，按相关性返回原文片段。description 不参与 query 评分；省略 range 的本人目录与旧 keyword 标题过滤保持兼容。词法检索限制见 [v1.18 契约](docs/content-search-v1.18.md)。
 
-委派返回的呈现与 Council 取证：作者超长且字节精确的完整终态原文可呈现为 `<bcp_result_reference>` 检索回执（接收者须先 `board_get` 取回原文；回执不是验收），未知、更短或不匹配的输出保留原文——该交付引用回执契约经共享核在 v1 与 v2 宿主均接入（v2 侧由 OMO 3.0.1 交付 helper 对原生 subagent 包装做严格字节/身份校验后替换）。Council 问题中显式的 `ses_*` / `cou-N` 宿主原文装配是 2.2.25 部署基线的历史行为，仅存在于 v1 历史集成；3.0.1 起 Council 使用上游自身实现，主角色不再组织私人席位，宿主不再做该取证拼接。历史契约与限制见 [v1.20 编排集成](docs/orchestration-v1.20.md)。
+委派通知由宿主或其编排插件负责。原先的引用回执替换与 Council 取证属于已移除的历史集成，见 [v1.20 编排集成记录](docs/orchestration-v1.20.md)。
 
 ACP 外部代理（omo-slim `acpAgents` 的 `acp_run`，如 claude 顾问）：宿主确认的成功结果默认留存原文并逐份返回回执（`Retained: <ID>` 或 `Retention failed|skipped: <原因>`，随附固定指引行）；标题由任务首行 `Task:` 确定性生成（`ACP result: <代理> | <任务标题>`）；作者身份取 wrapper 会话的宿主确认身份，同一输入轮的 wrapper 转述自动去重。已在真实 claude 链路完成冒烟与重启后验证（含中文派发被前置守卫零触达拒绝）。契约见 [v1.21 ACP 工具结果留存](docs/acp-tool-result-v1.21.md)（v1 宿主专属）。
 
@@ -37,7 +37,7 @@ ACP 外部代理（omo-slim `acpAgents` 的 `acp_run`，如 claude 顾问）：�
 不证明某次派发的最终结论。不要求 description 或标签，也不加载旧 board 工具
 或改写提示与历史。
 构建：`bash scripts/build-file-archive.sh`。它不会安装或激活插件。
-新路径直接交接可访问的项目相对确切版本文件，无需 `board_get`/`board_export`，也不注册 export；旧插件的导出功能保留。[提示模板](integrations/omo-slim/file-archive-prompts.example.md) 仅为仓库部署工件，不代表已更新或加载全局 dotfiles/OMO 配置。
+新路径直接交接可访问的项目相对确切版本文件，无需 `board_get`/`board_export`，也不注册 export。见[文件交接约定](docs/file-handoff.md)。
 
 工作材料统一放在 `.opencode/work/<task-id>/{reports,archive,scratch/<run-id>}`；
 archive 仅由 BCP 写入，正式文档仍进入受版控位置，既有 Deepwork 路径不变。
@@ -146,7 +146,6 @@ test/               # 单元、契约及插件接线测试
 scripts/install.sh  # 按宿主检测的事务性安装（单一 canonical 文件 + 安装清单）
 scripts/uninstall.sh # 所有权校验式卸载
 harness/            # 验收记录与工具
-integrations/omo-slim/ # OMO 适配自有源码（2.2.25 部署基线 + 3.0.1 双入口构建）
 DESIGN.md           # 设计契约全文
 ```
 

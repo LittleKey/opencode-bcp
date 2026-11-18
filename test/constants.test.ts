@@ -153,7 +153,5 @@ describe("original-check contract: direct inspection is conditional, not semanti
     const handoff = readFileSync(join(import.meta.dir, "..", "src/handoff.ts"), "utf8")
     expect(handoff).toContain("skip a repeat board_get only when the exact original, its host-verified source/version binding and all information needed for that check remain in this context with no change or conflict signal; otherwise read the relevant originals and limits with board_get. Index summaries are navigation only")
     expect(handoff).toContain("Read the records and their versions before revising")
-    const delivery = readFileSync(join(import.meta.dir, "..", "integrations/omo-slim/omo-delivery.mjs"), "utf8")
-    expect(delivery).toContain("Read the original with board_get before depending on its conclusions, versions or limits. This is a retrieval receipt, not acceptance.")
   })
 })

@@ -1,4 +1,4 @@
-import { constants, openSync, fstatSync, readFileSync, closeSync, lstatSync, realpathSync } from "node:fs"
+import { constants, openSync, fstatSync, readSync, closeSync, lstatSync, realpathSync } from "node:fs"
 import { isAbsolute, dirname, resolve } from "node:path"
 
 /** Operator-owned JSON policy, re-opened every check. This is an explicit
@@ -20,11 +20,20 @@ export function readOperatorPolicy(path: string, expected: {
       if (next === parent) break
       parent = next
     }
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const stat = fstatSync(fd)
-    if (!stat.isFile() || stat.size > 64 * 1024 ||
+    const limit = 64 * 1024
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit ||
       stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) return false
-    const data: unknown = JSON.parse(readFileSync(fd, "utf8"))
+    const bytes = Buffer.alloc(limit + 1)
+    let size = 0
+    while (size < bytes.length) {
+      const n = readSync(fd, bytes, size, bytes.length - size, null)
+      if (!n) break
+      size += n
+    }
+    if (size > limit) return false
+    const data: unknown = JSON.parse(bytes.subarray(0, size).toString("utf8"))
     if (!data || typeof data !== "object" || Array.isArray(data)) return false
     const policy = data as Record<string, unknown>
     if (policy.schema !== "bcp.operator-handoff-policy.v1" || !Array.isArray(policy.grants) ||

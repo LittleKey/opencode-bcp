@@ -4,6 +4,7 @@ import { readOperatorPolicy } from "../src/adapters/v2/handoff-source"
 import { mkdtempSync, writeFileSync, rmSync, chmodSync, mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
+import { spawnSync } from "node:child_process"
 test("strict snapshot arguments reject literal text and previous variants", () => {
   expect(saveInput.safeParse({ sessionId: "child" }).success).toBe(true)
   expect(saveInput.safeParse({ sessionId: "child", messageId: "m" }).success).toBe(true)
@@ -50,6 +51,12 @@ test("JSON operator source exact binding, explicit evidence, expiry and live rev
     write(grant)
     chmodSync(path, 0o644)
     expect(readOperatorPolicy(path, expected)).toBe(false)
+    chmodSync(path, 0o600)
+    writeFileSync(path, " ".repeat(64 * 1024 + 1))
+    expect(readOperatorPolicy(path, expected)).toBe(false)
+    const fifo = join(dir, "fifo")
+    expect(spawnSync("mkfifo", ["-m", "600", fifo]).status).toBe(0)
+    expect(readOperatorPolicy(fifo, expected)).toBe(false)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 test("production snapshot execution uses exact edit resources, live policy and lock rechecks", async () => {
@@ -66,6 +73,8 @@ test("production snapshot execution uses exact edit resources, live policy and l
   const oldFetch = globalThis.fetch
   const calls: any[] = []
   let deny = false
+  let configured = false
+  let revokeOnEdit = false
    let sessionMode = true
    let mutate = false
    let active = true
@@ -101,19 +110,32 @@ test("production snapshot execution uses exact edit resources, live policy and l
   }) as typeof fetch
   try {
     let tool: any
+    const options = { enabled: true, policyFile, connection: { baseUrl: "http://127.0.0.1:1", serverPid: 123 },
+      taskScopes: [{ taskId: "task", taskRoot, callerSessionId: "parent", projectId: "project",
+        directory: project, allowArchive: true, sharedReadersApproved: true }] }
     await FileArchiveV2Plugin.setup!({
-      options: { enabled: true, policyFile, connection: { baseUrl: "http://127.0.0.1:1", serverPid: 123 },
-        taskScopes: [{ taskId: "task", taskRoot, callerSessionId: "parent", projectId: "project",
-          directory: project, allowArchive: true, sharedReadersApproved: true }] },
+      options: { loadOperatorOptions: async () => configured ? structuredClone(options) : {} },
       location: { directory: project },
       session: { get: async () => local }, agent: { list: async () => [{ id: "build", permissions: [] }] },
       permission: { assert: async (input: any) => {
         calls.push(input)
-        if (deny && input.action === "edit") throw denied
+         if (deny && input.action === "edit") throw denied
+         if (revokeOnEdit && input.action === "edit") configured = false
       } },
       tool: { transform: async (fn: any) => fn({ add: (value: any) => { tool = value } }) },
     } as any)
-    const ctx = { sessionID: "parent", messageID: "m", id: "call", agent: "build", signal: new AbortController().signal }
+     const ctx = { sessionID: "parent", messageID: "m", id: "call", agent: "build", signal: new AbortController().signal }
+     const exact = { sessionId: "parent", messageId: "pinned" }
+     expect(JSON.parse((await tool.execute(exact, ctx)).content).reason).toBe("trusted_configuration_required")
+     configured = true
+     revokeOnEdit = true
+     expect(JSON.parse((await tool.execute(exact, ctx)).content).status).toBe("denied")
+     expect(calls.some(call => call.action === "edit")).toBe(true)
+     expect(readdirSync(taskRoot, { recursive: true }).map(String)
+       .some(path => path.endsWith("meta.json"))).toBe(false)
+     calls.length = 0
+     configured = true
+     revokeOnEdit = false
      const result = JSON.parse((await tool.execute({ sessionId: "parent", messageId: "pinned" }, ctx)).content)
      expect(result.status).toBe("saved")
      expect(lists).toBe(0)

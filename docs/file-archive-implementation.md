@@ -1,6 +1,7 @@
 # File handoff implementation notes
 
-Repository-only implementation, not installation or activation approval.
+See [V2 installation](../INSTALL.md#v2-快照归档独立配置) for the independent
+profile. Installation supplies no retention or reader approval.
 `bcp_save` takes `{"sessionId":"...","messageId":"..."}`; `messageId` is optional.
 It saves an existing assistant reply from the caller's own session or an
 authorized direct child session. With `messageId` it reads exactly that message.
@@ -20,7 +21,10 @@ Missing or ambiguous authorization fails closed.
 Build the entry with `bash scripts/build-file-archive.sh`. OpenCode V2 loads
 local plugins as package directories, not bare bundle files; the directory's
 server export must resolve to the built entry. Register that package with
-operator-owned plugin options:
+operator-owned plugin options. In the installed profile, publish options
+after starting the service and establishing the caller session. Replace the
+owner-private `options.json` atomically. The tool reads it at execution and
+rechecks it before writing; a change during the operation denies that save.
 
 - `enabled: true`; `connection` supplies a loopback HTTP origin, the expected
   host PID, and optional operator-supplied headers. This is a trusted endpoint
@@ -89,8 +93,8 @@ directory injection in system prompts is required. Handoff uses reachable ASCII
 project-relative exact-version paths plus source/task; multipart copies need the
 manifest and relevant parts. Different worktrees do not automatically share files.
 Report unavailable evidence instead of expanding permissions or exporting copies.
-The [prompt examples](../integrations/omo-slim/file-archive-prompts.example.md)
-are static orchestrator-only deployment artifacts, not loaded configuration.
+The [file handoff guidance](file-handoff.md) is documentation, not loaded
+configuration.
 Preserve Claude wrapper/guard/ASCII restrictions and `permissionMode: reject`.
 
 Large output belongs on disk-backed task scratch, with command-scoped TMPDIR,
@@ -118,9 +122,9 @@ separate verification; do not infer them from a successful build or fixture.
 The parent reconciles core/adapter contracts and final validation. Synthetic
 tests are not real-host, provider cache or model-quality evidence.
 
-The new entry depends on OpenCode, not OMO. The old OMO preparer is historical
-and does not produce an unmodified upstream package. Changing the BCP entry
-alone does not disable already installed OMO presentation consumers.
+The new entry depends on OpenCode, not OMO. BCP no longer ships OMO patchers
+or bridge registrations. Changing the BCP entry alone does not disable
+presentation code in an already installed, independently patched OMO package.
 `bash scripts/build-file-archive.sh` builds a separate repository artifact only.
-No global configuration, model calls, activation, historical report migration or
-automatic backfill is authorized. Old reports/exports remain untouched.
+The isolated installer does not change global configuration, migrate reports,
+or backfill replies. Old reports and exports remain untouched.

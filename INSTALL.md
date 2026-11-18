@@ -1,11 +1,30 @@
 # 安装指南
 
-BCP 以单个 TypeScript 插件文件装入 opencode，无运行时依赖安装。前置要求与步骤如下；设计背景见 [README.md](README.md) 与 [DESIGN.md](DESIGN.md)。
+新版 `bcp_save` 与旧 Blackboard 是两个不同入口。安装快照归档不要运行 `scripts/install.sh`：它只安装旧 Blackboard。
+
+## V2 快照归档：独立配置
+
+使用 OpenCode 2.3.0、Bun 和 Node。安装器创建独立配置，不合并现有配置，不依赖 OMO，不创建归档授权。
+
+```bash
+bash scripts/build-file-archive.sh
+node scripts/install-file-archive.mjs \
+  --target /absolute/private-parent/new-bcp-profile \
+  --project /absolute/private-worktree --port 4096
+```
+
+目标必须不存在，目标父目录和工作树须为当前用户私有。工作树可有 `.opencode/work`，但不能带冲突的 OpenCode 配置或发现入口。用目标目录中的 `serve.txt` 启动回环服务，再用 `launch.txt` 连接；连接时通过 `OPENCODE_PASSWORD` 提供服务注册密码，不写入启动脚本。
+
+初始 `bcp_save` 可见但拒绝保存。宿主启动并创建会话后，操作员才能根据实际 PID 和会话身份原子替换私有 `options.json`，并在项目外提供精确的短期策略。更新授权不用重启。字段和信任边界见[实现说明](docs/file-archive-implementation.md#isolated-configuration-contract)。
+
+该入口不迁移现有活跃会话、模型配置、旧 Blackboard 数据或独立安装的 OMO。
+
+## 旧 Blackboard 安装（非快照）
 
 ## 前置要求
 
 - [bun](https://bun.sh)（安装脚本用它构建产物）
-- opencode 1.x（最低 1.18.29，实际验证 1.18.33；2026-10-09 已在 1.18.35 完成隔离重验与生产进程核验，见 [integrations/omo-slim/README.md](integrations/omo-slim/README.md)）或 opencode 2.0.20+（最低 2.0.20，实际验证 2.1.4）。同一个构建产物同时提供 v1 `server` 与 v2 `setup` 双入口，安装脚本检测宿主 major 后装入同一个文件；2.0.0 已通过发布复审并安装到现有 v1 生产配置，限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。最低版本声明不代表所有中间版本都已验证。
+- 旧入口历史最低版本为 OpenCode 1.18.29（V1）或 2.0.20（V2）；同一产物提供 `server` 和 `setup`。历史验收见 [2.0.0 验收](harness/acceptance/v2.0.0.md)，不适用于新版快照入口。
 
 ## 安装
 

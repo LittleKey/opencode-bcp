@@ -7,7 +7,6 @@ import { createHash } from "node:crypto"
 import { publicReply } from "./reply"
 import type { Writer } from "./schema"
 
-export const DELIVERY_BRIDGE = Symbol.for("opencode.bcp.delivery.v1")
 export type HostMessage = { info: { id: string; sessionID: string; role: string; parentID?: string; agent?: string; finish?: string; time?: { created?: number; completed?: number }; error?: unknown; summary?: boolean; tools?: Record<string, boolean> }; parts?: { id?: string; type: string; text?: string; synthetic?: boolean; ignored?: boolean; time?: { start?: number; end?: number }; callID?: string; tool?: string; state?: { status?: string; time?: { start?: number; end?: number } } }[] }
 export type DeliveryRequest = {
   callerSessionID: string; taskID: string; generation?: number; terminalRevision?: number

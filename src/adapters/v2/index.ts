@@ -8,8 +8,6 @@
 // - 消息原文：插件 ctx 无全量 client 的 message.get/list → ./snapshot 合并
 //   （prompt/context/tool.hook 事件 + ctx.session.context wire 快照），缺失即 fail closed
 // - 自动留存：session.text.ended/step.ended(finish=stop) → captureFinal（宿主鉴权/来源/证据）
-// - 交付/Council 桥：DELIVERY_BRIDGE / COUNCIL_BRIDGE 按 ctx.location.directory 注册，
-//   请求/响应 schema 与 v1 桥完全一致（共享核 inspectDelivery / inspectCouncilSource）
 // - 工具拦截：ctx.tool.hook("execute.before"/"execute.after")——edit/write/patch 编辑证据，
 //   subagent/task 派发 sourceHandoff + malformedSha256 告警
 // 存储零迁移（§16.5）：dataDir 与账本格式与 v1 完全一致。
@@ -37,7 +35,7 @@ import {
 } from "../../constants"
 import { malformedSha256 } from "../../artifacts"
 import { normalizeTaskDescription, sourceHandoff } from "../../handoff"
-import { DELIVERY_BRIDGE, inspectDelivery, type DeliveryRequest, type HostMessage } from "../../delivery"
+import type { HostMessage } from "../../delivery"
 import {
   captureFinal,
   NO_STORE,
@@ -49,7 +47,6 @@ import {
 } from "../../capture"
 import { beginEditObservation, invalidateEditEvidence, observeEdits, editEvidence, editEvidenceJournalExists } from "../../edit-evidence"
 import { messageStore, STORE_DESCRIPTION } from "../../message-store"
-import { COUNCIL_BRIDGE, inspectCouncilSource, type CouncilMessage, type CouncilRequest } from "../../council"
 import { ReceiptCheck } from "../../receipt-check"
 import {
   invalidationInput,
@@ -792,55 +789,6 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
         parentCanRead: (bbId) => parentCanReadReceipt(parentSessionID, parentAgent, bbId),
         log: (line) => st.log(line),
       })
-
-    // ---- 交付 / Council 桥（请求/响应 schema 与 v1 完全一致；键=项目目录）----
-    // 消费方契约（integrations/omo-slim）：globalThis[BRIDGE]?.get?.(directory) → handler(request)。
-    const deliveryHost = {
-      scopeFor: (id: string) => lookupScopeContext(id, "").then((r) => (r ? r.scope : null)),
-      parentFor: (id: string) => sessionInfo(id).then((r) => r?.parentID ?? null),
-      message: readMessage,
-      capture: (session: string, message: string) => capture(session, message),
-      canReadResult,
-      currentResult: (id: string, parent: string) => st.confirmed.get(id) === parent,
-    }
-    const councilHost = {
-      parentFor: deliveryHost.parentFor,
-      message: (session: string, id: string) => readMessage(session, id) as Promise<CouncilMessage | null>,
-      current: deliveryHost.currentResult,
-      isSeat: async (agent: string) => {
-        try {
-          // 席位身份按 AgentInfo.id 匹配（授权与 Council 同一主体口径）。
-          return agent.startsWith("councillor-") && (await agentProfiles()).some((p) => p.id === agent)
-        } catch {
-          return false
-        }
-      },
-    }
-    // ---- 交付 / Council 桥（请求/响应 schema 与 v1 完全一致；键=项目目录）----
-    // 共享契约与 v1 同一 Symbol：注册表是 Map<projectDir, handler>（v1 生产方
-    // bridges.set(input.directory, handler)），消费方契约（integrations/omo-slim）
-    // 为 globalThis[BRIDGE]?.get?.(directory) → handler(request)，Map.get 即满足。
-    // 已存在的 Map 必须复用（v1/v2 混部、多项目注册共存）；缺失则新建；非 Map 的
-    // 外来值不覆盖、不注册（契约冲突按不可用 fail closed，结构化日志可见）。
-    const bridgeRegistrations: Array<() => void> = []
-    const registerBridge = <Req,>(symbol: PropertyKey, handler: (request: Req) => Promise<unknown>): void => {
-      const globals = globalThis as Record<PropertyKey, unknown>
-      const existing = globals[symbol]
-      if (existing !== undefined && !(existing instanceof Map)) {
-        st.log({ ev: "bridge_registry_conflict", bridge: String(symbol), reason: "non_map_registry" })
-        return
-      }
-      if (existing === undefined) globals[symbol] = new Map<string, (request: Req) => Promise<unknown>>()
-      const map = globals[symbol] as Map<string, (request: Req) => Promise<unknown>>
-      map.set(projectDir, handler)
-      // 身份安全清理：仅当目录键仍指向本实例注册的 handler 时才移除——reload 后
-      // 迟到的旧实例清理不得移除已替换该键的新实例注册。
-      bridgeRegistrations.push(() => {
-        if (map.get(projectDir) === handler) map.delete(projectDir)
-      })
-    }
-    registerBridge<DeliveryRequest>(DELIVERY_BRIDGE, (request) => inspectDelivery(request, deliveryHost))
-    registerBridge<CouncilRequest>(COUNCIL_BRIDGE, (request) => inspectCouncilSource(request, councilHost))
 
     const boardTools = defineBoardTools({
       resolveScope: lookupScopeContext,
@@ -1622,8 +1570,6 @@ export const BlackboardV2Plugin: Plugin.Plugin = {
     return () => {
       ac.abort()
       subagentLedger.resetAll()
-      // 桥注销：身份安全（见 registerBridge）——只移除仍指向本实例的目录键。
-      for (const unregister of bridgeRegistrations) unregister()
     }
   },
 }
