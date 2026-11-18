@@ -29,6 +29,23 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 
 ACP 外部代理（omo-slim `acpAgents` 的 `acp_run`，如 claude 顾问）：宿主确认的成功结果默认留存原文并逐份返回回执（`Retained: <ID>` 或 `Retention failed|skipped: <原因>`，随附固定指引行）；标题由任务首行 `Task:` 确定性生成（`ACP result: <代理> | <任务标题>`）；作者身份取 wrapper 会话的宿主确认身份，同一输入轮的 wrapper 转述自动去重。已在真实 claude 链路完成冒烟与重启后验证（含中文派发被前置守卫零触达拒绝）。契约见 [v1.21 ACP 工具结果留存](docs/acp-tool-result-v1.21.md)（v1 宿主专属）。
 
+## 文件归档替代路径（仓库内，未安装）
+
+新的独立 V2 入口 `src/file-archive.ts` 不依赖 OMO。`bcp_save({sessionId, messageId?})`
+只能保存调用者自身或获准直属子会话中已存储的助理回复，不接受正文参数。
+指定消息 ID 时精确读取；否则只检查最新助理回复，不回退到旧回复。保存快照
+不证明某次派发的最终结论。不要求 description 或标签，也不加载旧 board 工具
+或改写提示与历史。
+构建：`bash scripts/build-file-archive.sh`。它不会安装或激活插件。
+新路径直接交接可访问的项目相对确切版本文件，无需 `board_get`/`board_export`，也不注册 export；旧插件的导出功能保留。[提示模板](integrations/omo-slim/file-archive-prompts.example.md) 仅为仓库部署工件，不代表已更新或加载全局 dotfiles/OMO 配置。
+
+工作材料统一放在 `.opencode/work/<task-id>/{reports,archive,scratch/<run-id>}`；
+archive 仅由 BCP 写入，正式文档仍进入受版控位置，既有 Deepwork 路径不变。
+任务根通过普通派发传递，无需普通使用者加载 skill。目录与 gitignore 不构成留存授权。
+**没有后台自动捕获。** 工具可见不等于有保存权限。构建成功不代表已通过真实宿主、
+权限和最终请求的验收。不安装、不激活、不迁移旧报告。范围与限制见
+[实施说明](docs/file-archive-implementation.md)。
+
 ## 核心模型速览
 
 - **scope**：授权隔离单元。跨 scope 读取一律返回统一的 `forbidden`，不区分目标是否存在——无存在性泄漏；同 scope 内隐藏目标与不存在目标统一返回 `not_found`，二者逐字节一致。

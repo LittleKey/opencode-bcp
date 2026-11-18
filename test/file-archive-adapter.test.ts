@@ -1,0 +1,170 @@
+import { test, expect } from "bun:test"
+import { saveInput, boundedArchiveFetch, FileArchiveV2Plugin } from "../src/adapters/v2/file-archive"
+import { readOperatorPolicy } from "../src/adapters/v2/handoff-source"
+import { mkdtempSync, writeFileSync, rmSync, chmodSync, mkdirSync, readdirSync } from "node:fs"
+import { join } from "node:path"
+import { homedir } from "node:os"
+test("strict snapshot arguments reject literal text and previous variants", () => {
+  expect(saveInput.safeParse({ sessionId: "child" }).success).toBe(true)
+  expect(saveInput.safeParse({ sessionId: "child", messageId: "m" }).success).toBe(true)
+  for (const value of [
+    { kind: "session", sessionId: "child", text: "x" },
+    { kind: "content", text: "x", taskId: "t" }, { text: "x" },
+    { kind: "session", sessionId: "child" }, { sessionId: "child", text: "x" },
+    { sessionId: "child", messageId: "" }, { sessionId: "" },
+    { kind: "session", sessionId: "child", baseUrl: "http://evil" },
+  ]) expect(saveInput.safeParse(value).success).toBe(false)
+})
+test("production transport refuses cross-origin before any network request", async () => {
+  const transport = boundedArchiveFetch("http://127.0.0.1:1", new AbortController().signal)
+  await expect(transport("http://example.invalid")).rejects.toThrow("denied")
+})
+test("one static tool registered without policy, executes fail closed", async () => {
+  const tools: any[] = []
+  await FileArchiveV2Plugin.setup!({
+    options: {}, tool: { transform: async (fn: any) => fn({ add: (t: any) => tools.push(t) }) },
+  } as any)
+  expect(tools.map(t => t.name)).toEqual(["bcp_save"])
+  const result = await tools[0].execute({ sessionId: "self" }, {})
+  expect(JSON.parse(result.content)).toEqual({ status: "denied", reason: "trusted_configuration_required" })
+})
+test("JSON operator source exact binding, explicit evidence, expiry and live revocation", () => {
+  const dir = mkdtempSync(join(homedir(), ".policy-test-"))
+  const path = join(dir, "policy.json")
+  const expected = { taskId: "task", taskRoot: "/project/.opencode/work/task",
+    callerSessionId: "parent", agent: "orchestrator", sourceSessionId: "child" }
+  const grant = { ...expected, authorized: true, noStore: false, sharedReadersApproved: true,
+    expiresAt: Date.now() + 60_000 }
+  const write = (value: object) => writeFileSync(path,
+    JSON.stringify({ schema: "bcp.operator-handoff-policy.v1", grants: [value] }), { mode: 0o600 })
+  try {
+    expect(readOperatorPolicy(path, expected)).toBe(false)
+    write(grant)
+    expect(readOperatorPolicy(path, expected)).toBe(true)
+    expect(readOperatorPolicy(path, { ...expected, sourceSessionId: "other" })).toBe(false)
+    for (const patch of [{ authorized: false }, { noStore: true },
+      { sharedReadersApproved: false }, { expiresAt: 0 }]) {
+      write({ ...grant, ...patch })
+      expect(readOperatorPolicy(path, expected)).toBe(false)
+    }
+    write(grant)
+    chmodSync(path, 0o644)
+    expect(readOperatorPolicy(path, expected)).toBe(false)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+test("production snapshot execution uses exact edit resources, live policy and lock rechecks", async () => {
+  const workspace = mkdtempSync(join(homedir(), ".adapter-test-"))
+  const project = join(workspace, "project")
+  const taskRoot = join(project, ".opencode/work/task")
+  mkdirSync(taskRoot, { recursive: true })
+  const policyFile = join(workspace, "policy.json")
+  writeFileSync(policyFile, JSON.stringify({ schema: "bcp.operator-handoff-policy.v1", grants: [{
+    taskId: "task", taskRoot, callerSessionId: "parent", agent: "build", sourceSessionId: "parent",
+    authorized: true, noStore: false, sharedReadersApproved: true, expiresAt: Date.now() + 60_000,
+  }] }), { mode: 0o600 })
+  const local = { id: "parent", projectID: "project", location: { directory: project }, permissions: [] }
+  const oldFetch = globalThis.fetch
+  const calls: any[] = []
+  let deny = false
+   let sessionMode = true
+   let mutate = false
+   let active = true
+   let exactId = "pinned"
+   let exactMode = "valid"
+   let latestMode = "valid"
+  let gets = 0
+  let lists = 0
+  const message = { id: "pinned", type: "assistant", agent: "worker", time: { created: 1, completed: 2 },
+    finish: "stop", content: [{ type: "text", text: "original" }] }
+  const denied = Error("native denial")
+  globalThis.fetch = (async (request: Request) => {
+    const path = new URL(request.url).pathname
+    if (sessionMode) {
+      if (path.endsWith("/message/pinned")) {
+        gets++
+        if (exactMode === "missing") return Response.json({ error: "missing" }, { status: 404 })
+        if (exactMode === "pending") return Response.json({ data: { ...message, time: { created: 1 } } })
+        if (exactMode === "failed") return Response.json({ data: { ...message, finish: "length" } })
+        return Response.json({ data: !mutate || gets === 1 ? { ...message, id: exactId } :
+          { ...message, content: [{ type: "text", text: "mutated before publish" }] } })
+      }
+      if (path.endsWith("/message")) {
+        lists++
+        expect(new URL(request.url).searchParams.get("limit")).toBe("1")
+        return Response.json({ data: latestMode === "missing" ? [] :
+          [{ ...message, ...(latestMode === "pending" ? { time: { created: 1 } } : {}) }], cursor: {} })
+      }
+      if (path.endsWith("/active")) return Response.json({ data: active ? { parent: {} } : {} })
+      if (path.endsWith("/child")) return Response.json({ data: { ...local, id: "child", parentID: "parent" } })
+    }
+    return Response.json(path.includes("session") ? { data: local } : { pid: 123 })
+  }) as typeof fetch
+  try {
+    let tool: any
+    await FileArchiveV2Plugin.setup!({
+      options: { enabled: true, policyFile, connection: { baseUrl: "http://127.0.0.1:1", serverPid: 123 },
+        taskScopes: [{ taskId: "task", taskRoot, callerSessionId: "parent", projectId: "project",
+          directory: project, allowArchive: true, sharedReadersApproved: true }] },
+      location: { directory: project },
+      session: { get: async () => local }, agent: { list: async () => [{ id: "build", permissions: [] }] },
+      permission: { assert: async (input: any) => {
+        calls.push(input)
+        if (deny && input.action === "edit") throw denied
+      } },
+      tool: { transform: async (fn: any) => fn({ add: (value: any) => { tool = value } }) },
+    } as any)
+    const ctx = { sessionID: "parent", messageID: "m", id: "call", agent: "build", signal: new AbortController().signal }
+     const result = JSON.parse((await tool.execute({ sessionId: "parent", messageId: "pinned" }, ctx)).content)
+     expect(result.status).toBe("saved")
+     expect(lists).toBe(0)
+    const edits = calls.filter(c => c.action === "edit")
+    expect(edits.length).toBe(1)
+    expect(edits[0].resources.every((r: string) => r.startsWith(".opencode/work/task/") && !r.includes("*"))).toBe(true)
+    expect(calls.filter(c => c.action === "read").length).toBe(1)
+    expect(JSON.parse((await tool.execute({ sessionId: "parent" }, ctx)).content).status).toBe("pending")
+    expect(lists).toBe(0)
+    exactId = "wrong"
+    expect(JSON.parse((await tool.execute({ sessionId: "parent", messageId: "pinned" }, ctx)).content).status).toBe("source_changed")
+    expect(lists).toBe(0)
+    exactId = "pinned"
+    for (const [mode, status] of [["missing", "denied"], ["pending", "pending"], ["failed", "partial"]]) {
+      exactMode = mode!
+      expect(JSON.parse((await tool.execute({ sessionId: "parent", messageId: "pinned" }, ctx)).content).status).toBe(status)
+      expect(lists).toBe(0)
+    }
+    exactMode = "valid"
+    active = false
+    for (const [mode, status] of [["missing", "no_text"], ["pending", "pending"]]) {
+      latestMode = mode!
+      expect(JSON.parse((await tool.execute({ sessionId: "parent" }, ctx)).content).status).toBe(status)
+    }
+    latestMode = "valid"
+    lists = 0
+    expect(JSON.parse((await tool.execute({ sessionId: "foreign", messageId: "pinned" }, ctx)).content).status).toBe("denied")
+    deny = true
+    await expect(tool.execute({ sessionId: "parent", messageId: "pinned" }, { ...ctx, id: "denied-call" })).rejects.toBe(denied)
+    writeFileSync(policyFile, JSON.stringify({ schema: "bcp.operator-handoff-policy.v1", grants: [] }))
+    expect(JSON.parse((await tool.execute({ sessionId: "parent" }, ctx)).content).status).toBe("denied")
+    // Exact pin is read at BOTH lock checks. Mutation after the first GET must
+    // prevent publication, rather than caching that first successful check.
+    deny = false
+    sessionMode = true
+    mutate = true
+    active = false
+    gets = 0
+    writeFileSync(policyFile, JSON.stringify({ schema: "bcp.operator-handoff-policy.v1", grants: [{
+      taskId: "task", taskRoot, callerSessionId: "parent", agent: "build", sourceSessionId: "child",
+      authorized: true, noStore: false, sharedReadersApproved: true, expiresAt: Date.now() + 60_000,
+    }] }))
+    const snapshot = JSON.parse((await tool.execute({ sessionId: "child" }, ctx)).content)
+    expect(snapshot.status).toBe("source_changed")
+    expect(gets).toBe(2)
+    expect(lists).toBe(1)
+    const files = readdirSync(join(taskRoot, "archive"), { recursive: true }).map(String)
+    const childDirectory = `id-${Buffer.from("child").toString("hex")}`
+    expect(files.some(path => path.startsWith(`${childDirectory}/`) && path.endsWith("meta.json"))).toBe(false)
+  } finally {
+    globalThis.fetch = oldFetch
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
