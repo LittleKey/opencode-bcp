@@ -14,11 +14,13 @@ export const BUNDLE = join(REPO, "dist", "blackboard.ts")
 // rather than relying on an earlier workstation's disposable /tmp directory.
 export const REAL_V2_BIN = Bun.env.BCP_TEST_V2_BIN ?? ""
 
-/** Build the dual bundle once per process if dist/blackboard.ts is absent. */
+let bundleBuilt = false
+/** Build current sources once per process; never accept stale release metadata. */
 export function ensureBundle(): string {
-  if (!existsSync(BUNDLE)) {
+  if (!bundleBuilt) {
     const p = Bun.spawnSync(["bash", join(REPO, "scripts", "build.sh")], { cwd: REPO, stdout: "pipe", stderr: "pipe" })
     if (p.exitCode !== 0) throw new Error(`scripts/build.sh failed: ${p.stderr.toString()}`)
+    bundleBuilt = true
   }
   return BUNDLE
 }

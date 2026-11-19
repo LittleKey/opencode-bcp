@@ -31,9 +31,28 @@ node scripts/install-file-archive.mjs \
 - **授权与动态重载**：初始状态下 `bcp_save` 工具可见但一律拒绝保存（fail closed）。宿主启动并建立会话后，操作员才能根据实际服务 PID 和会话身份原子替换私有 `options.json`，并在项目外提供精确的短期策略文件（`bcp.operator-handoff-policy.v1`）。每次调用都会重新打开并核验 `options.json` 与外部策略文件的当前 inode，更新或撤销授权无需重启。字段与信任边界见[实现说明](docs/file-archive-implementation.md#isolated-configuration-contract)。
 - **不迁移旧状态**：该入口不迁移现有活跃会话、模型配置、旧 Blackboard 数据或独立安装的 OMO。
 
-### 3. OpenChamber 2.7.2 离线扩展打包
+### 3. OpenChamber 2.7.2 GitHub URL 扩展（根包 `2.1.0`，主选扩展通道）
 
-针对已安装的 OpenChamber 2.7.2（`@openchamber/web`），可离线生成包含 `bcp_save` V2 插件的扩展目录，并通过宿主内置的 `inspectGuestPackage` 校验：
+仓库根 `package.json`（`version: "2.1.0"`）直接声明 OpenChamber 2.7.2 扩展元数据（固定 `panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随仓库提交预构建的 `openchamber/plugin/`（无 `postinstall` 或在线构建钩子）：
+
+- **构建与新鲜度校验**：
+  ```bash
+  bun run build:openchamber   # 生成/更新 openchamber/plugin/file-archive.js
+  bun run check:openchamber   # 校验已提交的 openchamber/plugin/file-archive.js 与当前源码构建一致
+  ```
+- **GitHub URL 安装（提交并推送发布版本后远端可用）**：
+  - 将包含根 `package.json` 与 `openchamber/plugin/` 的发布版本提交并推送到 GitHub 后，在 OpenChamber 2.7.2 中使用仓库根 Git URL 安装（仅支持仓库根与可选 `#<branch-or-tag>` 分支/标签引用，**不支持子目录语法**；在未推送至远端前，远端 URL 尚不可用）：
+    `https://github.com/littlekey/opencode-bcp.git`（或 `https://github.com/littlekey/opencode-bcp.git#<branch-or-tag>`）
+- **运行态依赖与外部算子环境变量（`BCP_OPERATOR_OPTIONS`）**：
+  - OpenCode V2 插件运行态需在 Linux/glibc Bun 下执行（归档锁核心依赖 `bun:ffi`）。扩展入口 `openchamber/plugin/index.mjs` 在 Bun 运行态加载预构建的 `file-archive.js`，并委托 Node 兼容的 `openchamber/plugin/operator-options.mjs`（与独立安装器/离线打包器共用 `openchamber/plugin/private-options.mjs`）读取进程环境变量 `BCP_OPERATOR_OPTIONS`。
+  - 未设置 `BCP_OPERATOR_OPTIONS` 时，`loadOperatorOptions()` 返回 `{}`（默认禁用 / fail closed，任何宿主侧普通插件 options 均无法绕过该加载器）。
+  - 设置 `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json` 时，该路径必须是位于扩展包目录及所有 `taskScopes[].directory` 任务树之外的规范化绝对路径，父目录须为当前用户私有（`0700` / 无组或其他用户权限）且所有祖先目录通过非符号链接的当前用户或 root 受控粘滞目录检查，`options.json` 本身须为当前用户私有单硬链接普通文件（`0600`、`nlink === 1`、非符号链接、≤ 1 MiB），且其中必填的 `taskScopes` 数组与规范化绝对路径 `policyFile` 也必须位于扩展包目录及所有 `taskScopes[].directory` 之外。
+- **上游更新语义（OpenChamber 2.7.2）**：
+  - 宿主更新检查仅在远端根 `package.json` 的 `version`（semver）高于当前已安装版本时提示更新（不按普通 git commit 变化触发），检查结果带 1 小时缓存，且必须由用户单独执行更新应用操作（不提供自动静默更新）。
+
+### 4. OpenChamber 2.7.2 离线扩展打包（独立保留的固定路径变体）
+
+针对已安装的 OpenChamber 2.7.2（`@openchamber/web`），仍可离线生成绑定固定外部 `--options` 路径的未安装扩展目录，并通过宿主内置的 `inspectGuestPackage` 校验：
 
 ```bash
 bun run build

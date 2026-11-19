@@ -1,6 +1,6 @@
 {
   "name": "opencode-bcp",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "description": "File-only archive of authorized OpenCode assistant reply snapshots",
@@ -9,8 +9,18 @@
     "typecheck": "tsc --noEmit",
     "build": "bash scripts/build-file-archive.sh",
     "build:legacy": "bash scripts/build.sh",
+    "build:openchamber": "bun scripts/build-openchamber.mjs",
+    "check:openchamber": "bun scripts/build-openchamber.mjs --check",
     "lockcheck": "bun run scripts/lockcheck.ts",
     "observe": "bun run scripts/observe.ts"
+  },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": { "openchamber": ">=2.7.2" },
+    "contributes": {
+      "panel": { "id": "bcp-file-archive", "name": "BCP File Archive", "icon": "ri-archive-line" },
+      "opencodePlugin": "openchamber/plugin"
+    }
   },
   "dependencies": {
     "@opencode/client": "2.1.4",

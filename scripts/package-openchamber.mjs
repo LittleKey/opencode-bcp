@@ -24,19 +24,8 @@ export async function packageOpenChamber(target, host, optionsPath) {
   const st = await fs.lstat(parent);
   if (!st.isDirectory() || st.uid !== process.getuid() || (st.mode & 0o077))
     throw Error("target parent must be owner-private");
-  // Reuse the installer's exact inode checks and ancestor trust policy. Fail
-  // closed if its structure changes rather than maintaining a divergent copy.
-  const installer = await fs.readFile(join(repo, "scripts/install-file-archive.mjs"), "utf8");
-  const start = installer.indexOf("async function loadPrivateOptions(path) {");
-  const end = installer.indexOf("export async function install(args) {", start);
-  if (start < 0 || end < 0) throw Error("installer helper boundaries changed");
-  const helpers = installer.slice(start, end);
-  const { checkAncestors } = await import("data:text/javascript," + encodeURIComponent(
-    `import { open, lstat } from "node:fs/promises";
-import { constants } from "node:fs";
-import { dirname } from "node:path";
-${helpers}
-export { checkAncestors };`));
+  const { checkAncestors, loadPrivateOptions } = await import("../openchamber/plugin/private-options.mjs");
+  const helpers = `${loadPrivateOptions.toString()}\n${checkAncestors.toString()}`;
   await checkAncestors(parent, "target");
   await checkAncestors(dirname(optionsPath), "options");
   // Refuse preexisting paths, including symlinks: packaging never reads or copies

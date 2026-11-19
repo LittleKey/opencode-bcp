@@ -31,8 +31,13 @@ bun run build
 # 等价于：bash scripts/build-file-archive.sh
 ```
 
-完整安装与离线打包步骤见 [INSTALL.md](INSTALL.md)：
+完整安装与扩展部署步骤见 [INSTALL.md](INSTALL.md)：
 
+- **OpenChamber 2.7.2 GitHub URL 扩展（`2.1.0` 根包直连，提交并推送发布版本后远端可用）**：
+  - 仓库根 `package.json`（`2.1.0`）声明 `openchamber` 元数据（`panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随库提交预构建插件包 `openchamber/plugin/`（无安装/构建钩子；用 `bun run build:openchamber` 更新、`bun run check:openchamber` 校验产物新鲜度）。OpenCode 插件运行态需 Linux/glibc Bun（归档锁核心使用 `bun:ffi`），`openchamber/plugin/index.mjs` 调用 Node 兼容的 `openchamber/plugin/operator-options.mjs`（共用 `private-options.mjs`）加载外部算子配置。
+  - 在该版本提交并推送至远端后，可在 OpenChamber 2.7.2 中通过 GitHub 仓库根 URL 安装（仅支持仓库根与可选 `#<branch-or-tag>`，不支持子目录语法）：
+    `https://github.com/littlekey/opencode-bcp.git`（或 `https://github.com/littlekey/opencode-bcp.git#<branch-or-tag>`）
+  - 算子授权完全通过宿主/服务进程环境变量 `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json` 指向扩展包与所有任务树（`taskScopes[].directory`）之外的规范化私有文件（其中 `policyFile` 同样须位于扩展包与所有任务树之外）；未设置 `BCP_OPERATOR_OPTIONS` 时返回 `{}`（默认禁用 / fail closed）。OpenChamber 2.7.2 的上游更新检查仅比较远端根 `package.json` 的更高 semver 版本号（不按普通 commit 触发），带 1 小时缓存，且需用户单独点击应用（无自动更新承诺）。
 - **独立 OpenCode V2 配置（不合并现有配置、不创建归档授权）**：
   ```bash
   bun run build
@@ -40,7 +45,7 @@ bun run build
     --target /absolute/private-parent/new-bcp-profile \
     --project /absolute/private-worktree --port 4096
   ```
-- **OpenChamber 2.7.2 离线扩展打包（仅生成未安装扩展目录，不写入授权文件或修改宿主配置）**：
+- **OpenChamber 2.7.2 离线扩展打包（保留本地离线打包器，仅生成未安装扩展目录，不写入授权文件或修改宿主配置）**：
   ```bash
   bun run build
   node scripts/package-openchamber.mjs \
@@ -142,10 +147,12 @@ V2 导出在执行时读取会话的当前目录，并调用宿主 `permission.a
 
 ```bash
 bun install
-bun run build        # 默认构建：bash scripts/build-file-archive.sh -> dist/file-archive/file-archive.js
-bun run build:legacy # 旧 Blackboard 构建：bash scripts/build.sh -> dist/blackboard.ts
-bun test             # 当前源码的单元、契约及插件接线验证
-bunx tsc --noEmit    # 类型检查
+bun run build             # 默认构建：bash scripts/build-file-archive.sh -> dist/file-archive/file-archive.js
+bun run build:openchamber # 构建并更新仓库提交的 OpenChamber 预构建包：openchamber/plugin/file-archive.js
+bun run check:openchamber # 校验 openchamber/plugin/file-archive.js 与当前源码构建字节一致
+bun run build:legacy      # 旧 Blackboard 构建：bash scripts/build.sh -> dist/blackboard.ts
+bun test                  # 当前源码的单元、契约及插件接线验证
+bunx tsc --noEmit         # 类型检查
 ```
 
 ## 目录结构
@@ -174,10 +181,12 @@ src/
   delivery.ts                 # 旧版交付引用可见性过滤与 board_export 导出
   adapters/v1/                # 旧版 opencode 1.x 插件入口与 hook 接线
   adapters/v2/index.ts        # 旧版 opencode 2.x 黑板适配层（限定验收见 harness/acceptance/v2.0.0.md）
+openchamber/plugin/           # 随仓库根提交的 OpenChamber 2.7.2 预构建 V2 插件包（index.mjs + operator-options.mjs + private-options.mjs + file-archive.js）
 test/                         # 单元、契约及插件接线测试
 scripts/build-file-archive.sh # 默认构建脚本（独立 V2 快照归档 bundle）
+scripts/build-openchamber.mjs # 更新或校验 openchamber/plugin/file-archive.js
 scripts/install-file-archive.mjs # 默认 V2 快照归档的独立配置安装器
-scripts/package-openchamber.mjs  # OpenChamber 2.7.2 离线扩展打包器
+scripts/package-openchamber.mjs  # OpenChamber 2.7.2 离线扩展打包器（固定外部 options 路径变体）
 scripts/build.sh              # 旧版双宿主 Blackboard 构建脚本（build:legacy）
 scripts/install.sh            # 旧版 Blackboard 按宿主检测安装（历史兼容）
 scripts/uninstall.sh          # 旧版 Blackboard 所有权校验式卸载

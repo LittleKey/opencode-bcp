@@ -33,8 +33,33 @@ publish options after starting the service and establishing the caller session. 
 owner-private `options.json` atomically. The tool reads it at execution and
 rechecks it before writing; a change during the operation denies that save.
 
-For OpenChamber 2.7.2, `node scripts/package-openchamber.mjs --target /absolute/new-extension --host /absolute/installed/@openchamber/web --options /absolute/operator/options.json`
-creates an uninstalled offline extension package (`deliveryRequired: "file"`) and validates it
+For OpenChamber 2.7.2, the repository root (`package.json` version `2.1.0`) is a
+prebuilt extension (`panel.id: "bcp-file-archive"`, `opencodePlugin: "openchamber/plugin"`)
+with a committed bundle at `openchamber/plugin/file-archive.js` (updated via
+`bun run build:openchamber` and verified via `bun run check:openchamber`, with no
+install or build hooks). Once committed and pushed to the remote repository, it can
+be installed in OpenChamber 2.7.2 from the root GitHub URL
+`https://github.com/littlekey/opencode-bcp.git` (or with an optional `#<branch-or-tag>`
+ref; subdirectory URL syntax is not supported, and remote URLs are unavailable until
+the commit is pushed). The OpenCode V2 plugin runtime requires Linux/glibc Bun
+(archive file locking uses `bun:ffi`): `openchamber/plugin/index.mjs` loads
+`file-archive.js` under Bun and delegates operator configuration loading to the
+Node-safe `openchamber/plugin/operator-options.mjs` (sharing
+`openchamber/plugin/private-options.mjs`). Operator authority comes solely from the
+process environment variable `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json`
+(ordinary host plugin options cannot bypass `loadOperatorOptions`): when unset, it
+returns `{}` (default deny / fail-closed); when set, `BCP_OPERATOR_OPTIONS` must resolve
+to a canonical absolute owner-private regular file (`0600`, `nlink === 1`, no symlinks,
+`<= 1 MiB`) under an owner-private parent directory and trusted ancestors, outside both
+the extension package root and every `taskScopes[].directory`, and its `policyFile`
+must likewise be a canonical absolute path outside the extension package root and every
+`taskScopes[].directory`. OpenChamber 2.7.2 update checks compare only a newer root
+`package.json` semver (not commit hashes), cache checks for one hour, and require a
+separate user apply action (no automatic updates).
+
+For offline host-validated packaging without `BCP_OPERATOR_OPTIONS`,
+`node scripts/package-openchamber.mjs --target /absolute/new-extension --host /absolute/installed/@openchamber/web --options /absolute/operator/options.json`
+remains supported separately: it creates an uninstalled offline extension package (`deliveryRequired: "file"`) and validates it
 with the installed host's `inspectGuestPackage`. The external `--options` path must be canonical,
 outside the extension directory, under owner-private ancestors, and must not exist at packaging time.
 Its generated wrapper returns `{}` (disabled / fail-closed) when `--options` is absent and enforces
