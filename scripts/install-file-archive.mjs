@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Dedicated V2 runtime profile. Never merges configuration or grants authority.
-import { lstat, realpath, readFile, mkdir, writeFile, copyFile, rename, open } from "node:fs/promises";
+import { lstat, realpath, mkdir, writeFile, rename, open } from "node:fs/promises";
 import { constants } from "node:fs";
 import { resolve, dirname, join, isAbsolute } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { buildFileArchive } from "./build-file-archive.mjs";
 
 const usage = "node scripts/install-file-archive.mjs --target /absolute/new-profile --project /absolute/worktree --port 4096 [--options /absolute/operator-options.json]";
 // Also embedded in the installed wrapper: check the opened inode, not a path
@@ -79,14 +80,12 @@ export async function install(args) {
     await checkAncestors(dirname(p), "options");
     options = await loadPrivateOptions(p);
   }
-  const repo = dirname(dirname(fileURLToPath(import.meta.url)));
-  const bundle = join(repo, "dist/file-archive/file-archive.js");
-  await readFile(bundle); // Build first; no package manager or network during installation.
+  const bundle = await buildFileArchive(); // Local Bun build only; no install/network.
   // mkdir claims the final name exclusively. A failed stage is deliberately not
   // deleted or rolled back; it has no registered config until the final rename.
   await mkdir(target, { mode: 0o700 });
   for (const dir of ["home", "config/opencode", "data", "cache", "state", "tmp", "package"]) await mkdir(join(target, dir), { recursive: true, mode: 0o700 });
-  await copyFile(bundle, join(target, "package/file-archive.js"));
+  await writeFile(join(target, "package/file-archive.js"), bundle, { mode: 0o600, flag: "wx" });
   await writeFile(join(target, "options.json"), JSON.stringify(options, null, 2) + "\n", { mode: 0o600, flag: "wx" });
   await writeFile(join(target, "options.example.json"), JSON.stringify({
     enabled: true, connection: { baseUrl: "http://127.0.0.1:PORT", serverPid: 0 },

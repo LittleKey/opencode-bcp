@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import { dirname, resolve, join, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildFileArchive } from "./build-file-archive.mjs";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 export async function packageOpenChamber(target, host, optionsPath) {
@@ -42,7 +43,7 @@ export { checkAncestors };`));
   // live operator authority. Operator creates this file only after review.
   try { await fs.lstat(optionsPath); throw Error("options path must not exist while packaging"); }
   catch (e) { if (e.code !== "ENOENT") throw e; }
-  const bundle = await fs.readFile(join(repo, "dist/file-archive/file-archive.js"));
+   const bundle = await buildFileArchive();
   const manifest = {
     name: "opencode-bcp-openchamber-local", version: "1.0.0", private: true,
     openchamber: { engines: { openchamber: ">=2.7.2" }, apiVersion: 1,

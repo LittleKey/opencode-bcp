@@ -45,7 +45,7 @@ bcp_ver_at_least() {
 # Known legacy release digests, each verifiable against this repository:
 #   plugin/blackboard.ts = f682fef1...0de40c — the v1 bundle as installed by the
 #   v1.20.0-era installer (recoverable from git:
-#   harness/live-agg/.opencode/plugin/blackboard.ts). No pre-2.0.0 v2/.js
+#   harness/fixtures/legacy-v1-blackboard.ts.fixture). No pre-2.0.0 v2/.js
 #   release bytes are recoverable, so those names require explicit adoption.
 bcp_known_legacy_sha() { # $1=relative managed name $2=sha256 → 0 if a known release
   case "$1:$2" in

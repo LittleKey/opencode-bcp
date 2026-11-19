@@ -1,15 +1,21 @@
 # File handoff implementation notes
 
-See [V2 installation](../INSTALL.md#v2-快照归档独立配置) for the independent
-profile. Installation supplies no retention or reader approval.
-`bcp_save` takes `{"sessionId":"...","messageId":"..."}`; `messageId` is optional.
-It saves an existing assistant reply from the caller's own session or an
-authorized direct child session. With `messageId` it reads exactly that message.
-Without one it selects the latest assistant message before testing eligibility,
+See [V2 installation](../INSTALL.md#默认入口独立-v2-快照归档bcp_save) for the independent
+profile and OpenChamber extension packaging. Installation and offline packaging
+supply no retention or reader approval.
+`bcp_save` is the standalone V2 default entry (`src/file-archive.ts`, independent
+of OMO). It takes `{"sessionId":"...","messageId":"..."}`; `messageId` is optional.
+It saves an existing stored `finish: "stop"` assistant reply from the caller's own
+session or an authorized non-fork direct child session (`parentID === caller`).
+With `messageId` it reads exactly that message.
+Without one it requires the source session to be inactive and selects only the
+latest assistant message (`limit: 1`) before testing eligibility,
 never falling back to an older successful turn. The selected message is
-rechecked by ID before publication. An in-flight reply is not a saved reply.
-The tool does not accept body text and does not promise to identify the final
-reply of a particular dispatch or reproduce a parent notification.
+rechecked by ID under the task lock before publication. An in-flight reply is not a saved reply.
+The tool does not accept body text or a `description` parameter, requires no
+`<!-- bcp:store -->` marker (and skips if `<!-- bcp:no-store -->` is present),
+and does not promise to identify the final reply of a particular dispatch or
+reproduce a parent notification.
 
 It returns versioned paths rather than echoing the body. There is no automatic
 capture. The same static tool may be visible to multiple agents; trusted task
@@ -18,13 +24,23 @@ Missing or ambiguous authorization fails closed.
 
 ### Isolated configuration contract
 
-Build the entry with `bash scripts/build-file-archive.sh`. OpenCode V2 loads
-local plugins as package directories, not bare bundle files; the directory's
+Build the default entry with `bun run build` (`bash scripts/build-file-archive.sh`;
+legacy Blackboard builds use `bun run build:legacy` / `bash scripts/install.sh`).
+OpenCode V2 loads local plugins as package directories, not bare bundle files; the directory's
 server export must resolve to the built entry. Register that package with
-operator-owned plugin options. In the installed profile, publish options
-after starting the service and establishing the caller session. Replace the
+operator-owned plugin options. In the installed profile (`node scripts/install-file-archive.mjs`),
+publish options after starting the service and establishing the caller session. Replace the
 owner-private `options.json` atomically. The tool reads it at execution and
 rechecks it before writing; a change during the operation denies that save.
+
+For OpenChamber 2.7.2, `node scripts/package-openchamber.mjs --target /absolute/new-extension --host /absolute/installed/@openchamber/web --options /absolute/operator/options.json`
+creates an uninstalled offline extension package (`deliveryRequired: "file"`) and validates it
+with the installed host's `inspectGuestPackage`. The external `--options` path must be canonical,
+outside the extension directory, under owner-private ancestors, and must not exist at packaging time.
+Its generated wrapper returns `{}` (disabled / fail-closed) when `--options` is absent and enforces
+the same owner-private regular-file inode checks (`0600`, owner UID, `nlink === 1`, no symlinks,
+`<= 1 MiB`) when the operator later creates it. Keep `options.json`, `policyFile` and credentials
+outside every served extension root, and do not use a global `Install into OpenCode` fallback.
 
 - `enabled: true`; `connection` supplies a loopback HTTP origin, the expected
   host PID, and optional operator-supplied headers. This is a trusted endpoint
@@ -50,8 +66,14 @@ rechecks it before writing; a change during the operation denies that save.
 Keep the policy and plugin configuration outside model-writable paths; file
 mode alone does not isolate processes running under the same user. Native
 permission checks remain required, including edit approval for the concrete
-archive write paths. Revoking a grant blocks subsequent writes; it does not
-recall copies already saved or erase host tool-call history.
+archive write paths. Native permission assertion enforcement is host-dependent,
+and `bcp_save`'s native `edit` check on relative archive resources is additive
+to the operator retention policy rather than dedicated writer isolation:
+granting archive `edit` permission to a caller means normal edits on those paths
+may also be allowed (without claiming independent runtime proof of 2.3.2 host
+equivalence). Policy retention gates and filesystem isolation remain distinct.
+Revoking a grant blocks subsequent `bcp_save` writes; it does not recall copies
+already saved or erase host tool-call history.
 
 ## Unified task layout
 
@@ -65,10 +87,11 @@ the same task. Parallel agents share that task root via normal dispatch.
 - `reports/`: task investigations, reviews, corrections and handoffs; one writer
   per file. Drafts may change, but pin reviewed/handed-off versions with commits
   or explicit version snapshots rather than overwriting them.
-- `archive/`: BCP-only copies, metadata and derived index. The layout helper
-  returns this path but does not create it or its lock: the core owns creation.
-  Copies are nested by encoded **source** session, not by the saving caller.
-  A main session may handle multiple tasks; a session ID is not a task ID.
+- `archive/`: reserved by operational convention for BCP copies, metadata and
+  derived index (not an ACL-enforced exclusive writer boundary). The layout
+  helper returns this path but does not create it or its lock: the core owns
+  creation. Copies are nested by encoded **source** session, not by the saving
+  caller. A main session may handle multiple tasks; a session ID is not a task ID.
 - `scratch/<run-id>/`: isolated disposable logs and large temporary outputs.
 - Formal deliverables stay in existing version-controlled project locations.
 
@@ -114,7 +137,11 @@ review; ignored working files are not portable formal deliverables.
 Copies preserve selected UTF-8 exactly, without trimming, frontmatter or newline
 changes. Session snapshots preserve ordinal text parts without reasoning or
 tool data. BCP does not recover content lost before storage or treat quoted
-authorship as authenticated.
+authorship as authenticated. It does not provide exclusive-writer enforcement,
+keyed/signed provenance or forged-record resistance: SHA-256 digests prove
+self-consistency and the exact selected snapshot when written through the
+trusted `bcp_save` path, not resistance to a caller with write/edit access or a
+same-UID process rewriting both the body and manifest (`meta.json` / `index.jsonl`).
 
 Identity is source session plus stored message. New records use `bcp.handoff.v1`.
 Navigation contains source/version, not descriptions, previews or title
@@ -122,12 +149,18 @@ fallback. Agents do not repair archive bodies or indexes. No new author
 tags/output protocol are required.
 
 Publication is no-clobber, with a fixed-inode task lock and policy/identity
-rechecks. `archive/index.jsonl` is a derived task-level index. Normal saves
-append a single complete line; a retry of an already indexed copy leaves it
-unchanged. Line order is index insertion order, not a guarantee of newest first.
-Existing `index.md` files remain historical snapshots; the first authorized
-save to an old root builds the new index from verified manifests and bodies.
-Existing record paths do not move.
+rechecks. `archive/index.jsonl` is a derived task-level index (`bcp.handoff-index.v1`).
+Physical line order in `index.jsonl` is not guaranteed: a full rebuild from verified
+manifests and bodies writes rows in deterministic newest-first order (`observedAt`
+descending, with deterministic tie-breaking), and subsequent normal saves append one
+complete line per new copy at the end of the file (while a retry of an already indexed
+copy leaves the file unchanged). Readers that need chronological order must parse
+complete newline-terminated rows and sort by `observedAt` (with their required tie-breaker);
+never treat the first or last physical line of `index.jsonl` as authoritative.
+Existing `index.md` files remain historical snapshots; an already bound task root
+whose `index.jsonl` is missing or invalid rebuilds `index.jsonl` from verified
+manifests and bodies without modifying `index.md`, while an unbound nonempty legacy
+`archive/` root is rejected (`archive_unbound_existing_root`). Existing record paths do not move.
 
 Only read complete newline-terminated rows. The index exposes source IDs and
 paths: readers of the shared index must be approved for that metadata, and an
@@ -146,6 +179,6 @@ tests are not real-host, provider cache or model-quality evidence.
 The new entry depends on OpenCode, not OMO. BCP no longer ships OMO patchers
 or bridge registrations. Changing the BCP entry alone does not disable
 presentation code in an already installed, independently patched OMO package.
-`bash scripts/build-file-archive.sh` builds a separate repository artifact only.
-The isolated installer does not change global configuration, migrate reports,
-or backfill replies. Old reports and exports remain untouched.
+`bun run build` (`bash scripts/build-file-archive.sh`) builds a separate repository artifact only.
+The isolated installer and offline OpenChamber packager do not change global configuration,
+migrate reports, or backfill replies. Old reports and exports remain untouched.
