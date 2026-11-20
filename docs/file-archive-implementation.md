@@ -2,7 +2,8 @@
 
 See [V2 installation](../INSTALL.md#默认入口独立-v2-快照归档bcp_save) for the independent
 profile and OpenChamber extension packaging. Installation and offline packaging
-supply no retention or reader approval.
+declare an operator source without granting retention; with no operator source
+declared at all, the fixed default mode below applies.
 `bcp_save` is the standalone V2 default entry (`src/file-archive.ts`, independent
 of OMO). It takes `{"sessionId":"...","messageId":"..."}`; `messageId` is optional.
 It saves an existing stored `finish: "stop"` assistant reply from the caller's own
@@ -20,7 +21,8 @@ reproduce a parent notification.
 It returns versioned paths rather than echoing the body. There is no automatic
 capture. The same static tool may be visible to multiple agents; trusted task
 scope, retention policy, reader eligibility and host permissions govern writes.
-Missing or ambiguous authorization fails closed.
+A declared operator source that is missing, broken or ambiguous fails closed;
+only the complete absence of a declared source selects the fixed default mode.
 
 ### Isolated configuration contract
 
@@ -33,7 +35,7 @@ publish options after starting the service and establishing the caller session. 
 owner-private `options.json` atomically. The tool reads it at execution and
 rechecks it before writing; a change during the operation denies that save.
 
-For OpenChamber 2.7.2, the repository root (`package.json` version `2.1.1`) is a
+For OpenChamber 2.7.2, the repository root (`package.json` version `2.2.0`) is a
 prebuilt extension (`panel.id: "bcp-file-archive"`, `opencodePlugin: "openchamber/plugin"`)
 with a committed bundle at `openchamber/plugin/file-archive.js` (updated via
 `bun run build:openchamber` and verified via `bun run check:openchamber`, with no
@@ -47,8 +49,9 @@ the commit is pushed). The OpenCode V2 plugin runtime requires Linux/glibc Bun
 Node-safe `openchamber/plugin/operator-options.mjs` (sharing
 `openchamber/plugin/private-options.mjs`). Operator authority comes solely from the
 process environment variable `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json`
-(ordinary host plugin options cannot bypass `loadOperatorOptions`): when unset, it
-returns `{}` (default deny / fail-closed); when set, `BCP_OPERATOR_OPTIONS` must resolve
+(ordinary host plugin options cannot bypass `loadOperatorOptions`): when unset, the
+loader reports absence (`undefined`) and the fixed default mode below applies; when
+set, `BCP_OPERATOR_OPTIONS` must resolve
 to a canonical absolute owner-private regular file (`0600`, `nlink === 1`, no symlinks,
 `<= 1 MiB`) under an owner-private parent directory and trusted ancestors, outside both
 the extension package root and every `taskScopes[].directory`, and its `policyFile`
@@ -62,9 +65,12 @@ For offline host-validated packaging without `BCP_OPERATOR_OPTIONS`,
 remains supported separately: it creates an uninstalled offline extension package (`deliveryRequired: "file"`) and validates it
 with the installed host's `inspectGuestPackage`. The external `--options` path must be canonical,
 outside the extension directory, under owner-private ancestors, and must not exist at packaging time.
-Its generated wrapper returns `{}` (disabled / fail-closed) when `--options` is absent and enforces
+Its generated wrapper rejects (hard denial, never default mode) when the baked `--options` file is
+missing or unreadable, and enforces
 the same owner-private regular-file inode checks (`0600`, owner UID, `nlink === 1`, no symlinks,
-`<= 1 MiB`) when the operator later creates it. Keep `options.json`, `policyFile` and credentials
+`<= 1 MiB`) when the operator later creates it. An empty JSON object `{}` in any declared source
+is a declared-but-empty configuration that fails closed; it never selects default mode. Keep
+`options.json`, `policyFile` and credentials
 outside every served extension root, and do not use a global `Install into OpenCode` fallback.
 
 - `enabled: true`; `connection` supplies a loopback HTTP origin, the expected
@@ -99,6 +105,50 @@ may also be allowed (without claiming independent runtime proof of 2.3.2 host
 equivalence). Policy retention gates and filesystem isolation remain distinct.
 Revoking a grant blocks subsequent `bcp_save` writes; it does not recall copies
 already saved or erase host tool-call history.
+
+### Default mode (zero configuration, since 2.2.0)
+
+When no operator source is *declared* — the environment loader reports absence
+(`BCP_OPERATOR_OPTIONS` unset or empty, which only the env loader can express as
+`undefined`), or a bare V2 install has absent/empty plugin JSON options —
+`bcp_save` runs in default mode instead of failing closed. Any value a declared
+loader returns — including `{}`, `false`, or any other object — goes through the
+strict operator path and is denied if it does not validate.
+
+- The connection is self-derived: the plugin accepts exactly one loopback
+  LISTEN socket owned by its own process (`/proc/self/net/tcp{,6}` cross-checked
+  against `/proc/self/fd`); zero or several distinct candidates are refused
+  (`no_listener` / `ambiguous_listener` deny). Credentials come only from the
+  process's own environment (`OPENCODE_PASSWORD`, then
+  `OPENCODE_SERVER_PASSWORD`); no URL or credential is ever taken from tool
+  arguments or plugin JSON.
+- The scope is fixed: `taskId` `bcp-handoff`, task root
+  `<plugin directory>/.opencode/work/bcp-handoff`, caller = the invoking
+  session, project pinned from the live session record. Retention/readers are
+  bounded by the project directory itself; no operator policy file exists.
+- The archive core requires an existing task root, so default mode authorizes
+  the exact relative task-root path with a native `edit` assertion before
+  creating it (`mkdir -p`, 0700); an existing path must be a real directory,
+  never a symlink.
+- All identity checks are unchanged: fork callers are rejected, child sessions
+  must be direct children in the same project/directory, native
+  `read`/`bcp_save`/`edit` assertions still apply, and the pinned options shape
+  is re-verified under the archive lock.
+
+Default mode is selected only by the *absence* of an operator source. A
+declared-but-broken source — env set with a missing or invalid file, or the
+offline packager's baked path disappearing — stays a hard denial; revocation
+can never flip a deployment into default mode. Cross-project archives, custom
+task roots and no-store constraints still require the operator file channel.
+
+To switch default mode off on a deployment that declares no operator file, set
+`BCP_OPERATOR_OPTIONS` to any existing owner-private file containing at least
+`{"enabled": false}`: a declared source — even a disabled one — always takes
+precedence over default mode, so this both disables the operator channel and
+opts out of default mode. (Upgrading from 2.1.1 without `BCP_OPERATOR_OPTIONS`
+moves a deployment from disabled to default mode; that is the intended 2.2.0
+behavior change, and this opt-out is the documented way back.)
+
 
 ## Unified task layout
 

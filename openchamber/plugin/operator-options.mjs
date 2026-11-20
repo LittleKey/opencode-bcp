@@ -11,7 +11,10 @@ const within = (root, path) => {
 
 export async function loadOperatorOptions() {
   const path = process.env.BCP_OPERATOR_OPTIONS;
-  if (!path) return {};
+  // Absence of the operator source is reported as undefined — the only value
+  // that can enable default mode. Nothing parsed from a declared file can
+  // produce undefined, so a declared source can never flip to default mode.
+  if (!path) return undefined;
   if (!isAbsolute(path) || resolve(path) !== path ||
       within(packageRoot, path) || await realpath(path) !== path)
     throw Error("options must be canonical and outside extension package");
@@ -20,6 +23,9 @@ export async function loadOperatorOptions() {
   if (parent.uid !== process.getuid() || (parent.mode & 0o077))
     throw Error("options parent must be owner-private");
   const options = await loadPrivateOptions(path);
+  // A declared explicit off switch: {"enabled":false} stays a declared source
+  // (never default mode) and denies execution in the adapter.
+  if (options.enabled === false) return options;
   if (!Array.isArray(options.taskScopes)) throw Error("taskScopes required");
   if (typeof options.policyFile !== "string" || !isAbsolute(options.policyFile) ||
       resolve(options.policyFile) !== options.policyFile || within(packageRoot, options.policyFile))

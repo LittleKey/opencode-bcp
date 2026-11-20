@@ -20,8 +20,8 @@ describe("scripts/build.sh: builder CLI and artifacts", () => {
     expect(existsSync(join(REPO, "dist", "plugin.js"))).toBe(false)
   })
 
-  test("package version is 2.1.1 and stays private/unpublished", () => {
-    expect(PKG.version).toBe("2.1.1")
+  test("package version is 2.2.0 and stays private/unpublished", () => {
+    expect(PKG.version).toBe("2.2.0")
     expect(PKG.private).toBe(true)
     expect(PKG.name).toBe("opencode-bcp")
   })

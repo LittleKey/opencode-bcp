@@ -20,7 +20,7 @@ BCP 把需要留存的信息写成**持久记录**：原文可取回、来源可
 - **不接受正文或标签**：不接受 `text`、`description` 等自由正文或摘要参数，不要求 `<!-- bcp:store -->` 等正文标记；若正文中含 `<!-- bcp:no-store -->` 则跳过保存。生成中（in-flight / `pending`）或非 `stop` 结束的回复不能保存。
 - **无自动捕获**：**没有后台自动捕获。** 保存快照不证明该回复是某次派发的最终结论，也不复现父会话通知。
 - **按确切版本文件交接**：发布前在任务锁内按消息 ID 重新读取并校验快照未变，写入 `.opencode/work/<task-id>/archive/`，返回项目相对的 `meta.json`（及单段文本的 `body.txt`）路径与 64 位 SHA-256 `version`。后续任务直接传递这些可访问的确切版本文件路径，无需 `board_get` / `board_export`，也不注册 export 工具。交接约定见 [docs/file-handoff.md](docs/file-handoff.md)。
-- **工作目录与权限边界**：任务材料统一放在 `.opencode/work/<task-id>/{reports,archive,scratch/<run-id>}`；按协作约定 `archive/` 留给 BCP 写入（非文件系统或宿主 ACL 强制独占），正式交付物仍留在受版控项目路径，既有 Deepwork（`.slim/deepwork/`）路径不变。任务根通过普通派发传递，无需加载专用 skill。目录存在、`.gitignore` 或工具可见均不构成留存或读取授权；缺少显式配置、算子策略或宿主 `read` / `bcp_save` / `edit` 权限时一律 fail closed。原生权限断言的实际强制行为取决于宿主实现；`bcp_save` 对相对归档路径的 `edit` 断言是叠加在算子留存策略上的附加检查而非专属写入者隔离，向调用者授予归档路径 `edit` 权限也可能允许其对该路径执行常规编辑（不宣称 2.3.2 等宿主的独立运行态等价证明）。SHA-256 哈希仅用于校验经可信路径写入时的快照与文件自洽性，不提供带密钥/签名的来源证明（keyed/signed provenance），也不防具备写权限者或同 UID 进程同时改写正文与清单（`body` + `meta.json` / `index.jsonl`）。范围、配置契约与索引语义见 [docs/file-archive-implementation.md](docs/file-archive-implementation.md)。
+- **工作目录与权限边界**：任务材料统一放在 `.opencode/work/<task-id>/{reports,archive,scratch/<run-id>}`；按协作约定 `archive/` 留给 BCP 写入（非文件系统或宿主 ACL 强制独占），正式交付物仍留在受版控项目路径，既有 Deepwork（`.slim/deepwork/`）路径不变。任务根通过普通派发传递，无需加载专用 skill。目录存在、`.gitignore` 或工具可见均不构成留存或读取授权；算子源已声明但缺失、损坏或不满足要求时一律 fail closed；完全未声明算子源时则进入固定的默认模式（见下文"默认模式"要点），声明包含 `{"enabled": false}` 的私有文件可显式关闭。原生权限断言的实际强制行为取决于宿主实现；`bcp_save` 对相对归档路径的 `edit` 断言是叠加在算子留存策略上的附加检查而非专属写入者隔离，向调用者授予归档路径 `edit` 权限也可能允许其对该路径执行常规编辑（不宣称 2.3.2 等宿主的独立运行态等价证明）。SHA-256 哈希仅用于校验经可信路径写入时的快照与文件自洽性，不提供带密钥/签名的来源证明（keyed/signed provenance），也不防具备写权限者或同 UID 进程同时改写正文与清单（`body` + `meta.json` / `index.jsonl`）。范围、配置契约与索引语义见 [docs/file-archive-implementation.md](docs/file-archive-implementation.md)。
 
 ## 快速开始（默认 V2 快照归档）
 
@@ -33,11 +33,11 @@ bun run build
 
 完整安装与扩展部署步骤见 [INSTALL.md](INSTALL.md)：
 
-- **OpenChamber 2.7.2 GitHub URL 扩展（`2.1.1` 根包直连，提交并推送发布版本后远端可用）**：
-  - 仓库根 `package.json`（`2.1.1`）声明 `openchamber` 元数据（`panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随库提交预构建插件包 `openchamber/plugin/`（无安装/构建钩子；用 `bun run build:openchamber` 更新、`bun run check:openchamber` 校验产物新鲜度）。OpenCode 插件运行态需 Linux/glibc Bun（归档锁核心使用 `bun:ffi`），`openchamber/plugin/index.mjs` 调用 Node 兼容的 `openchamber/plugin/operator-options.mjs`（共用 `private-options.mjs`）加载外部算子配置。
+- **OpenChamber 2.7.2 GitHub URL 扩展（`2.2.0` 根包直连，提交并推送发布版本后远端可用）**：
+  - 仓库根 `package.json`（`2.2.0`）声明 `openchamber` 元数据（`panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随库提交预构建插件包 `openchamber/plugin/`（无安装/构建钩子；用 `bun run build:openchamber` 更新、`bun run check:openchamber` 校验产物新鲜度）。OpenCode 插件运行态需 Linux/glibc Bun（归档锁核心使用 `bun:ffi`），`openchamber/plugin/index.mjs` 调用 Node 兼容的 `openchamber/plugin/operator-options.mjs`（共用 `private-options.mjs`）加载外部算子配置。
   - 在该版本提交并推送至远端后，可在 OpenChamber 2.7.2 中通过 GitHub 仓库根 URL 安装（仅支持仓库根与可选 `#<branch-or-tag>`，不支持子目录语法）：
     `https://github.com/littlekey/opencode-bcp.git`（或 `https://github.com/littlekey/opencode-bcp.git#<branch-or-tag>`）
-  - 算子授权完全通过宿主/服务进程环境变量 `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json` 指向扩展包与所有任务树（`taskScopes[].directory`）之外的规范化私有文件（其中 `policyFile` 同样须位于扩展包与所有任务树之外）；未设置 `BCP_OPERATOR_OPTIONS` 时返回 `{}`（默认禁用 / fail closed）。OpenChamber 2.7.2 的上游更新检查仅比较远端根 `package.json` 的更高 semver 版本号（不按普通 commit 触发），带 1 小时缓存，且需用户单独点击应用（无自动更新承诺）。
+  - 算子授权完全通过宿主/服务进程环境变量 `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json` 指向扩展包与所有任务树（`taskScopes[].directory`）之外的规范化私有文件（其中 `policyFile` 同样须位于扩展包与所有任务树之外）。**自 2.2.0 起的默认模式**：未设置 `BCP_OPERATOR_OPTIONS`（无算子源）时，`bcp_save` 以零配置默认可用——连接自衍生（仅接受本进程唯一的回环 LISTEN socket，歧义即拒；凭据取自进程自身 `OPENCODE_PASSWORD`/`OPENCODE_SERVER_PASSWORD`），归档范围固定为本项目 `.opencode/work/bcp-handoff/`，`taskId` 固定 `bcp-handoff`，无算子策略文件；原生 `read`/`bcp_save`/`edit` 权限断言与既有全部身份校验（fork 拒绝、父子/项目/目录全等）保持不变。env 已设置但文件缺失/损坏仍是硬拒绝（撤权永远不会翻转成默认开启）；跨项目、自定义任务根与 no-store 约束仍走算子文件通道。OpenChamber 2.7.2 的上游更新检查仅比较远端根 `package.json` 的更高 semver 版本号（不按普通 commit 触发），带 1 小时缓存，且需用户单独点击应用（无自动更新承诺）。
 - **独立 OpenCode V2 配置（不合并现有配置、不创建归档授权）**：
   ```bash
   bun run build

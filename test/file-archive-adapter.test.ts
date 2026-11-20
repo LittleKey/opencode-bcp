@@ -5,6 +5,8 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync, mkdirSync,
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { spawnSync } from "node:child_process"
+import { createServer } from "node:net"
+import { statSync } from "node:fs"
 test("strict snapshot arguments reject literal text and previous variants", () => {
   expect(saveInput.safeParse({ sessionId: "child" }).success).toBe(true)
   expect(saveInput.safeParse({ sessionId: "child", messageId: "m" }).success).toBe(true)
@@ -126,7 +128,10 @@ test("production snapshot execution uses exact edit resources, live policy and l
     } as any)
      const ctx = { sessionID: "parent", messageID: "m", id: "call", agent: "build", signal: new AbortController().signal }
      const exact = { sessionId: "parent", messageId: "pinned" }
-     expect(JSON.parse((await tool.execute(exact, ctx)).content).reason).toBe("trusted_configuration_required")
+     // A declared loader returning {} is a DECLARED source (strict path), not
+     // default mode: it denies for trusted_configuration_required.
+     expect(JSON.parse((await tool.execute(exact, ctx)).content))
+       .toEqual({ status: "denied", reason: "trusted_configuration_required" })
      configured = true
      revokeOnEdit = true
      expect(JSON.parse((await tool.execute(exact, ctx)).content).status).toBe("denied")
@@ -284,6 +289,121 @@ test("explicit caller scopes share a task root without inheriting source authori
     expect((await save("parent", "grandchild")).status).toBe("denied")
     expect(sourceReads.length).toBe(readsBefore)
   } finally {
+    globalThis.fetch = oldFetch
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
+test("default mode: zero-config self-save with self-derived connection and native task-root bootstrap", async () => {
+  const workspace = mkdtempSync(join(homedir(), ".adapter-default-test-"))
+  const project = join(workspace, "project")
+  mkdirSync(project, { recursive: true })
+  const taskRoot = join(project, ".opencode/work/bcp-handoff")
+  const local = { id: "parent", projectID: "project", location: { directory: project }, permissions: [] }
+  const message = { id: "latest", type: "assistant", agent: "build", time: { created: 1, completed: 2 },
+    finish: "stop", content: [{ type: "text", text: "default mode body" }] }
+  const oldFetch = globalThis.fetch
+  const asserts: any[] = []
+  // A REAL loopback listener owned by this process: exactly one, so the
+  // self-derived connection resolves unambiguously (fetch stays mocked).
+  const server = createServer()
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
+  globalThis.fetch = (async (request: Request) => {
+    const path = new URL(request.url).pathname
+    if (path.endsWith("/parent")) return Response.json({ data: local })
+    if (path.endsWith("/message/latest")) return Response.json({ data: message })
+    if (path.endsWith("/message")) return Response.json({ data: [message] })
+    if (path.endsWith("/active")) return Response.json({ data: {} })
+    return Response.json({ pid: process.pid })
+  }) as typeof fetch
+  try {
+    let tool: any
+    await FileArchiveV2Plugin.setup!({
+      options: {}, // bare V2 install: no loader, no JSON options
+      location: { directory: project },
+      session: { get: async () => local }, agent: { list: async () => [{ id: "build", permissions: [] }] },
+      permission: { assert: async (input: any) => { asserts.push(input) } },
+      tool: { transform: async (fn: any) => fn({ add: (value: any) => { tool = value } }) },
+    } as any)
+    const ctx = { sessionID: "parent", messageID: "m", id: "call", agent: "build", signal: new AbortController().signal }
+    const result = JSON.parse((await tool.execute({ sessionId: "parent" }, ctx)).content)
+    expect(result.status).toBe("saved")
+    expect(result.body!.startsWith(".opencode/work/bcp-handoff/archive/id-")).toBe(true)
+    expect(readFileSync(join(project, result.body), "utf8")).toBe("default mode body")
+    // The task root was bootstrapped after a native edit assertion on its exact path.
+    const stat = statSync(taskRoot)
+    expect(stat.isDirectory()).toBe(true)
+    expect(stat.mode & 0o777).toBe(0o700)
+    const bootstrapEdit = asserts.find(a => a.action === "edit" &&
+      JSON.stringify(a.resources) === JSON.stringify([".opencode/work/bcp-handoff"]))
+    expect(bootstrapEdit).toBeDefined()
+    expect(readFileSync(join(taskRoot, "archive", "index.jsonl"), "utf8").trim().split("\n").length).toBe(1)
+    // Second save of the same latest reply is a duplicate.
+    const again = JSON.parse((await tool.execute({ sessionId: "parent" }, ctx)).content)
+    expect(again.status).toBe("already_saved")
+    expect(again.body).toBe(result.body)
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    globalThis.fetch = oldFetch
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
+test("default mode refuses ambiguous self-derived listeners and keeps declared sources strict", async () => {
+  const workspace = mkdtempSync(join(homedir(), ".adapter-default-deny-test-"))
+  const project = join(workspace, "project")
+  mkdirSync(project, { recursive: true })
+  const local = { id: "parent", projectID: "project", location: { directory: project }, permissions: [] }
+  const oldFetch = globalThis.fetch
+  let fetches = 0
+  globalThis.fetch = (async () => { fetches++; return Response.json({ pid: process.pid }) }) as unknown as typeof fetch
+  const servers = [createServer(), createServer()]
+  try {
+    const setup = async (options: unknown) => {
+      let added: any
+      await FileArchiveV2Plugin.setup!({
+        options, location: { directory: project },
+        session: { get: async () => local }, agent: { list: async () => [{ id: "build", permissions: [] }] },
+        permission: { assert: async () => {} },
+        tool: { transform: async (fn: any) => fn({ add: (value: any) => { added = value } }) },
+      } as any)
+      return added
+    }
+    const ctx = { sessionID: "parent", messageID: "m", id: "call", agent: "build", signal: new AbortController().signal }
+    // No listener at all -> default mode denies during self-derivation, before
+    // any HTTP is attempted (fetch stays at zero calls).
+    let tool = await setup({})
+    fetches = 0
+    expect(JSON.parse((await tool.execute({ sessionId: "parent" }, ctx)).content).status).toBe("denied")
+    expect(fetches).toBe(0)
+    // Two own listeners -> ambiguous, refuse rather than guess; again no HTTP.
+    await Promise.all(servers.map(server => new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))))
+    fetches = 0
+    expect(JSON.parse((await tool.execute({ sessionId: "parent" }, ctx)).content).status).toBe("denied")
+    expect(fetches).toBe(0)
+    // A declared loader that fails is a hard denial, never a default-mode flip.
+    let broken = await setup({ loadOperatorOptions: async () => { throw Error("operator source broken") } })
+    fetches = 0
+    expect(JSON.parse((await broken.execute({ sessionId: "parent" }, ctx)).content).status).toBe("denied")
+    expect(fetches).toBe(0)
+    // A declared loader returning {} is a DECLARED source: strict denial with
+    // trusted_configuration_required, even though a listener exists here.
+    fetches = 0
+    let declaredEmpty = await setup({ loadOperatorOptions: async () => ({}) })
+    expect(JSON.parse((await declaredEmpty.execute({ sessionId: "parent" }, ctx)).content))
+      .toEqual({ status: "denied", reason: "trusted_configuration_required" })
+    expect(fetches).toBe(0)
+    // A loader reporting absence (undefined) enters default mode: with exactly
+    // one listener owned by this process it derives a connection and reaches
+    // the host (fetch observed), then denies on session data — a strict-path
+    // denial would have made zero fetches.
+    await new Promise<void>(resolve => servers[1]!.close(() => resolve()))
+    fetches = 0
+    let absent = await setup({ loadOperatorOptions: async () => undefined })
+    const absentResult = JSON.parse((await absent.execute({ sessionId: "parent" }, ctx)).content)
+    expect(absentResult.status).toBe("denied")
+    expect(absentResult.reason).not.toBe("trusted_configuration_required")
+    expect(fetches).toBeGreaterThan(0)
+  } finally {
+    await Promise.all(servers.map(server => new Promise<void>(resolve => server.close(() => resolve()))))
     globalThis.fetch = oldFetch
     rmSync(workspace, { recursive: true, force: true })
   }

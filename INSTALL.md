@@ -28,12 +28,12 @@ node scripts/install-file-archive.mjs \
 
 - **路径与隔离要求**：`--target` 必须不存在且位于 `--project` 之外；`--target` 父目录、`--project` 工作树及各自祖先目录均须为当前用户私有（或 root 受控粘滞目录），无其他用户写权限。工作树可有 `.opencode/work`，但工作树及其祖先路径不能带冲突的 OpenCode 配置或插件/工具发现入口（`opencode.json`、`opencode.jsonc`、`.opencode/opencode.json`、`.opencode/opencode.jsonc`、`.opencode/plugin`、`.opencode/plugins`、`.opencode/tool`、`.opencode/tools`）。
 - **启动与连接**：先用目标目录中的 `serve.txt` 启动显式回环服务（`127.0.0.1`），再用 `launch.txt` 连接；连接时通过 `OPENCODE_PASSWORD` 环境变量提供服务密码，不写入启动脚本。
-- **授权与动态重载**：初始状态下 `bcp_save` 工具可见但一律拒绝保存（fail closed）。宿主启动并建立会话后，操作员才能根据实际服务 PID 和会话身份原子替换私有 `options.json`，并在项目外提供精确的短期策略文件（`bcp.operator-handoff-policy.v1`）。每次调用都会重新打开并核验 `options.json` 与外部策略文件的当前 inode，更新或撤销授权无需重启。字段与信任边界见[实现说明](docs/file-archive-implementation.md#isolated-configuration-contract)。
+- **授权与动态重载**：初始状态下 `bcp_save` 工具可见但一律拒绝保存（fail closed；安装器固定生成已声明的空 `options.json`，因此独立安装配置永不进入默认模式）。宿主启动并建立会话后，操作员才能根据实际服务 PID 和会话身份原子替换私有 `options.json`，并在项目外提供精确的短期策略文件（`bcp.operator-handoff-policy.v1`）。每次调用都会重新打开并核验 `options.json` 与外部策略文件的当前 inode，更新或撤销授权无需重启。字段与信任边界见[实现说明](docs/file-archive-implementation.md#isolated-configuration-contract)。
 - **不迁移旧状态**：该入口不迁移现有活跃会话、模型配置、旧 Blackboard 数据或独立安装的 OMO。
 
-### 3. OpenChamber 2.7.2 GitHub URL 扩展（根包 `2.1.1`，主选扩展通道）
+### 3. OpenChamber 2.7.2 GitHub URL 扩展（根包 `2.2.0`，主选扩展通道）
 
-仓库根 `package.json`（`version: "2.1.1"`）直接声明 OpenChamber 2.7.2 扩展元数据（固定 `panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随仓库提交预构建的 `openchamber/plugin/`（无 `postinstall` 或在线构建钩子）：
+仓库根 `package.json`（`version: "2.2.0"`）直接声明 OpenChamber 2.7.2 扩展元数据（固定 `panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随仓库提交预构建的 `openchamber/plugin/`（无 `postinstall` 或在线构建钩子）：
 
 - **构建与新鲜度校验**：
   ```bash
@@ -45,7 +45,7 @@ node scripts/install-file-archive.mjs \
     `https://github.com/littlekey/opencode-bcp.git`（或 `https://github.com/littlekey/opencode-bcp.git#<branch-or-tag>`）
 - **运行态依赖与外部算子环境变量（`BCP_OPERATOR_OPTIONS`）**：
   - OpenCode V2 插件运行态需在 Linux/glibc Bun 下执行（归档锁核心依赖 `bun:ffi`）。扩展入口 `openchamber/plugin/index.mjs` 在 Bun 运行态加载预构建的 `file-archive.js`，并委托 Node 兼容的 `openchamber/plugin/operator-options.mjs`（与独立安装器/离线打包器共用 `openchamber/plugin/private-options.mjs`）读取进程环境变量 `BCP_OPERATOR_OPTIONS`。
-  - 未设置 `BCP_OPERATOR_OPTIONS` 时，`loadOperatorOptions()` 返回 `{}`（默认禁用 / fail closed，任何宿主侧普通插件 options 均无法绕过该加载器）。
+  - 未设置 `BCP_OPERATOR_OPTIONS` 时，`loadOperatorOptions()` 返回 `undefined`（声明源缺席）——此时 `bcp_save` 进入固定的**默认模式**（零配置可用，见实现说明"Default mode"节；关闭方法：将 `BCP_OPERATOR_OPTIONS` 指向包含 `{"enabled": false}` 的现有私有文件）。任何宿主侧普通插件 options 均无法绕过该加载器，声明源返回的任何值（包括 `{}`）都走严格校验路径并在校验失败时拒绝。
   - 设置 `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json` 时，该路径必须是位于扩展包目录及所有 `taskScopes[].directory` 任务树之外的规范化绝对路径，父目录须为当前用户私有（`0700` / 无组或其他用户权限）且所有祖先目录通过非符号链接的当前用户或 root 受控粘滞目录检查，`options.json` 本身须为当前用户私有单硬链接普通文件（`0600`、`nlink === 1`、非符号链接、≤ 1 MiB），且其中必填的 `taskScopes` 数组与规范化绝对路径 `policyFile` 也必须位于扩展包目录及所有 `taskScopes[].directory` 之外。
 - **上游更新语义（OpenChamber 2.7.2）**：
   - 宿主更新检查仅在远端根 `package.json` 的 `version`（semver）高于当前已安装版本时提示更新（不按普通 git commit 变化触发），检查结果带 1 小时缓存，且必须由用户单独执行更新应用操作（不提供自动静默更新）。
@@ -63,7 +63,7 @@ node scripts/package-openchamber.mjs \
 ```
 
 - **离线打包边界**：`scripts/package-openchamber.mjs` 只生成未安装的扩展包目录（`package.json` 与 `plugin/`，`deliveryRequired: "file"`），**不安装或启用扩展，不修改 OpenCode 配置，不创建授权，也不重启服务**。
-- **外部私有 `options.json` 要求**：`--options` 必须是扩展包目录之外的规范化绝对路径，其父目录及祖先目录须为当前用户私有；**打包时 `--options` 路径不得已存在（包括符号链接）**，以防打包过程读取或复制现存算子授权。打包生成的加载器固定绑定该稳定外部路径：文件不存在时返回 `{}`（默认禁用 / 拒绝保存）；算子后续创建的 `options.json` 必须为当前用户私有（`0600`、单硬链接 `nlink === 1`、非符号链接、≤ 1 MiB）。
+- **外部私有 `options.json` 要求**：`--options` 必须是扩展包目录之外的规范化绝对路径，其父目录及祖先目录须为当前用户私有；**打包时 `--options` 路径不得已存在（包括符号链接）**，以防打包过程读取或复制现存算子授权。打包生成的加载器固定绑定该稳定外部路径：文件不存在或不可读时**直接报错硬拒绝（绝不回退为默认模式）**；算子后续创建的 `options.json` 必须为当前用户私有（`0600`、单硬链接 `nlink === 1`、非符号链接、≤ 1 MiB）。
 - **部署与安全限制**：通过 Local Path 挂载或 ZIP 上传时，二者在该宿主上均指向同一个规范化外部 `--options` 路径；**严禁将 `options.json`、策略文件或凭据放入任何对外提供的扩展目录内**，且**不要使用全局 `Install into OpenCode` 回退路径**。同 UID 下的文件权限不能隔离同一用户的恶意并发进程，原生宿主权限检查（`read` / `bcp_save` / 具体归档路径的 `edit`）仍然必需；该原生 `edit` 检查是叠加在算子留存策略上的附加约束（实际强制行为依宿主实现而定），而非专属写入者隔离，授予归档路径的 `edit` 权限也可能允许对该路径执行常规编辑。
 
 ---

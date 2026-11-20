@@ -1,10 +1,12 @@
 import { relative, isAbsolute, join, resolve } from "node:path"
+import { lstat, mkdir } from "node:fs/promises"
 import { OpenCode } from "@opencode/client"
 import type { Plugin } from "@opencode/plugin"
 import type { ToolContext } from "@opencode/plugin/promise/tool"
 import { z } from "zod"
 import { archiveHandoff, type HandoffRecord } from "../../archive"
 import { readOperatorPolicy } from "./handoff-source"
+import { deriveLoopbackConnection } from "./self-connection"
 
 export const saveInput = z.object({
   sessionId: z.string().min(1).max(512),
@@ -146,11 +148,35 @@ export const FileArchiveV2Plugin: Plugin.Plugin = {
               return load ? await bounded(Promise.resolve().then(load)) : configured
             }
             const raw = await readOptions()
-            if (!object(raw) || raw.enabled !== true || !object(raw.connection) ||
+            // Default mode = the operator source is ABSENT: a loader reports
+            // absence as undefined (nothing parsed from a declared file can
+            // produce undefined), or — without a loader — plugin options are
+            // simply not configured (undefined) or an empty object. Any object
+            // a loader returns, including {}, is a DECLARED source and goes
+            // through strict validation; a declared-but-broken source stays a
+            // hard denial: revocation can never flip a deployment into
+            // default mode.
+            const defaultMode = raw === undefined ||
+              (load === undefined && object(raw) && Object.keys(raw).length === 0)
+            if (!defaultMode && (!object(raw) || raw.enabled !== true || !object(raw.connection) ||
               !Array.isArray(raw.taskScopes) || raw.taskScopes.length > 128 ||
-              (typeof raw.policyFile !== "string" && (load || typeof raw.policy !== "function")))
+              (typeof raw.policyFile !== "string" && (load || typeof raw.policy !== "function"))))
               return { content: JSON.stringify({ status: "denied", reason: "trusted_configuration_required" }) }
-            const options = raw as unknown as FileArchiveOptions
+            const options: FileArchiveOptions = defaultMode ? {
+              enabled: true,
+              // Self-derived: this process's single loopback listener plus its
+              // own environment. Zero or several listeners are refused, never
+              // guessed; no URL or credential is ever taken from arguments.
+              connection: deriveLoopbackConnection(),
+              taskScopes: [{
+                taskId: "bcp-handoff",
+                taskRoot: join(resolve(ctx.location.directory), ".opencode", "work", "bcp-handoff"),
+                callerSessionId: tctx.sessionID,
+                projectId: "", // pinned from the live session record below
+                directory: resolve(ctx.location.directory),
+                allowArchive: true, sharedReadersApproved: true,
+              }],
+            } : raw as unknown as FileArchiveOptions
             // The installer supplies a fresh JSON object each time. Refuse to
             // publish if the operator removed or changed its authority.
             const operatorPin = load ? JSON.stringify(raw) : undefined
@@ -158,6 +184,16 @@ export const FileArchiveV2Plugin: Plugin.Plugin = {
             if (!["127.0.0.1", "[::1]"].includes(url.hostname) ||
               url.protocol !== "http:" || url.username || url.password || url.search || url.hash ||
               url.pathname !== "/" || !Number.isSafeInteger(options.connection.serverPid)) return fail("denied")
+            const client = OpenCode.make({ baseUrl: url.href, headers: options.connection.headers,
+              fetch: boundedArchiveFetch(url.href, signal) })
+            const req = { signal }
+            if (defaultMode) {
+              // The default scope's identity comes from the live session record,
+              // never from tool arguments or configuration.
+              const local = await bounded(client.session.get({ sessionID: tctx.sessionID }, req))
+              if (!object(local) || !string(local.projectID)) return fail("denied")
+              ;(options.taskScopes[0] as { projectId: string }).projectId = local.projectID
+            }
             const matches = options.taskScopes.filter(s => s.callerSessionId === tctx.sessionID)
             if (matches.length !== 1) return fail("denied")
             const scope = Object.freeze({ ...matches[0]! })
@@ -171,9 +207,6 @@ export const FileArchiveV2Plugin: Plugin.Plugin = {
               if (!isAbsolute(options.policyFile) || (!rel.startsWith("../") && rel !== ".."))
                 return fail("denied")
             }
-            const client = OpenCode.make({ baseUrl: url.href, headers: options.connection.headers,
-              fetch: boundedArchiveFetch(url.href, signal) })
-            const req = { signal }
             const sourceSessionId = parsed.data.sessionId
             const authority = async (prompt = false) => {
               signal.throwIfAborted()
@@ -202,7 +235,12 @@ export const FileArchiveV2Plugin: Plugin.Plugin = {
                 if (child.id !== sourceSessionId || child.parentID !== tctx.sessionID || child.fork ||
                   child.projectID !== scope.projectId || child.location.directory !== scope.directory) return fail("denied")
               }
-              const policy = options.policy
+              // Default mode has no operator file: retention and readers are
+              // bounded by the project directory itself (scope = this project's
+              // .opencode/work/bcp-handoff, native permissions still apply).
+              const policy = defaultMode
+                ? { authorized: true as const, noStore: false as const, sharedReadersApproved: true as const }
+                : options.policy
                 ? await bounded(options.policy({ scope, caller: { sessionId: tctx.sessionID, agent: tctx.agent },
                   sourceSessionId, signal }))
                 : readOperatorPolicy(options.policyFile!, {
@@ -230,6 +268,38 @@ export const FileArchiveV2Plugin: Plugin.Plugin = {
             }
             await authority(true)
             await idle()
+            if (defaultMode) {
+              // Zero-config first save: the archive core requires an existing
+              // task root, and no operator pre-creates it. Authorize the exact
+              // path natively before creating anything; existing paths must be
+              // real directories, never symlinks — including every ancestor
+              // component recursive mkdir would otherwise follow.
+              const taskRelative = relative(scope.directory, scope.taskRoot)
+              if (!taskRelative || taskRelative.startsWith("..") || isAbsolute(taskRelative))
+                return fail("denied")
+              for (const component of [
+                join(scope.directory, ".opencode"),
+                join(scope.directory, ".opencode", "work"),
+              ]) {
+                const st = await lstat(component).catch(() => undefined)
+                if (st && (!st.isDirectory() || st.isSymbolicLink())) return fail("denied")
+              }
+              const existing = await lstat(scope.taskRoot).catch(() => undefined)
+              if (existing) {
+                if (!existing.isDirectory() || existing.isSymbolicLink()) return fail("denied")
+              } else {
+                await assertPermission({
+                  sessionID: tctx.sessionID, agent: tctx.agent,
+                  source: { type: "tool", messageID: tctx.messageID, id: tctx.id },
+                  action: "edit", resources: [taskRelative], save: [], metadata: { directory: scope.directory },
+                })
+                signal.throwIfAborted()
+                await mkdir(scope.taskRoot, { recursive: true, mode: 0o700 })
+                  .catch(error => { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error })
+                const created = await lstat(scope.taskRoot).catch(() => undefined)
+                if (!created || !created.isDirectory() || created.isSymbolicLink()) return fail("denied")
+              }
+            }
             let record: HandoffRecord
             if (parsed.data.messageId !== undefined) {
               const value = await client.session.message.get({

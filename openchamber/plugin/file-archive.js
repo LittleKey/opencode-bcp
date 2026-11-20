@@ -16,6 +16,7 @@ var __export = (target, all) => {
 
 // src/adapters/v2/file-archive.ts
 import { relative, isAbsolute as isAbsolute3, join as join2, resolve as resolve3 } from "path";
+import { lstat, mkdir } from "fs/promises";
 // node_modules/@opencode/client/dist/chunks/contract-9rqn6x4v.js
 var __defProp2 = Object.defineProperty;
 var __returnValue2 = (v) => v;
@@ -21556,6 +21557,83 @@ function readOperatorPolicy(path, expected) {
   }
 }
 
+// src/adapters/v2/self-connection.ts
+import { readFileSync as readFileSync2, readdirSync as readdirSync2, readlinkSync } from "fs";
+
+class SelfConnectionError extends Error {
+  reason;
+  constructor(reason) {
+    super(reason);
+    this.reason = reason;
+  }
+}
+var IPV4_LOOPBACK = "0100007F";
+var IPV6_LOOPBACK = "00000000000000000000000001000000";
+function parseListeners(text) {
+  const out = [];
+  for (const line of text.split(`
+`).slice(1)) {
+    const columns = line.trim().split(/\s+/);
+    if (columns.length < 10)
+      continue;
+    const [local, state, inode] = [columns[1], columns[3], columns[9]];
+    if (state !== "0A")
+      continue;
+    const separator = local.lastIndexOf(":");
+    if (separator < 0)
+      continue;
+    const address = local.slice(0, separator);
+    const port = Number.parseInt(local.slice(separator + 1), 16);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535)
+      continue;
+    if (!/^\d+$/.test(inode))
+      continue;
+    out.push({ address, port, inode });
+  }
+  return out;
+}
+function deriveLoopbackConnection(deps = {}) {
+  const readProcFile = deps.readProcFile ?? ((path) => readFileSync2(path, "utf8"));
+  const listFds = deps.listFds ?? (() => {
+    const links = [];
+    for (const fd of readdirSync2("/proc/self/fd")) {
+      try {
+        links.push({ link: readlinkSync(`/proc/self/fd/${fd}`) });
+      } catch {}
+    }
+    return links;
+  });
+  const env = deps.env ?? process.env;
+  const socketInodes = new Set;
+  for (const { link } of listFds()) {
+    const match = /^socket:\[(\d+)\]$/.exec(link);
+    if (match)
+      socketInodes.add(match[1]);
+  }
+  const candidates = new Set;
+  for (const { ipv6: ipv63, text } of [
+    { ipv6: false, text: readProcFile("/proc/self/net/tcp") },
+    { ipv6: true, text: readProcFile("/proc/self/net/tcp6") }
+  ]) {
+    for (const listener of parseListeners(text)) {
+      if (listener.address !== (ipv63 ? IPV6_LOOPBACK : IPV4_LOOPBACK))
+        continue;
+      if (!socketInodes.has(listener.inode))
+        continue;
+      candidates.add(ipv63 ? `http://[::1]:${listener.port}` : `http://127.0.0.1:${listener.port}`);
+    }
+  }
+  if (candidates.size === 0)
+    throw new SelfConnectionError("no_listener");
+  if (candidates.size > 1)
+    throw new SelfConnectionError("ambiguous_listener");
+  const headers = {};
+  const password = env.OPENCODE_PASSWORD || env.OPENCODE_SERVER_PASSWORD;
+  if (password)
+    headers.Authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+  return { baseUrl: [...candidates][0], headers, serverPid: deps.pid ?? process.pid };
+}
+
 // src/adapters/v2/file-archive.ts
 var saveInput = exports_external.object({
   sessionId: exports_external.string().min(1).max(512),
@@ -21691,13 +21769,38 @@ var FileArchiveV2Plugin = {
               return load ? await bounded(Promise.resolve().then(load)) : configured;
             };
             const raw = await readOptions();
-            if (!object2(raw) || raw.enabled !== true || !object2(raw.connection) || !Array.isArray(raw.taskScopes) || raw.taskScopes.length > 128 || typeof raw.policyFile !== "string" && (load || typeof raw.policy !== "function"))
+            const defaultMode = raw === undefined || load === undefined && object2(raw) && Object.keys(raw).length === 0;
+            if (!defaultMode && (!object2(raw) || raw.enabled !== true || !object2(raw.connection) || !Array.isArray(raw.taskScopes) || raw.taskScopes.length > 128 || typeof raw.policyFile !== "string" && (load || typeof raw.policy !== "function")))
               return { content: JSON.stringify({ status: "denied", reason: "trusted_configuration_required" }) };
-            const options = raw;
+            const options = defaultMode ? {
+              enabled: true,
+              connection: deriveLoopbackConnection(),
+              taskScopes: [{
+                taskId: "bcp-handoff",
+                taskRoot: join2(resolve3(ctx.location.directory), ".opencode", "work", "bcp-handoff"),
+                callerSessionId: tctx.sessionID,
+                projectId: "",
+                directory: resolve3(ctx.location.directory),
+                allowArchive: true,
+                sharedReadersApproved: true
+              }]
+            } : raw;
             const operatorPin = load ? JSON.stringify(raw) : undefined;
             const url2 = new URL(options.connection.baseUrl);
             if (!["127.0.0.1", "[::1]"].includes(url2.hostname) || url2.protocol !== "http:" || url2.username || url2.password || url2.search || url2.hash || url2.pathname !== "/" || !Number.isSafeInteger(options.connection.serverPid))
               return fail("denied");
+            const client = exports_client3.make({
+              baseUrl: url2.href,
+              headers: options.connection.headers,
+              fetch: boundedArchiveFetch(url2.href, signal)
+            });
+            const req = { signal };
+            if (defaultMode) {
+              const local = await bounded(client.session.get({ sessionID: tctx.sessionID }, req));
+              if (!object2(local) || !string4(local.projectID))
+                return fail("denied");
+              options.taskScopes[0].projectId = local.projectID;
+            }
             const matches = options.taskScopes.filter((s) => s.callerSessionId === tctx.sessionID);
             if (matches.length !== 1)
               return fail("denied");
@@ -21709,12 +21812,6 @@ var FileArchiveV2Plugin = {
               if (!isAbsolute3(options.policyFile) || !rel.startsWith("../") && rel !== "..")
                 return fail("denied");
             }
-            const client = exports_client3.make({
-              baseUrl: url2.href,
-              headers: options.connection.headers,
-              fetch: boundedArchiveFetch(url2.href, signal)
-            });
-            const req = { signal };
             const sourceSessionId = parsed.data.sessionId;
             const authority = async (prompt = false) => {
               signal.throwIfAborted();
@@ -21744,7 +21841,7 @@ var FileArchiveV2Plugin = {
                 if (child.id !== sourceSessionId || child.parentID !== tctx.sessionID || child.fork || child.projectID !== scope.projectId || child.location.directory !== scope.directory)
                   return fail("denied");
               }
-              const policy = options.policy ? await bounded(options.policy({
+              const policy = defaultMode ? { authorized: true, noStore: false, sharedReadersApproved: true } : options.policy ? await bounded(options.policy({
                 scope,
                 caller: { sessionId: tctx.sessionID, agent: tctx.agent },
                 sourceSessionId,
@@ -21780,6 +21877,48 @@ var FileArchiveV2Plugin = {
             };
             await authority(true);
             await idle();
+            if (defaultMode) {
+              const taskRelative = relative(scope.directory, scope.taskRoot);
+              if (!taskRelative || taskRelative.startsWith("..") || isAbsolute3(taskRelative))
+                return fail("denied");
+              for (const component2 of [
+                join2(scope.directory, ".opencode"),
+                join2(scope.directory, ".opencode", "work")
+              ]) {
+                const st = await lstat(component2).catch(() => {
+                  return;
+                });
+                if (st && (!st.isDirectory() || st.isSymbolicLink()))
+                  return fail("denied");
+              }
+              const existing = await lstat(scope.taskRoot).catch(() => {
+                return;
+              });
+              if (existing) {
+                if (!existing.isDirectory() || existing.isSymbolicLink())
+                  return fail("denied");
+              } else {
+                await assertPermission({
+                  sessionID: tctx.sessionID,
+                  agent: tctx.agent,
+                  source: { type: "tool", messageID: tctx.messageID, id: tctx.id },
+                  action: "edit",
+                  resources: [taskRelative],
+                  save: [],
+                  metadata: { directory: scope.directory }
+                });
+                signal.throwIfAborted();
+                await mkdir(scope.taskRoot, { recursive: true, mode: 448 }).catch((error62) => {
+                  if (error62.code !== "EEXIST")
+                    throw error62;
+                });
+                const created = await lstat(scope.taskRoot).catch(() => {
+                  return;
+                });
+                if (!created || !created.isDirectory() || created.isSymbolicLink())
+                  return fail("denied");
+              }
+            }
             let record2;
             if (parsed.data.messageId !== undefined) {
               const value = await client.session.message.get({

@@ -10,7 +10,10 @@ export async function packageOpenChamber(target, host, optionsPath) {
   if (!target || !isAbsolute(target) || resolve(target) !== target ||
       !host || !isAbsolute(host)) throw Error("absolute --target and --host required");
   const version = JSON.parse(await fs.readFile(join(host, "package.json"), "utf8")).version;
-  if (version !== "2.7.2") throw Error("requires installed OpenChamber 2.7.2");
+  // Verified hosts: 2.7.2 (original packaging validation) and 2.7.3 (current
+  // installed host, re-verified by the real Git-extension install). Same
+  // loader semantics; fail closed on any other version.
+  if (version !== "2.7.2" && version !== "2.7.3") throw Error("requires installed OpenChamber 2.7.2 or 2.7.3");
   const parent = dirname(target);
   if (!optionsPath || !isAbsolute(optionsPath) || resolve(optionsPath) !== optionsPath ||
       optionsPath === target || optionsPath.startsWith(target + "/"))
@@ -42,7 +45,9 @@ export async function packageOpenChamber(target, host, optionsPath) {
     } },
   };
   // Actual installed host validation, no mocked or vendored schema.
-  const { inspectGuestPackage } = await import(pathToFileURL(join(host, "server/lib/guests/catalog.js")));
+  // 2.7.2 keeps guests under server/lib; 2.7.3 moved them to build/server/lib.
+  const guestsRoot = await fs.stat(join(host, "server/lib/guests")).then(() => "server/lib/guests", () => "build/server/lib/guests");
+  const { inspectGuestPackage } = await import(pathToFileURL(join(host, guestsRoot, "catalog.js")));
   await fs.mkdir(target, { mode: 0o700 }); // Exclusive claim; no overwrite.
   await fs.mkdir(join(target, "plugin"), { mode: 0o700 });
   const write = (p, data) => fs.writeFile(join(target, p), data, { mode: 0o600, flag: "wx" });
@@ -61,16 +66,18 @@ export default { id: plugin.id, async setup(ctx) {
     loadOperatorOptions: async () => {
       const path = ${JSON.stringify(optionsPath)};
       await checkAncestors(dirname(path), "options");
-      try { return await loadPrivateOptions(path); }
-      catch (error) { if (error.code === "ENOENT") return {}; throw error; }
+      // The baked path IS the declared operator source: a missing or broken
+      // file denies execution. It must never fall back to {} — that would
+      // flip a revoked deployment into default mode.
+      return await loadPrivateOptions(path);
     }
   }});
 } };
 `);
-  const inspected = await inspectGuestPackage(target, { openchamberVersion: "2.7.2" });
+  const inspected = await inspectGuestPackage(target, { openchamberVersion: version });
   if (!inspected.ok) throw Error(`host rejected package: ${JSON.stringify(inspected)}`);
   return { target, deliveryRequired: "file", options: optionsPath,
-    note: "Not installed. No options file packaged or created; missing external options returns {} (disabled). Local Path retains the real package source; ZIP/upload copies it. Both embed the same stable canonical external options path on this host. Keep options/policy/credentials outside every served extension root. Require private ancestors, mode 0600, owner UID and one link; no symlinks. Do not use global Install into OpenCode fallback. No grants or restart performed." };
+    note: "Not installed. No options file packaged or created; a missing external options file denies bcp_save (this flavor never falls back to default mode — use the Git entry for zero-config default mode). Local Path retains the real package source; ZIP/upload copies it. Both embed the same stable canonical external options path on this host. Keep options/policy/credentials outside every served extension root. Require private ancestors, mode 0600, owner UID and one link; no symlinks. Do not use global Install into OpenCode fallback. No grants or restart performed." };
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);

@@ -17,9 +17,17 @@ test("repository extension: host parser and cold bundled setup, live private ope
     await fs.copyFile(new URL("../package.json", import.meta.url), join(target, "package.json"));
     await fs.cp(new URL("../openchamber", import.meta.url), join(target, "openchamber"), { recursive: true });
     if (host) {
-      const { inspectGuestPackage } = await import(pathToFileURL(join(host, "server/lib/guests/catalog.js")));
-      assert.equal((await inspectGuestPackage(target, { openchamberVersion: "2.7.2" })).ok, true);
-      const { resolveOpenCodePluginFolder } = await import(pathToFileURL(join(host, "server/lib/guests/opencode-plugin.js")));
+      // 2.7.2 serves guests from server/lib/guests; 2.7.3 moved to build/server/lib/guests.
+      const layouts = ["server/lib/guests", "build/server/lib/guests"];
+      let guests = null;
+      for (const layout of layouts) {
+        try { await fs.access(join(host, layout, "catalog.js")); guests = layout; break; }
+        catch { /* try next layout */ }
+      }
+      assert.ok(guests, `no guest loader found under ${host}`);
+      const { inspectGuestPackage } = await import(pathToFileURL(join(host, guests, "catalog.js")));
+      assert.equal((await inspectGuestPackage(target, { openchamberVersion: "2.7.3" })).ok, true);
+      const { resolveOpenCodePluginFolder } = await import(pathToFileURL(join(host, guests, "opencode-plugin.js")));
       assert.equal(await resolveOpenCodePluginFolder(fs, target, "openchamber/plugin"), join(target, "openchamber/plugin"));
     }
     // The OpenCode plugin runtime is Bun (archive locking uses bun:ffi).
@@ -32,14 +40,15 @@ test("repository extension: host parser and cold bundled setup, live private ope
       const result = await tool.execute({sessionId:"s"}, {signal:new AbortController().signal});
       if (!result.content.includes("trusted_configuration_required")) throw Error("not denied");
       // Even apparently enabling ordinary host options cannot bypass the trusted
-      // loader. With native permission API present, missing env still denies.
+      // loader. With native permission API present and no operator source, the
+      // tool enters default mode and fails closed on self-derivation (this bare
+      // process owns no loopback listener): denied either way, never enabled.
       await plugin.setup({options:{enabled:true,taskScopes:[]},
         permission:{assert:async()=>{throw Error("unexpected permission request")}},
         tool:{transform:async f=>f({add:t=>tool=t})}});
       const context = {signal:new AbortController().signal};
       const absent = JSON.parse((await tool.execute({sessionId:"s"}, context)).content);
-      if (absent.status !== "denied" || absent.reason !== "trusted_configuration_required")
-        throw Error("missing env bypassed");
+      if (absent.status !== "denied") throw Error("missing env bypassed");
       process.env.BCP_OPERATOR_OPTIONS = "relative-unsafe.json";
       const unsafe = JSON.parse((await tool.execute({sessionId:"s"}, context)).content);
       if (unsafe.status !== "denied") throw Error("unsafe config bypassed");
@@ -48,7 +57,8 @@ test("repository extension: host parser and cold bundled setup, live private ope
     assert.match(wrapperSource, /options: \{ loadOperatorOptions \}/);
     const { loadOperatorOptions } = await import(pathToFileURL(join(target, "openchamber/plugin/operator-options.mjs")));
     delete process.env.BCP_OPERATOR_OPTIONS;
-    assert.deepEqual(await loadOperatorOptions(), {});
+    // Absence is undefined — the only value that enables default mode.
+    assert.equal(await loadOperatorOptions(), undefined);
     const options = join(root, "options.json");
     process.env.BCP_OPERATOR_OPTIONS = options;
     const config = { enabled: true, taskScopes: [], policyFile: join(root, "policy.json") };

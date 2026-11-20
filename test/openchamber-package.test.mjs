@@ -21,8 +21,9 @@ test("offline package: actual host parser, external deny-default options, privat
       const manifest = JSON.parse(await fs.readFile(join(target, "package.json"))).openchamber;
       assert.deepEqual(Object.keys(manifest.contributes).sort(), ["opencodePlugin", "panel"]);
       assert.equal(manifest.contributes.panel.entry, undefined);
+      const guestsRoot = await fs.stat(join(host, "server/lib/guests")).then(() => "server/lib/guests", () => "build/server/lib/guests");
       const { resolveOpenCodePluginFolder, openCodePluginDelivery } =
-        await import(pathToFileURL(join(host, "server/lib/guests/opencode-plugin.js")));
+        await import(pathToFileURL(join(host, guestsRoot, "opencode-plugin.js")));
       assert.equal(await resolveOpenCodePluginFolder(fs, target, "plugin"), join(target, "plugin"));
       assert.equal(openCodePluginDelivery({ external: false, ownsConfigFile: true }), "file");
       // Execute the generated loader with a capture-only fixture, not BCP or a host.
@@ -32,7 +33,13 @@ test("offline package: actual host parser, external deny-default options, privat
       await wrapper.default.setup({});
       const load = globalThis.__bcpPackageOptions;
       delete globalThis.__bcpPackageOptions;
-      assert.deepEqual(await load(), {}); // No enabled flag, connection or scope.
+      // The baked path is a declared source: a missing file rejects (never
+      // falls back to {} or undefined), and a declared {} is returned as an
+      // object — the adapter's strict path denies it, keeping revocation
+      // from ever flipping this flavor into default mode.
+      await assert.rejects(load());
+      await fs.writeFile(options, "{}", { mode: 0o600 });
+      assert.deepEqual(await load(), {});
       await fs.writeFile(options, '{"enabled":false}', { mode: 0o600 });
       assert.deepEqual(await load(), { enabled: false });
       await fs.chmod(options, 0o644);
