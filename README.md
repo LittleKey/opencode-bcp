@@ -33,8 +33,8 @@ bun run build
 
 完整安装与扩展部署步骤见 [INSTALL.md](INSTALL.md)：
 
-- **OpenChamber 2.7.2 GitHub URL 扩展（`2.1.0` 根包直连，提交并推送发布版本后远端可用）**：
-  - 仓库根 `package.json`（`2.1.0`）声明 `openchamber` 元数据（`panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随库提交预构建插件包 `openchamber/plugin/`（无安装/构建钩子；用 `bun run build:openchamber` 更新、`bun run check:openchamber` 校验产物新鲜度）。OpenCode 插件运行态需 Linux/glibc Bun（归档锁核心使用 `bun:ffi`），`openchamber/plugin/index.mjs` 调用 Node 兼容的 `openchamber/plugin/operator-options.mjs`（共用 `private-options.mjs`）加载外部算子配置。
+- **OpenChamber 2.7.2 GitHub URL 扩展（`2.1.1` 根包直连，提交并推送发布版本后远端可用）**：
+  - 仓库根 `package.json`（`2.1.1`）声明 `openchamber` 元数据（`panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随库提交预构建插件包 `openchamber/plugin/`（无安装/构建钩子；用 `bun run build:openchamber` 更新、`bun run check:openchamber` 校验产物新鲜度）。OpenCode 插件运行态需 Linux/glibc Bun（归档锁核心使用 `bun:ffi`），`openchamber/plugin/index.mjs` 调用 Node 兼容的 `openchamber/plugin/operator-options.mjs`（共用 `private-options.mjs`）加载外部算子配置。
   - 在该版本提交并推送至远端后，可在 OpenChamber 2.7.2 中通过 GitHub 仓库根 URL 安装（仅支持仓库根与可选 `#<branch-or-tag>`，不支持子目录语法）：
     `https://github.com/littlekey/opencode-bcp.git`（或 `https://github.com/littlekey/opencode-bcp.git#<branch-or-tag>`）
   - 算子授权完全通过宿主/服务进程环境变量 `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json` 指向扩展包与所有任务树（`taskScopes[].directory`）之外的规范化私有文件（其中 `policyFile` 同样须位于扩展包与所有任务树之外）；未设置 `BCP_OPERATOR_OPTIONS` 时返回 `{}`（默认禁用 / fail closed）。OpenChamber 2.7.2 的上游更新检查仅比较远端根 `package.json` 的更高 semver 版本号（不按普通 commit 触发），带 1 小时缓存，且需用户单独点击应用（无自动更新承诺）。

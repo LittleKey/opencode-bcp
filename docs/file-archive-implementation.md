@@ -33,7 +33,7 @@ publish options after starting the service and establishing the caller session. 
 owner-private `options.json` atomically. The tool reads it at execution and
 rechecks it before writing; a change during the operation denies that save.
 
-For OpenChamber 2.7.2, the repository root (`package.json` version `2.1.0`) is a
+For OpenChamber 2.7.2, the repository root (`package.json` version `2.1.1`) is a
 prebuilt extension (`panel.id: "bcp-file-archive"`, `opencodePlugin: "openchamber/plugin"`)
 with a committed bundle at `openchamber/plugin/file-archive.js` (updated via
 `bun run build:openchamber` and verified via `bun run check:openchamber`, with no

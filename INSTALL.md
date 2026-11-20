@@ -31,9 +31,9 @@ node scripts/install-file-archive.mjs \
 - **授权与动态重载**：初始状态下 `bcp_save` 工具可见但一律拒绝保存（fail closed）。宿主启动并建立会话后，操作员才能根据实际服务 PID 和会话身份原子替换私有 `options.json`，并在项目外提供精确的短期策略文件（`bcp.operator-handoff-policy.v1`）。每次调用都会重新打开并核验 `options.json` 与外部策略文件的当前 inode，更新或撤销授权无需重启。字段与信任边界见[实现说明](docs/file-archive-implementation.md#isolated-configuration-contract)。
 - **不迁移旧状态**：该入口不迁移现有活跃会话、模型配置、旧 Blackboard 数据或独立安装的 OMO。
 
-### 3. OpenChamber 2.7.2 GitHub URL 扩展（根包 `2.1.0`，主选扩展通道）
+### 3. OpenChamber 2.7.2 GitHub URL 扩展（根包 `2.1.1`，主选扩展通道）
 
-仓库根 `package.json`（`version: "2.1.0"`）直接声明 OpenChamber 2.7.2 扩展元数据（固定 `panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随仓库提交预构建的 `openchamber/plugin/`（无 `postinstall` 或在线构建钩子）：
+仓库根 `package.json`（`version: "2.1.1"`）直接声明 OpenChamber 2.7.2 扩展元数据（固定 `panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随仓库提交预构建的 `openchamber/plugin/`（无 `postinstall` 或在线构建钩子）：
 
 - **构建与新鲜度校验**：
   ```bash
