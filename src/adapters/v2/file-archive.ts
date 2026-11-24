@@ -97,7 +97,7 @@ export function boundedArchiveFetch(baseUrl: string, signal: AbortSignal): typeo
   }) as typeof fetch
 }
 
-const description = "Save an authorized own-session or direct-child stored assistant stop reply snapshot. Pass sessionId and optionally an exact messageId; otherwise only the latest assistant reply is considered, without fallback. In-flight replies cannot be saved. Reuse returned exact paths with the next task. No automatic capture."
+const description = "Save an authorized own-session or direct-child stored assistant stop reply snapshot. Use for a handoff when the recipient needs the exact reply and no readable file already exists. Pass sessionId and optionally an exact messageId; otherwise only the latest assistant reply is considered, without fallback. In-flight replies cannot be saved. Reuse returned exact paths with the next task. No automatic capture."
 export const FileArchiveV2Plugin: Plugin.Plugin = {
   id: "opencode-bcp-file-archive",
   setup: async ctx => {

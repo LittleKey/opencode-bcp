@@ -21714,7 +21714,7 @@ function boundedArchiveFetch(baseUrl, signal) {
     return new Response(Buffer.concat(chunks), { status: response.status, headers: response.headers });
   };
 }
-var description = "Save an authorized own-session or direct-child stored assistant stop reply snapshot. Pass sessionId and optionally an exact messageId; otherwise only the latest assistant reply is considered, without fallback. In-flight replies cannot be saved. Reuse returned exact paths with the next task. No automatic capture.";
+var description = "Save an authorized own-session or direct-child stored assistant stop reply snapshot. Use for a handoff when the recipient needs the exact reply and no readable file already exists. Pass sessionId and optionally an exact messageId; otherwise only the latest assistant reply is considered, without fallback. In-flight replies cannot be saved. Reuse returned exact paths with the next task. No automatic capture.";
 var FileArchiveV2Plugin = {
   id: "opencode-bcp-file-archive",
   setup: async (ctx) => {
