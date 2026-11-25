@@ -16,11 +16,10 @@ import { PRESSURE_REMINDER_TEMPLATE, TASK_DESC_APPEND, TOOL_DESCRIPTIONS, AUTO_T
 import { malformedSha256 } from "../../artifacts"
 import { ReceiptCheck } from "../../receipt-check"
 import { normalizeTaskDescription, sourceHandoff } from "../../handoff"
-import { DELIVERY_BRIDGE, inspectDelivery, type DeliveryRequest, type HostMessage } from "../../delivery"
+import type { HostMessage } from "../../delivery"
 import { captureFinal, captureToolResult, formatToolResultReceipt, parseTaskTitle, toolResultKey, NO_STORE, permissionAction, publicationAllowed, type CaptureHost, type PermissionRule } from "../../capture"
 import { beginEditObservation, invalidateEditEvidence, observeEdits, editEvidence } from "../../edit-evidence"
 import { messageStore, STORE_DESCRIPTION } from "../../message-store"
-import { COUNCIL_BRIDGE, inspectCouncilSource, type CouncilRequest } from "../../council"
 import { EXPORT_DESCRIPTION } from "../../constants"
 
 type Resolved = { scope: Scope; streamId: string; isolated: boolean; agent: string | null } // I1：未知身份为 null（不再以空串冒充）
@@ -277,10 +276,6 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     }
   }
 
-  // Shared only with trusted in-process plugins, scoped to the host project directory.
-  // Durable record.writer + host messages reconstruct provenance after a plugin restart.
-  const globals = globalThis as typeof globalThis & { [DELIVERY_BRIDGE]?: Map<string, (request: DeliveryRequest) => Promise<unknown>> }
-  const bridges = (globals[DELIVERY_BRIDGE] ??= new Map())
   const readMessage = async (session: string, message: string) => {
     try { return (await input.client.session.message({ path: { id: session, messageID: message } })).data as HostMessage ?? null }
     catch { return null }
@@ -332,7 +327,7 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
   const notifyRetained = async (session: string, id?: string) => {
     try {
       await retained(session, id)
-      // Parent delivery availability must not depend on the order of OMO's terminal callback.
+      // Parent delivery availability must not depend on terminal event ordering.
       const parent = id && (await sessionInfo(session))?.parentID
       const resolved = parent && await lookupScopeContext(parent, "")
       if (id && parent && resolved && refPolicy(resolveAuthz(resolved.scope, { sessionId: parent, agent: "" }), parseBbId(id)) === "ok") remember(parent, id)
@@ -361,26 +356,6 @@ export const BlackboardPlugin: Plugin = async (input, options) => {
     return st.admitted.get(session) === currentInput &&
       permissionAction([...profile.permission, ...(current.permission ?? [])], "board_get", "*") === "allow"
   }
-  bridges.set(input.directory, async (request: DeliveryRequest) => {
-    const result = await inspectDelivery(request, {
-    scopeFor: async session => (await lookupScopeContext(session, ""))?.scope ?? null,
-    parentFor: async session => (await sessionInfo(session))?.parentID ?? null,
-    message: readMessage,
-    canReadResult,
-    currentResult: (session, authorInput) => st.admitted.get(session) === authorInput,
-    ...(autoCapture ? { capture } : {}),
-    })
-    if ("capture" in result && result.capture?.id) remember(request.callerSessionID, result.capture.id)
-    return result
-  })
-  const councilBridges = ((globalThis as any)[COUNCIL_BRIDGE] ??= new Map()) as Map<string, (request: CouncilRequest) => Promise<unknown>>
-  councilBridges.set(input.directory, request => inspectCouncilSource(request, {
-    parentFor: async session => (await sessionInfo(session))?.parentID ?? null,
-    message: readMessage,
-    current: (session, authorInput) => st.admitted.get(session) === authorInput,
-    isSeat: async agent => agent.startsWith("councillor-") && (await agentProfiles()).some(profile => profile.name === agent),
-  }))
-
   const boardTools = defineBoardTools({
     resolveScope: lookupScopeContext,
     log: (line) => st.log(line),

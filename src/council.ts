@@ -12,8 +12,6 @@ import { createHash } from "node:crypto"
 import type { HostMessage } from "./delivery"
 import { publicReply } from "./reply"
 
-/** 桥标识：与 integrations/omo-slim/omo-council.mjs 共享同一全局符号。 */
-export const COUNCIL_BRIDGE = Symbol.for("opencode.bcp.council.v1")
 
 /** 每席原文上限：32 KiB，按 UTF-8 字节计。 */
 export const COUNCIL_TEXT_LIMIT = 32 * 1024

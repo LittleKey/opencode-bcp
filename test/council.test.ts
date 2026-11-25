@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { COUNCIL_BRIDGE, COUNCIL_TEXT_LIMIT, inspectCouncilSource, type CouncilHost, type CouncilMessage, type CouncilRequest, type CouncilSource } from "../src/council"
+import { COUNCIL_TEXT_LIMIT, inspectCouncilSource, type CouncilHost, type CouncilMessage, type CouncilRequest, type CouncilSource } from "../src/council"
 
 const CALLER = "ses_caller"
 const TASK = "ses_task"
@@ -41,9 +41,8 @@ const expectUnavailable = (result: CouncilSource, reason: string) => {
   expect(result).not.toHaveProperty("text_sha256")
 }
 
-describe("council bridge identity", () => {
-  test("COUNCIL_BRIDGE is the global registry symbol shared with the OMO helper", () => {
-    expect(Symbol.for("opencode.bcp.council.v1") === COUNCIL_BRIDGE).toBe(true)
+describe("council evidence limits", () => {
+  test("bounds original text inspection", () => {
     expect(COUNCIL_TEXT_LIMIT).toBe(32768)
   })
 })

@@ -10,7 +10,7 @@ import {
   NO_STORE, STORE, type CaptureHost, type ToolResultSource,
 } from "../src/capture"
 import { stripTopLevelStoreMarkers } from "../src/markers"
-import { DELIVERY_BRIDGE, type DeliveryRequest, type HostMessage } from "../src/delivery"
+import { type HostMessage } from "../src/delivery"
 import { BlackboardPlugin } from "../src/plugin"
 import type { PluginInput, ToolContext } from "@opencode-ai/plugin"
 
@@ -176,13 +176,6 @@ const boardStore = (plugin: Plugin, messageId: string) => {
   return execute({ action: "store", message_id: messageId, description: "wrapper paraphrase" }, ctx).then(r => JSON.parse(r) as Record<string, unknown>)
 }
 
-// 父 task 交付检查入口（审查 e000002 修复的验收面）：经 DELIVERY_BRIDGE 调真实适配器桥。
-const delivery = (f: ClientFixture, terminal: string, input = "u1"): Promise<any> => {
-  const map = (globalThis as Record<PropertyKey, unknown>)[DELIVERY_BRIDGE] as Map<string, (r: DeliveryRequest) => Promise<unknown>>
-  return map.get(f.dir)!({ callerSessionID: "parent", taskID: "child", state: "completed",
-    inputMessageID: input, terminalMessageID: terminal } as DeliveryRequest) as Promise<any>
-}
-
 test("round9/11 M1: default deployment retains through the existing permission path; explicit board_store deny still skips", async () => {
   for (const mode of ["allow", "deny"] as const) {
     const f = adapterFixture(mode === "deny")
@@ -269,74 +262,6 @@ test("round9 §1.4: a called-but-failed retention still blocks the round (wrappe
   expect(f.scope.readMeta(f.child.streamId).high_water).toBe(0)
   const stored = await boardStore(plugin, "w1")
   expect(stored.note).toContain("no original tool-result record was retained")
-})
-
-test("review e000002: delivery bridge cannot re-capture an acp round — a valid wrapper marker yields the original record reference, idempotently", async () => {
-  const f = adapterFixture()
-  const plugin = await admittedPlugin(f)
-  const output = await runAcp(f, plugin, "Answer: 42")
-  const recordId = /Retained: (bb:\/\/\S+)/.exec(output)![1]!
-  f.messages.set("w1", { info: { id: "w1", sessionID: "child", role: "assistant", parentID: "u1", agent: "fixer", finish: "stop", time: { completed: 3 } },
-    parts: [{ type: "text", text: `${STORE}\nAnswer: 42 (paraphrase)\nRetained: ${recordId}` }] })
-  const result = await delivery(f, "w1")
-  // 交付检查同轮跳过：不落第二条记录，返回原始终记录引用。
-  expect(result.capture).toEqual({ status: "skipped", reason: "acp_tool_result_round", record_ids: [recordId] })
-  expect(result.result_reference).toBeUndefined() // 绝不把工具结果冒充为精确覆盖 wrapper 终稿的 host_final 引用
-  expect(f.scope.readMeta(f.child.streamId).high_water).toBe(1)
-  // 原始终记录对该父会话可读且关联到当前输入轮。
-  const candidate = result.candidates.find((c: { id: string }) => c.id === recordId)
-  expect(candidate.readability).toBe("found")
-  expect(candidate.origin).toBe("current_input")
-  // 幂等：交付检查重复调用、事件先于/后于交付，结果一致。
-  expect(await delivery(f, "w1")).toEqual(result)
-  await finalEvent(plugin, "w1", "u1")
-  expect(await delivery(f, "w1")).toEqual(result)
-  expect(f.scope.readMeta(f.child.streamId).high_water).toBe(1)
-})
-
-test("review e000002: a round whose ACP retention was denied stays closed through the delivery bridge", async () => {
-  const f = adapterFixture(true) // board_store deny → 工具结果留存 skipped，轮次仍登记
-  const plugin = await admittedPlugin(f)
-  expect(await runAcp(f, plugin, "Answer: 42")).toContain("Retention skipped: publication_not_authorized")
-  f.messages.set("w1", { info: { id: "w1", sessionID: "child", role: "assistant", parentID: "u1", agent: "fixer", finish: "stop", time: { completed: 3 } },
-    parts: [{ type: "text", text: `${STORE}\nAnswer: 42 (self-added marker)` }] })
-  const result = await delivery(f, "w1")
-  expect(result.capture).toEqual({ status: "skipped", reason: "acp_tool_result_round",
-    note: "no original tool-result record was retained for this input round" })
-  expect(f.scope.readMeta(f.child.streamId).high_water).toBe(0) // wrapper 无法补出第二条记录
-})
-
-test("review e000003: delivery metadata never carries tool-result IDs invisible to the parent caller", async () => {
-  const f = adapterFixture(false, "councillor-fix") // 隔离子流：父调用方对该记录 refPolicy=hidden
-  const plugin = await admittedPlugin(f)
-  const output = await runAcp(f, plugin, "Answer: 42")
-  const recordId = /Retained: (bb:\/\/\S+)/.exec(output)![1]!
-  f.messages.set("w1", { info: { id: "w1", sessionID: "child", role: "assistant", parentID: "u1", agent: f.childAgent, finish: "stop", time: { completed: 3 } },
-    parts: [{ type: "text", text: `${STORE}\nAnswer: 42 (paraphrase)` }] }) // 终稿不含任何 bb 引用
-  const result = await delivery(f, "w1")
-  // record_ids 全部不可见 → 中性 capture_not_accessible，不出现“未留存”措辞（区别于真实未留存）。
-  expect(result.capture).toEqual({ status: "unconfirmed", reason: "capture_not_accessible" })
-  const serialized = JSON.stringify(result)
-  expect(serialized).not.toContain(recordId) // 不泄漏 ID 与存在性
-  expect(serialized).not.toContain("no original tool-result record was retained")
-})
-
-test("review e000002: the next independent input round retains normally through the delivery bridge", async () => {
-  const f = adapterFixture()
-  const plugin = await admittedPlugin(f)
-  await runAcp(f, plugin, "Answer: 42")
-  f.messages.set("w1", { info: { id: "w1", sessionID: "child", role: "assistant", parentID: "u1", agent: "fixer", finish: "stop", time: { completed: 3 } },
-    parts: [{ type: "text", text: `${STORE}\nAnswer: 42 (paraphrase)` }] })
-  expect((await delivery(f, "w1")).capture.status).toBe("skipped")
-  f.messages.set("u2", { info: { id: "u2", sessionID: "child", role: "user" }, parts: [{ type: "text", text: "Next question." }] })
-  f.messages.set("w2", { info: { id: "w2", sessionID: "child", role: "assistant", parentID: "u2", agent: "fixer", finish: "stop", time: { completed: 4 } },
-    parts: [{ type: "text", text: `${STORE}\nNext answer.` }] })
-  await plugin["chat.message"]!({ sessionID: "child", agent: "fixer", messageID: "u2" },
-    { message: { id: "u2", sessionID: "child", role: "user" } as never, parts: [{ type: "text", text: "Next question." }] as never })
-  const next = await delivery(f, "w2", "u2")
-  expect(next.capture.status).toBe("stored")
-  expect(next.capture.id).toMatch(/^bb:\/\//)
-  expect(f.scope.readMeta(f.child.streamId).high_water).toBe(2)
 })
 
 test("round11 glue: acp_run raw with a valid top-level store marker — record keeps it verbatim, display copy strips it", async () => {

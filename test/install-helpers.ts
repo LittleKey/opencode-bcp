@@ -14,11 +14,13 @@ export const BUNDLE = join(REPO, "dist", "blackboard.ts")
 // rather than relying on an earlier workstation's disposable /tmp directory.
 export const REAL_V2_BIN = Bun.env.BCP_TEST_V2_BIN ?? ""
 
-/** Build the dual bundle once per process if dist/blackboard.ts is absent. */
+let bundleBuilt = false
+/** Build current sources once per process; never accept stale release metadata. */
 export function ensureBundle(): string {
-  if (!existsSync(BUNDLE)) {
+  if (!bundleBuilt) {
     const p = Bun.spawnSync(["bash", join(REPO, "scripts", "build.sh")], { cwd: REPO, stdout: "pipe", stderr: "pipe" })
     if (p.exitCode !== 0) throw new Error(`scripts/build.sh failed: ${p.stderr.toString()}`)
+    bundleBuilt = true
   }
   return BUNDLE
 }
@@ -166,18 +168,12 @@ export function adoptArgs(file: string): string[] {
 /**
  * Materialize the only pre-2.0.0 release artifact whose exact bytes are
  * recoverable (the v1 bundle installed by the v1.20.0-era installer, kept in
- * git at harness/live-agg/.opencode/plugin/blackboard.ts). Used to exercise
+ * at harness/fixtures/legacy-v1-blackboard.ts.fixture). Used to exercise
  * the known-release-digest migration path without --adopt.
  */
 export function gitLegacyV1File(outPath: string): string {
-  const p = Bun.spawnSync(["git", "-C", REPO, "show", "HEAD:harness/live-agg/.opencode/plugin/blackboard.ts"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  if (p.exitCode !== 0 || p.stdout.length === 0) {
-    throw new Error(`cannot recover known legacy v1 bytes from git: ${p.stderr.toString()}`)
-  }
+  const bytes = readFileSync(join(REPO, "harness/fixtures/legacy-v1-blackboard.ts.fixture"))
   mkdirSync(join(outPath, ".."), { recursive: true })
-  writeFileSync(outPath, p.stdout)
+  writeFileSync(outPath, bytes)
   return outPath
 }

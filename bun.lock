@@ -5,6 +5,7 @@
     "": {
       "name": "opencode-bcp",
       "dependencies": {
+        "@opencode/client": "2.1.4",
         "zod": "^4.6.5",
       },
       "devDependencies": {

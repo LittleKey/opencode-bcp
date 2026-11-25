@@ -1,0 +1,6 @@
+{
+  "name": "opencode-bcp-openchamber-plugin",
+  "version": "2.2.0",
+  "type": "module",
+  "exports": "./index.mjs"
+}

@@ -1,19 +1,90 @@
 # 安装指南
 
-BCP 以单个 TypeScript 插件文件装入 opencode，无运行时依赖安装。前置要求与步骤如下；设计背景见 [README.md](README.md) 与 [DESIGN.md](DESIGN.md)。
+当前默认入口是独立 V2 快照归档 `src/file-archive.ts`（`bcp_save`），不依赖 OMO，不合并现有配置，也不创建任何留存或读取授权。新版 `bcp_save` 与旧 Blackboard 是两个完全独立的入口：安装默认 V2 快照归档**不要运行 `scripts/install.sh`**（该脚本只安装历史兼容的旧 Blackboard `plugin/blackboard.ts`）。
 
-## 前置要求
+## 默认入口：独立 V2 快照归档（`bcp_save`）
 
-- [bun](https://bun.sh)（安装脚本用它构建产物）
-- opencode 1.x（最低 1.18.29，实际验证 1.18.33；2026-10-09 已在 1.18.35 完成隔离重验与生产进程核验，见 [integrations/omo-slim/README.md](integrations/omo-slim/README.md)）或 opencode 2.0.20+（最低 2.0.20，实际验证 2.1.4）。同一个构建产物同时提供 v1 `server` 与 v2 `setup` 双入口，安装脚本检测宿主 major 后装入同一个文件；2.0.0 已通过发布复审并安装到现有 v1 生产配置，限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。最低版本声明不代表所有中间版本都已验证。
+### 1. 构建默认 V2 快照归档产物
 
-## 安装
+```bash
+bun run build
+# 等价于：bash scripts/build-file-archive.sh
+```
 
-### 默认：全局安装（按宿主检测）
+`bun run build`（`scripts/build-file-archive.sh`）仅在仓库内生成 `dist/file-archive/file-archive.js`，不安装、不注册插件，也不发起宿主或模型调用。
+
+### 2. 独立 OpenCode V2 配置安装
+
+使用 OpenCode 2.3.0、Bun 和 Node。安装器创建完全隔离的运行配置，不合并现有配置，不依赖 OMO，不创建归档授权：
+
+```bash
+bun run build
+node scripts/install-file-archive.mjs \
+  --target /absolute/private-parent/new-bcp-profile \
+  --project /absolute/private-worktree --port 4096
+```
+
+（可选传入 `--options /absolute/private-operator/options.json`；路径必须为位于项目工作树之外的规范化绝对路径，其祖先目录均须为非符号链接的当前用户或 root 受控无其他用户写权限（或 root 粘滞位）目录，而 `options.json` 文件本身须为当前用户私有的非符号链接普通文件（`0600`、`nlink === 1`）。）
+
+- **路径与隔离要求**：`--target` 必须不存在且位于 `--project` 之外；`--target` 父目录、`--project` 工作树及各自祖先目录均须为当前用户私有（或 root 受控粘滞目录），无其他用户写权限。工作树可有 `.opencode/work`，但工作树及其祖先路径不能带冲突的 OpenCode 配置或插件/工具发现入口（`opencode.json`、`opencode.jsonc`、`.opencode/opencode.json`、`.opencode/opencode.jsonc`、`.opencode/plugin`、`.opencode/plugins`、`.opencode/tool`、`.opencode/tools`）。
+- **启动与连接**：先用目标目录中的 `serve.txt` 启动显式回环服务（`127.0.0.1`），再用 `launch.txt` 连接；连接时通过 `OPENCODE_PASSWORD` 环境变量提供服务密码，不写入启动脚本。
+- **授权与动态重载**：初始状态下 `bcp_save` 工具可见但一律拒绝保存（fail closed；安装器固定生成已声明的空 `options.json`，因此独立安装配置永不进入默认模式）。宿主启动并建立会话后，操作员才能根据实际服务 PID 和会话身份原子替换私有 `options.json`，并在项目外提供精确的短期策略文件（`bcp.operator-handoff-policy.v1`）。每次调用都会重新打开并核验 `options.json` 与外部策略文件的当前 inode，更新或撤销授权无需重启。字段与信任边界见[实现说明](docs/file-archive-implementation.md#isolated-configuration-contract)。
+- **不迁移旧状态**：该入口不迁移现有活跃会话、模型配置、旧 Blackboard 数据或独立安装的 OMO。
+
+### 3. OpenChamber 2.7.2 GitHub URL 扩展（根包 `2.2.0`，主选扩展通道）
+
+仓库根 `package.json`（`version: "2.2.0"`）直接声明 OpenChamber 2.7.2 扩展元数据（固定 `panel.id: "bcp-file-archive"`，`opencodePlugin: "openchamber/plugin"`），并随仓库提交预构建的 `openchamber/plugin/`（无 `postinstall` 或在线构建钩子）：
+
+- **构建与新鲜度校验**：
+  ```bash
+  bun run build:openchamber   # 生成/更新 openchamber/plugin/file-archive.js
+  bun run check:openchamber   # 校验已提交的 openchamber/plugin/file-archive.js 与当前源码构建一致
+  ```
+- **GitHub URL 安装（提交并推送发布版本后远端可用）**：
+  - 将包含根 `package.json` 与 `openchamber/plugin/` 的发布版本提交并推送到 GitHub 后，在 OpenChamber 2.7.2 中使用仓库根 Git URL 安装（仅支持仓库根与可选 `#<branch-or-tag>` 分支/标签引用，**不支持子目录语法**；在未推送至远端前，远端 URL 尚不可用）：
+    `https://github.com/littlekey/opencode-bcp.git`（或 `https://github.com/littlekey/opencode-bcp.git#<branch-or-tag>`）
+- **运行态依赖与外部算子环境变量（`BCP_OPERATOR_OPTIONS`）**：
+  - OpenCode V2 插件运行态需在 Linux/glibc Bun 下执行（归档锁核心依赖 `bun:ffi`）。扩展入口 `openchamber/plugin/index.mjs` 在 Bun 运行态加载预构建的 `file-archive.js`，并委托 Node 兼容的 `openchamber/plugin/operator-options.mjs`（与独立安装器/离线打包器共用 `openchamber/plugin/private-options.mjs`）读取进程环境变量 `BCP_OPERATOR_OPTIONS`。
+  - 未设置 `BCP_OPERATOR_OPTIONS` 时，`loadOperatorOptions()` 返回 `undefined`（声明源缺席）——此时 `bcp_save` 进入固定的**默认模式**（零配置可用，见实现说明"Default mode"节；关闭方法：将 `BCP_OPERATOR_OPTIONS` 指向包含 `{"enabled": false}` 的现有私有文件）。任何宿主侧普通插件 options 均无法绕过该加载器，声明源返回的任何值（包括 `{}`）都走严格校验路径并在校验失败时拒绝。
+  - 设置 `BCP_OPERATOR_OPTIONS=/absolute/private-operator/options.json` 时，该路径必须是位于扩展包目录及所有 `taskScopes[].directory` 任务树之外的规范化绝对路径，父目录须为当前用户私有（`0700` / 无组或其他用户权限）且所有祖先目录通过非符号链接的当前用户或 root 受控粘滞目录检查，`options.json` 本身须为当前用户私有单硬链接普通文件（`0600`、`nlink === 1`、非符号链接、≤ 1 MiB），且其中必填的 `taskScopes` 数组与规范化绝对路径 `policyFile` 也必须位于扩展包目录及所有 `taskScopes[].directory` 之外。
+- **上游更新语义（OpenChamber 2.7.2）**：
+  - 宿主更新检查仅在远端根 `package.json` 的 `version`（semver）高于当前已安装版本时提示更新（不按普通 git commit 变化触发），检查结果带 1 小时缓存，且必须由用户单独执行更新应用操作（不提供自动静默更新）。
+
+### 4. OpenChamber 2.7.2 离线扩展打包（独立保留的固定路径变体）
+
+针对已安装的 OpenChamber 2.7.2（`@openchamber/web`），仍可离线生成绑定固定外部 `--options` 路径的未安装扩展目录，并通过宿主内置的 `inspectGuestPackage` 校验：
+
+```bash
+bun run build
+node scripts/package-openchamber.mjs \
+  --target /absolute/private-parent/new-extension \
+  --host /absolute/path/to/installed/@openchamber/web \
+  --options /absolute/private-operator/options.json
+```
+
+- **离线打包边界**：`scripts/package-openchamber.mjs` 只生成未安装的扩展包目录（`package.json` 与 `plugin/`，`deliveryRequired: "file"`），**不安装或启用扩展，不修改 OpenCode 配置，不创建授权，也不重启服务**。
+- **外部私有 `options.json` 要求**：`--options` 必须是扩展包目录之外的规范化绝对路径，其父目录及祖先目录须为当前用户私有；**打包时 `--options` 路径不得已存在（包括符号链接）**，以防打包过程读取或复制现存算子授权。打包生成的加载器固定绑定该稳定外部路径：文件不存在或不可读时**直接报错硬拒绝（绝不回退为默认模式）**；算子后续创建的 `options.json` 必须为当前用户私有（`0600`、单硬链接 `nlink === 1`、非符号链接、≤ 1 MiB）。
+- **部署与安全限制**：通过 Local Path 挂载或 ZIP 上传时，二者在该宿主上均指向同一个规范化外部 `--options` 路径；**严禁将 `options.json`、策略文件或凭据放入任何对外提供的扩展目录内**，且**不要使用全局 `Install into OpenCode` 回退路径**。同 UID 下的文件权限不能隔离同一用户的恶意并发进程，原生宿主权限检查（`read` / `bcp_save` / 具体归档路径的 `edit`）仍然必需；该原生 `edit` 检查是叠加在算子留存策略上的附加约束（实际强制行为依宿主实现而定），而非专属写入者隔离，授予归档路径的 `edit` 权限也可能允许对该路径执行常规编辑。
+
+---
+
+## 旧 Blackboard 安装（历史兼容，非快照）
+
+> 以下 `bun run build:legacy`（`bash scripts/build.sh`）与 `bash scripts/install.sh` 仅用于维护历史兼容的旧 Blackboard（`bb://` 记录与 `board_*` 工具），**不安装默认 V2 `bcp_save` 快照归档，也不推荐作为当前快速开始**。
+
+### 前置要求
+
+- [bun](https://bun.sh)（旧版构建脚本 `bun run build:legacy` / `scripts/build.sh` 与 `scripts/install.sh` 用它构建 `dist/blackboard.ts`）
+- 旧入口历史最低版本为 OpenCode 1.18.29（V1）或 2.0.20（V2）；同一产物提供 `server` 和 `setup`。历史验收见 [2.0.0 验收](harness/acceptance/v2.0.0.md)，不适用于默认 V2 快照归档入口。
+
+### 安装（旧 Blackboard `scripts/install.sh`）
+
+#### 全局安装（按宿主检测，仅旧 Blackboard）
 
 ```bash
 git clone <本仓库>
 cd opencode-bcp
+bun run build:legacy           # 或直接运行下方 install.sh（默认调用旧版构建）
 bash scripts/install.sh
 ```
 
@@ -55,129 +126,57 @@ rg decision ~/.cache/opencode/blackboard/log/blackboard.log
 
 日志出现 `decision` 事件即插件已接线。默认 auto 模式（v1/v2 同口径）可见 `board_store`、`board_get`、`board_index`、`board_aggregate`，没有 `board_put`。显式 `autoCapture: false` 的手动模式在两宿主上都额外注册 `board_put`（与 `board_store` 并存）。
 
-## v1.20.0 编排集成（引用回执与 Council 宿主取证）
+### 历史版本记录：v1.20.0 编排集成（已移除的引用回执与 Council 宿主取证）
 
-（历史部署基线：本节描述 2.2.25 时代的 local-plugins 集成流程。当前 3.0.4 个人组合由 dotfiles runtime 流程管理，于 2026-10-11 磁盘安装到 v1 生产配置，用户重启后的 1.18.35 服务已于 2026-10-12 通过有界只读元数据核验（见 [integrations/omo-slim/README.md](integrations/omo-slim/README.md)）；此前 3.0.3 组合 2026-10-09 的生产进程核验为历史记录。见 [docs/upgrade-v2.0.md](docs/upgrade-v2.0.md)。）
+> **历史归档说明**：BCP 已不再包含或维护 OMO 补丁、投递桥或 Council 桥（原 `integrations/omo-slim/` 目录及 `local-plugins` 补丁构建说明已从当前活跃安装路径移除）。本节仅作为 v1.20 历史设计契约与验收记录的索引保留，**不再作为当前可执行安装或构建指令**。历史契约见 [docs/orchestration-v1.20.md](docs/orchestration-v1.20.md)，历史限定验收见 [harness/acceptance/v1.20.0.md](harness/acceptance/v1.20.0.md)，2.0.0 历史组合说明见 [docs/upgrade-v2.0.md](docs/upgrade-v2.0.md)。
 
-OMO 适配现在由三个自有源码文件组成（`omo-patch.mjs`、`omo-delivery.mjs`、`omo-council.mjs`，见 [integrations/omo-slim](integrations/omo-slim/README.md)）。部署流程随之变化：local-plugins 的 `build.mjs` 在构建时直接从本仓库 `integrations/omo-slim/` 同步这三个文件（`OPENCODE_BCP_SOURCE` 可覆盖源目录），不再存在需要手工同步的副本；更新本仓库后须重新执行 `node build.mjs` 并重启 OpenCode 才会驻留新行为。
+### 历史版本记录：v1.19.0 作者标题与授权目录
 
-启用后的两项行为：Council 问题中显式的 `ses_*` / `cou-N` 来源引用由宿主从已完成议员席位的终结消息装配经核验原文（每席 ≤ 32 KiB、单席位宿主等待 ≤ 2 秒、全部席位读取与并发准入等待完成后统一复查，变动席位整体排除且不带正文；无法解析的显式引用保留为排除条目）；作者超长且字节精确的完整终态原文可呈现为 `<bcp_result_reference>` 检索回执（≥ 8192 字节、身份/字节/原作者/可读性全部满足才替换，否则保留原文；权限与输入复查在检查返回前完成，呈现替换另做版本 CAS；回执不是验收）。契约、失败形态与限制见 [docs/orchestration-v1.20.md](docs/orchestration-v1.20.md)。验证现状：作者侧自动化自检通过（run-4：local-plugins 构建、42 项 `node --test`、`install.sh`；bun test / tsc / diff-check 复用未变文件的 run-2 记录）；首审两项阻塞经独立首轮复审 PASS 关闭（bb://c233777e-dafa-4e6a-b3df-8d8d09578292/84f0cb7d-933f-440f-bfd7-eac18ad82a9c/e000001，仅覆盖原阻塞与受影响边界，不构成语义接受或发布授权）。完整限定验收见 [harness/acceptance/v1.20.0.md](harness/acceptance/v1.20.0.md)（静态一致性断言与实际部署 hash 以该记录为准）。
+构建安装旧 Blackboard 后，新进程的自动留存说明包含可选 description 属性，`board_index` 允许不带 query 的 `range="authorized"`。旧标记及省略 range 的本人目录继续可用。解析与覆盖字段见 [契约](docs/catalog-discovery-v1.19.md)，真实多 agent 作者、受控读者对照和自主选择目录的证据见 [验收](harness/acceptance/v1.19.0.md)。验证使用独立新进程；正在运行的会话不会热加载安装后的插件。
 
-## v1.19.0 作者标题与授权目录
+### 历史版本记录：v1.18.0 正文检索
 
-构建安装后，新进程的自动留存说明应包含可选 description 属性，`board_index` 应允许不带 query 的 `range="authorized"`。旧标记及省略 range 的本人目录继续可用。生产配置不需要额外模型、数据库或角色改动；目录按需读取，只有既有的两段说明被替换。解析与覆盖字段见 [契约](docs/catalog-discovery-v1.19.md)，真实多 agent 作者、受控读者对照和自主选择目录的证据见 [验收](harness/acceptance/v1.19.0.md)。验证使用独立新进程；正在运行的会话不会热加载安装后的插件。
+安装旧 Blackboard 后新进程的 `board_index` 包含 `query` 和 `range` 参数。`query` 默认搜索当前 scope 内已授权流的公开正文及工件路径；没有 query 时维持旧单流目录。扫描和词法检索限制见 [契约](docs/content-search-v1.18.md)，实际命中、时延及空历史读者验证见 [v1.18 验收](harness/acceptance/v1.18.0.md)。运行中的进程不会热加载，独立新进程可用于验证而不要求用户先重启当前会话。
 
-## v1.18.0 正文检索
+### 历史版本记录：v1.17.0 公开正文与消息发现
 
-安装后新进程的 `board_index` 应包含 `query` 和 `range` 参数。`query` 默认搜索当前 scope 内已授权流的公开正文及工件路径；没有 query 时维持旧单流目录。该实现不依赖模型摘要服务或新增依赖，也不修改旧记录。扫描和词法检索限制见 [契约](docs/content-search-v1.18.md)，实际命中、时延及空历史读者验证见 [v1.18 验收](harness/acceptance/v1.18.0.md)。运行中的进程不会热加载，独立新进程可用于验证而不要求用户先重启当前会话。
+旧 Blackboard 保存前必须已有用户可读的公开正文。自己的会话省略 `session_id`；不知道真实消息 ID 时先调用 `board_store action=list`。`ses_main`、未定消息 ID 或其他占位符不是有效来源，失败反馈会给出查询指引，不能用隐藏推理或工具参数补造报告。普通最终答复按旧协议自动留存；有中间交接时，先公开结论、依据和限制，再保存已完成阶段并传引用。
 
-## v1.17.0 公开正文与消息发现
+工具和 Task 的常驻说明由旧版插件统一提供，安装脚本不会替换用户角色配置。公开来源契约见 [v1.17 说明](docs/public-source-v1.17.md)，真实协作及只读场景的结果和限制见 [v1.17 验收](harness/acceptance/v1.17.0.md)。（注：已退役的 `integrations/omo-slim/` 角色策略片段不再随仓库分发。）
 
-保存前必须已有用户可读的公开正文。自己的会话省略 `session_id`；不知道真实消息 ID 时先调用 `board_store action=list`。`ses_main`、未定消息 ID 或其他占位符不是有效来源，失败反馈会给出查询指引，不能用隐藏推理或工具参数补造报告。普通最终答复按协议自动留存；有中间交接时，先公开结论、依据和限制，再保存已完成阶段并传引用。
+### 历史版本记录：v1.16.0 原消息留存与引用派发
 
-工具和 Task 的常驻说明由插件统一提供。已验证的主角色策略片段见 [公开来源策略](integrations/omo-slim/public-source-policy.md)，安装脚本不会替换用户角色配置。公开来源契约见 [v1.17 说明](docs/public-source-v1.17.md)，真实协作及只读场景的结果和限制见 [v1.17 验收](harness/acceptance/v1.17.0.md)。
+旧版默认 v1 用 `board_store` 统一留存最终答复和已稳定的公开阶段正文。已有记录直接复用；否则在本会话或其他有权限的 agent 会话中发现原消息、留存后传完整记录引用。Task 描述包含操作说明，接收者仍须读取并核对原文、版本和限制。阶段正文必须完成，且同条消息内所有工具调用都已结束；流式正文、未结束工具和隐藏推理不能作为阶段来源。
 
-## v1.16.0 原消息留存与引用派发
+发布授权以 `board_store` 为准，同时保留已有针对 `board_put` 的显式拒绝、询问和输入工具禁令，避免旧的禁发布角色因移除工具而获得权限。需要旧自由正文接口时，显式插件选项 `autoCapture: false` 保留 v1 手动模式。契约见 [v1.16 说明](docs/reference-first-v1.16.md)，历史验收见 [v1.16 验收](harness/acceptance/v1.16.0.md)。
 
-默认 v1 用 `board_store` 统一留存最终答复和已稳定的公开阶段正文。已有记录直接复用；否则在本会话或其他有权限的 agent 会话中发现原消息、留存后传完整记录引用。Task 描述包含操作说明，接收者仍须读取并核对原文、版本和限制。阶段正文必须完成，且同条消息内所有工具调用都已结束；流式正文、未结束工具和隐藏推理不能作为阶段来源。
+### 历史版本记录：v1.15.0 既有答复补存
 
-发布授权以 `board_store` 为准，同时保留已有针对 `board_put` 的显式拒绝、询问和输入工具禁令，避免旧的禁发布角色因移除工具而获得权限。需要旧自由正文接口时，显式插件选项 `autoCapture: false` 保留 v1 手动模式。契约见 [v1.16 说明](docs/reference-first-v1.16.md)。
+旧版 v1 安装新增 `board_store`。已知来源会话和消息 ID 时使用 `action=store`；未知消息 ID 时使用 `action=list` 发现。调用者可以不是作者，但双方发布权限和来源可见性都必须通过。原作者正文和编辑版本由宿主取得，调用者不提交正文、作者或 `source_refs`。详情见 [补存契约](docs/message-store-v1.15.md)，历史验收见 [v1.15 验收](harness/acceptance/v1.15.0.md)。
 
-独立新进程的实际工具目录、自然阶段留存与派发、跨作者历史阶段快照见 [v1.16 验收](harness/acceptance/v1.16.0.md)。这证明测试进程加载了新版本，不表示已有 UI 会话会热加载。
+已授权原生编辑的证据按作者会话和输入持久保存，正文标记与补存共用这些快照。该本地证据缓存计入 scope 配额，不以最终正文是否带正向标记为采集条件；已知禁止输入和权限限制会阻止采集。安装前没有观察过的编辑不能凭当前文件补成历史证据。手动模式（`autoCapture: false`）在旧版 v1/v2 上都提供该工具。
 
-## v1.15.0 既有答复补存
+### 历史版本记录：v1.14.0 自动留存与自然交接
 
-v1 安装新增 `board_store`。已知来源会话和消息 ID 时使用 `action=store`；未知消息 ID 时使用 `action=list` 发现。调用者可以不是作者，但双方发布权限和来源可见性都必须通过。原作者正文和编辑版本由宿主取得，调用者不提交正文、作者或 `source_refs`。详情见 [补存契约](docs/message-store-v1.15.md)。
+旧版默认 v1 安装在最终正文顶层独占行含 `<!-- bcp:store -->` 且授权通过时自动留存（仅适用于旧 Blackboard，默认 V2 `bcp_save` 无自动留存且不要求该标记）。同一准入输入中已观察的原生编辑与显式 `file://` 引用可经作者既有文件权限留存快照；自然语言禁止发布要求须由上游或作者传递 `<!-- bcp:no-store -->` 或省略正向标记。权限为 deny/ask 或未知时不自动授权。详细边界见 [docs/final-capture-v1.14.md](docs/final-capture-v1.14.md)，历史验收见 [v1.14 验收](harness/acceptance/v1.14.0.md)。
 
-独立测试进程验证了跨作者补存、重启后的旧版本快照、普通自动留存和子角色发现消息，见 [v1.15 验收](harness/acceptance/v1.15.0.md)。这些验证不依赖现有 UI 会话重启；现有进程不会热加载，退出并重启 OpenCode 后才能在该进程使用新工具。
+如需旧版手动模式，可在单一显式插件注册中传入 `autoCapture: false`；不要同时保留同一插件的自动发现副本。旧版自动模式日志为 `final_capture`，应核对 stored/replay/skipped/unconfirmed 及 reason，而不是把插件已加载当成功。
 
-已授权原生编辑的证据按作者会话和输入持久保存，正文标记与补存共用这些快照。该本地证据缓存计入 scope 配额，不以最终正文是否带正向标记为采集条件；已知禁止输入和权限限制会阻止采集。安装前没有观察过的编辑不能凭当前文件补成历史证据。工具描述统一注册，不需向各角色重复添加补存提示。手动模式（`autoCapture: false`）在 v1/v2 上都提供该工具。
+### 历史版本记录：v1.11.0 本地工件与交付观测（手动模式）
 
-## v1.14.0 自动留存与自然交接
+旧版 v1 宿主可在 `source_refs` 提交获准发布的本地绝对路径，BCP 通过调用者文件权限保留快照并计算 SHA-256。接收方检查 `board_get.artifact_check`，其中 `verified_bytes_only` 仅证明文件字节。每次最多 8 个文件、每文件 4 MiB，快照计入 scope 配额；旧版 v2 经共享核同口径处理此类请求：仅当权限规则明确 allow 时保留快照，否则明确拒绝。历史实验见 [harness/acceptance/v1.11.0.md](harness/acceptance/v1.11.0.md)。
 
-默认 v1 安装在最终正文顶层独占行含 `<!-- bcp:store -->` 且授权通过时自动留存，推荐放在末尾；代码和引用中的标记不授权。缺少标记不保存；角色仍只生成一次结果。采用下方 OMO 适配时，交付元数据包含 `capture` 状态和自动记录引用。独立根会话的记录可通过 `board_index` 查找，宿主不会让模型续写一个尚未生成的 ID。
+### 历史版本记录：v1.12.0 OMO 交付元数据（已移除补丁）
 
-请同步删除角色 prompt 中“结束前必须调用 `board_put` / 返回作者新生成 ID”的旧句，保留结果、依据、限制、确切版本和接收者读取原文的要求。同一准入输入中已观察的原生编辑与显式 `file://` 引用可经作者既有文件权限留存快照；自然语言禁止发布要求须由上游或作者传递 `<!-- bcp:no-store -->` 或省略正向标记。权限为 deny/ask 或未知时不自动授权。详细边界见 [docs/final-capture-v1.14.md](docs/final-capture-v1.14.md)。
+> **历史归档说明**：v1.12 时代的 `<bcp_delivery_metadata>` 依赖已退役的 OMO 本地补丁，BCP 当前不再提供或指导安装任何 patched OMO / `local-plugins` 构建。历史接口说明见 [docs/delivery-integration-v1.12.md](docs/delivery-integration-v1.12.md)，历史验收见 [harness/acceptance/v1.12.0.md](harness/acceptance/v1.12.0.md)。
 
-如需手动模式，可在单一显式插件注册中传入 `autoCapture: false`；不要同时保留同一插件的自动发现副本。v2 与 v1 同口径：默认 auto，`autoCapture: false` 回退手动契约。自动模式日志为 `final_capture`，应核对 stored/replay/skipped/unconfirmed 及 reason，而不是把插件已加载当成功。安装与 prompt 调整后均须重启 OpenCode。
+### 历史版本记录：v1.9.1 来源核对复用与 2026-09-26 快照
 
-## v1.11.0 本地工件与交付观测（手动模式）
+v1.9.1 撤回 v1.9.0 候选的查询豁免，仅保留有条件的同版本来源核对复用，不修改工具参数、存储或授权。历史测试、安装指纹和已知交接缺口见 [harness/acceptance/v1.9.1.md](harness/acceptance/v1.9.1.md)，2026-09-26 历史行为电池快照（commit `1cf6c08`、opencode 1.18.31、`fixer_append.md` 驻留核验）见 [harness/acceptance/results.md](harness/acceptance/results.md)。
 
-安装方式不变。v1 宿主可在 `source_refs` 提交获准发布的本地绝对路径，BCP 通过调用者文件权限保留快照并计算 SHA-256。接收方检查 `board_get.artifact_check`，其中 `verified_bytes_only` 仅证明文件字节。每次最多 8 个文件、每文件 4 MiB，快照计入 scope 配额；v2 经共享核同口径处理此类请求：仅当权限规则明确 allow 时保留快照，否则明确拒绝。
+### 卸载（旧 Blackboard `scripts/uninstall.sh`）
 
-v1 的 `delivery_observation` 日志关联本进程已准入输入，按编辑路径和发布修订区分已观察快照、普通发布与未确认状态；其中 `missing_handoff` / `manual_version_check` 另记 `delivery_gap` 并在可用时通知。无关路径或幂等重放不能提供新版本证明，所有状态都不是语义验收。只读复用、身份未关联、未知写入、重启前历史等仍需接收者核验；不补写作者记录、不自动续聊、不阻断最终回答。新版实验见 [harness/acceptance/v1.11.0.md](harness/acceptance/v1.11.0.md)。重新启动 OpenCode 后生效。
-
-## v1.12.0 OMO 交付元数据
-
-单独安装 BCP 提供当前模式的工具和留存行为；默认 v1 的四工具已用 `board_store` 替代 `board_put`。OMO 结果引用关联需要同时加载 OMO 适配；本次安装使用 `~/.config/opencode/local-plugins/` 中锁定 OMO 2.2.25 的可重建补丁，配置入口为 `file:///home/littlekey/.config/opencode/local-plugins/dist/omo.js`。适配自有源码已纳入 [integrations/omo-slim](integrations/omo-slim/README.md)。本地构建、依赖锁及回退说明见部署目录的 README.md；上游升级须重新核对补丁锚点和源文件哈希。
-
-退出并重启 OpenCode 后生效。新宿主应在前台返回、`task_result`、后台完成通知与恢复结果中提供独立 `<bcp_delivery_metadata>`。原生后台通知的元数据只附于模型上下文，不回写通知原文。没有 BCP、身份不明或检查失败时返回未确认，不能把空候选理解为全局没有记录。接口见 [docs/delivery-integration-v1.12.md](docs/delivery-integration-v1.12.md)，验收见 [harness/acceptance/v1.12.0.md](harness/acceptance/v1.12.0.md)。
-
-## v1.9.1 来源核对复用（历史）
-
-v1.9.1 撤回 v1.9.0 候选的查询豁免，仅保留有条件的同版本来源核对复用，不修改工具参数、存储或授权。当前会话仍使用已加载的旧描述，重新启动 OpenCode 后生效。测试、安装指纹和已知交接缺口见 [harness/acceptance/v1.9.1.md](harness/acceptance/v1.9.1.md)。下方历史快照不替代本次验证，也不证明所有角色都完整执行交付契约。
-
-## 已验证 omo-slim 集成配置（2026-09-26 快照）
-
-上述「验证」只证明**接线**（工具注册与日志）。以下是经行为电池验证的**集成快照**（DESIGN.md v1.8.4「规则所有权与配置版本化」；v3 电池 5/5 证据见 [harness/acceptance/results.md](harness/acceptance/results.md):489–501）：其中磁盘与配置数值可直接核验（H_file），运行态驻留按下方「可复现步骤」执行（omo-slim 角色 profile 未保留不可变快照，此前**不称「完整可复现快照」**）。超出本快照的宿主 / 模型 / 角色配置**不自动继承**行为结论。
-
-| 项 | 已验证值 |
-|---|---|
-| 插件 commit | `1cf6c08`（feat+docs: sync U2 descriptions (board_put 1095B, task 867B); U2/fixer battery evidence） |
-| 构建产物 | `dist/blackboard.ts` 815533 B，SHA-256 `761ca36fdbc1d3ab9976e7a841119182fc9e797d7e334c675ff8dda2ba6c8293` |
-| 已安装文件 | `~/.config/opencode/plugin/blackboard.ts`——与构建产物逐字节一致（双 hash 相同） |
-| 宿主 | opencode 1.18.31（v1 插件 API，`opencode serve` 运行态；运行态导出走 Basic auth） |
-| 模型变体 | fixer = `newapi/glm-5.3-flash`（variant `max`，`oh-my-opencode-slim.json` presets/newapi/fixer） |
-| fixer 工具面 | 实测 26 项：board 四工具全在；**`task` 不在**（仅 task_reply）——results.md:487 只读探针 |
-| fixer 角色桥接 | `~/.config/opencode/oh-my-opencode-slim/fixer_append.md`：内容 433 B（无末尾 LF）SHA-256 `fa03f0a7be6b918ccc5d480212c36d57c297f1d1d373d4ccc45ce212b608859d`；文件含 LF 434 B，SHA-256 `8d07d56681fae8aa5642a0733cd06caa59b4f918f4903aab1825d0032b810ffc` |
-| 驻留验证方法 | H_file = 磁盘双 hash 一致；H_loaded = 宿主**重启后**运行态 agent 导出，fixer prompt 2836 B 中桥接片段恰现 1 次且 SHA 匹配（results.md:492）；H_wire 未取 |
-
-**教训注记（安装 ≠ 驻留）**：v1.8.3 澄清文案构建已安装但宿主未重启时，in-host 电池实际运行的是旧驻留文案（815453 B），结论被误归因后经重启重跑纠正（results.md:466）。任何行为断言前必须先确认驻留：重启宿主，或以日志 / 决策字节特征确认当前运行文本。
-
-### 承诺边界
-
-- **独立插件承诺**（接口与接线）：插件提供四工具 `board_put` / `board_get` / `board_index` / `board_aggregate` 及其决策规则描述，并附带安装接线检查（`decision` 日志事件 + 会话内四工具可见）。**接线检查 ≠ 描述分发或行为验证**（DESIGN.md §11.8 覆盖合同：不能以「插件注册过工具」代替实际分发证明）；实际描述分发须另以加载 / 请求证据验证（H_loaded 类方法，见「可复现步骤」）。v2 在本 2026-09-26 快照时点为**实验性质**（真实 v2 宿主加载与行为验收当时尚未执行）；该状态已变化——当前 2.0.0 限定验收见 [harness/acceptance/v2.0.0.md](harness/acceptance/v2.0.0.md)。本快照不替代当前工具接口，也不承诺任意宿主行为实效。
-- **已验证集成承诺**（仅限本快照配置）：omo-slim + fixer_append 桥接下，fixer 角色的终结交付（T）行为全绿——v3 电池 5/5：交付 + 末行完整 `bb://` ID + blocked / no-change 显式交付。**不保证**：版本锚定维度（v3 电池 M1 未申报版本渠道缺口，results.md:501——补齐电池为 F1 版本夹具电池，DESIGN.md §14.4 待执行验收）；其他宿主 / 模型 / 角色配置下的同等行为。
-
-### 可复现步骤
-
-```bash
-# H_file：磁盘 hash 校验（构建产物 vs 已安装 vs 角色桥接）
-sha256sum dist/blackboard.ts \
-          ~/.config/opencode/plugin/blackboard.ts \
-          ~/.config/opencode/oh-my-opencode-slim/fixer_append.md
-
-# fixer_append.md 内容口径（433 B，去末尾 LF）及其 hash
-python3 -c "import hashlib;d=open('$HOME/.config/opencode/oh-my-opencode-slim/fixer_append.md','rb').read().rstrip(b'\n');print(len(d), hashlib.sha256(d).hexdigest())"
-# 期望：433 fa03f0a7be6b918ccc5d480212c36d57c297f1d1d373d4ccc45ce212b608859d
-```
-
-**H_loaded（运行态驻留）**——按 results.md:492 记录的方法参数化的步骤；导出端点与凭据随宿主部署而异，**未随本稿重验**（历史运行：opencode serve HTTP API + Basic auth，凭据经 `OPENCODE_SERVER_PASSWORD` 环境变量提供，不硬编码）：
-
-```bash
-# 1) 重启宿主后导出运行态 agent（端点/端口按你的部署填充；凭据取自环境变量）
-curl -s -u ":${OPENCODE_SERVER_PASSWORD}" \
-     "http://127.0.0.1:${OC_PORT}/agent" -o /tmp/agents_export.json
-# 2) 从导出中取出 fixer 的运行态 prompt 文本，存为 /tmp/fixer_prompt.txt
-#    （历史运行导出为 2836 B——比对对象是 433 B 桥接片段，不是整份 prompt 的 SHA）
-
-# 3) 桥接片段驻留比对（本段脚本文法已验证：恰现 1 次 + SHA 匹配方 PASS）
-python3 - /tmp/fixer_prompt.txt <<'EOF'
-import hashlib, sys
-frag = open(f"{__import__('os').path.expanduser('~')}/.config/opencode/oh-my-opencode-slim/fixer_append.md","rb").read().rstrip(b'\n')
-prompt = open(sys.argv[1], "rb").read()
-n = prompt.count(frag)
-print("fragment bytes:", len(frag))
-print("sha256(frag)  :", hashlib.sha256(frag).hexdigest())
-print("occurrences   :", n)
-assert n == 1 and hashlib.sha256(frag).hexdigest() == "fa03f0a7be6b918ccc5d480212c36d57c297f1d1d373d4ccc45ce212b608859d"
-print("H_loaded PASS: bridge fragment resident exactly once, SHA matches")
-EOF
-```
-
-## 卸载
-
-使用所有权校验式卸载脚本，不要手工删除后置之不理：
+使用所有权校验式卸载脚本清理旧 Blackboard 安装，不要手工删除后置之不理：
 
 ```bash
 bash scripts/uninstall.sh                          # 全局
@@ -186,12 +185,11 @@ bash scripts/uninstall.sh --project /path/to/project
 
 脚本按安装清单核对 SHA-256 后删除 canonical 文件与清单本身；无清单时按已知历史发布摘要清理旧版入口（`plugin/blackboard.ts`、`plugin/blackboard.js`、`plugins/blackboard-v2.ts`）；无法证明所有权的文件一律拒绝（exit 2），核实归属后可用 `--adopt <file>=<sha256>` 显式授权删除。安装根之外的 BCP 文件只报告不删除；`~/.cache/opencode/blackboard` 数据永不删除。卸载后重启 opencode 生效。
 
-## 故障排查
+### 故障排查（旧 Blackboard）
 
-当前自动模式按 [v1.14 契约](docs/final-capture-v1.14.md)接受顶层独占行授权标记，并绑定本轮已观察的原生编辑。验证可独立启动新的 `opencode serve` 进程并检查驻留配置，无需依赖现有 UI 会话重启；旧进程不会因此热加载新代码。主角色 Task 权限中的 `councillor*` 拒绝规则只用于主角色，不能应用为 Council 的全局权限。原生续接须同时安装当前 OMO 补丁；其修复和最终运行指纹见 [v1.14 验收](harness/acceptance/v1.14.0.md)。
+旧版自动模式按 [v1.14 契约](docs/final-capture-v1.14.md)接受顶层独占行授权标记，并绑定本轮已观察的原生编辑。验证可独立启动新的 `opencode serve` 进程并检查驻留配置，无需依赖现有 UI 会话重启；旧进程不会因此热加载新代码。历史验收指纹见 [v1.14 验收](harness/acceptance/v1.14.0.md)。
 
-- **宿主不加载插件**：安装后必须重启 opencode；确认文件位于安装节所列路径。
-- **行为异常、疑似两个版本同时在跑**：跨配置根混装或旧入口残留所致。用 `scripts/uninstall.sh`（必要时加 `--adopt`）清理旧文件后重新安装一次；同一配置栈只能有一个 BCP 入口。
+- **宿主不加载旧版插件**：安装后必须重启 opencode；确认文件位于旧 Blackboard 安装节所列路径。
+- **行为异常、疑似两个旧版本同时在跑**：跨配置根混装或旧入口残留所致。用 `scripts/uninstall.sh`（必要时加 `--adopt`）清理旧文件后重新安装一次；同一配置栈只能有一个 BCP 入口。
 - **安装脚本拒绝（exit 2）**：按输出列出的路径清理或恢复对应文件（旧版入口核实摘要后可用 `--adopt`）；安装根之外的冲突需先在相应配置根卸载。当前安装器没有 `--force`。
-- **怀疑数据问题**：运行 `bun test` 与 `bun run typecheck` 核对当前源码；具体通过数和真实宿主覆盖以对应版本的验收记录为准。
-- **Council 返回缺 `<council_host_sources>` 或席位被排除**：确认 local-plugins 已按 v1.20 流程重建并重启宿主；确认被引用任务已完成且其 agent 配置为 `councillor-*` 席位。无法核验的显式 `ses_*` / `cou-N` 引用会以带 reason 的排除条目出现（见 [编排契约](docs/orchestration-v1.20.md)），这是设计行为而非静默失败。
+- **怀疑数据或代码问题**：运行 `bun test` 与 `bun run typecheck` 核对当前源码；具体通过数和真实宿主覆盖以对应版本的验收记录为准。
