@@ -18,7 +18,7 @@
     "apiVersion": 1,
     "engines": { "openchamber": ">=2.7.2" },
     "contributes": {
-      "panel": { "id": "bcp-file-archive", "name": "BCP File Archive", "icon": "ri-archive-line" },
+      "panel": { "id": "bcp-file-archive", "name": "BCP", "icon": "ri-archive-line" },
       "opencodePlugin": "openchamber/plugin"
     }
   },

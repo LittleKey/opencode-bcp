@@ -40,7 +40,7 @@ export async function packageOpenChamber(target, host, optionsPath) {
     name: "opencode-bcp-openchamber-local", version: "1.0.0", private: true,
     openchamber: { engines: { openchamber: ">=2.7.2" }, apiVersion: 1,
     contributes: {
-      panel: { id: "bcp-file-archive", name: "BCP File Archive", icon: "ri-archive-line" },
+      panel: { id: "bcp-file-archive", name: "BCP", icon: "ri-archive-line" },
       opencodePlugin: "plugin",
     } },
   };
